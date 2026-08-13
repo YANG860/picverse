@@ -1,0 +1,20 @@
+fail_fast: true # 第一个错就停
+
+repos:
+  - repo: https://github.com/dnephin/pre-commit-golang
+    rev: v0.5.1
+    hooks:
+      - id: go-fmt # 格式化
+      - id: go-vet # 官方错误检测
+
+  - repo: https://github.com/golangci/golangci-lint
+    rev: v2.12.2
+    hooks:
+      - id: golangci-lint
+        args: ["--timeout=2m"]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer # 末尾换行
+      - id: trailing-whitespace # 行尾空白
