@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package media.v1;
+
+import "buf/validate/validate.proto";
+import "common/v1/message.proto";
+import "media/v1/media.proto";
+
+message UploadMediaRequest {
+  MediaFormat format = 1;
+  string sha256_sum = 2;
+}
+
+message UploadMediaResponse {
+  MediaAsset asset = 1;
+  string signed_url = 2;
+}
+
+message GetMediaAssetsRequest {
+  repeated string id = 1 [(buf.validate.field).repeated.items.string.min_len = 1];
+}
+
+message GetMediaAssetsResponse {
+  map<int64, MediaAssetResult> results = 1;
+}
+
+message MediaAssetResult {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  string id = 3 [(buf.validate.field).string.min_len = 1];
+
+  MediaAsset asset = 4;
+}
+
+message GetMediaAssetFilesRequest {
+  repeated MediaAssetFileQuery queries = 1;
+}
+
+message GetMediaAssetFilesResponse {
+  repeated MediaAssetFileResult files = 1;
+}
+
+message MediaAssetFileQuery {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+  MediaFileType type = 2;
+}
+
+message MediaAssetFileResult {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  MediaAssetFileQuery query = 4;
+
+  MediaFile file = 5;
+}
+
+message ListMediaAssetsBeforeRequest {
+  common.v1.Cursor cursor = 1;
+}
+
+message ListMediaAssetsBeforeResponse {
+  repeated ListMediaAssetsBeforeResult results = 1;
+}
+
+message ListMediaAssetsBeforeResult {
+  MediaAsset asset = 1;
+  string origin_url = 2;
+}
+
+message SetMediaAssetStatusRequest {
+  repeated SetMediaAssetStatusQuery queries = 1;
+}
+
+message SetMediaAssetStatusResponse {
+  repeated SetMediaAssetStatusResult results = 1;
+}
+
+message SetMediaAssetStatusQuery {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+  MediaAssetStatus status = 2;
+}
+
+message SetMediaAssetStatusResult {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  SetMediaAssetStatusQuery query = 3;
+}
+
+message ModifyMediaAssetRefCountRequest {
+  repeated ModifyMediaAssetRefCountQuery queries = 1;
+}
+
+message ModifyMediaAssetRefCountResponse {
+  repeated ModifyMediaAssetRefCountResult results = 1;
+}
+
+message ModifyMediaAssetRefCountQuery {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+  sint64 delta = 2;
+}
+
+message ModifyMediaAssetRefCountResult {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  MediaAssetFileQuery query = 3;
+}
+
+message DeleteUnusedMediaRequest {}
+
+message DeleteUnusedMediaResponse {}

@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package common.v1;
+
+import "buf/validate/validate.proto";
+
+message Empty {}
+
+message Error {
+  string msg = 1;
+  int64 code = 2;
+}
+
+message Cursor {
+  string cursor = 2;
+  int64 limit = 1 [(buf.validate.field).int64.lt = 1000];
+}
+
+message ID {
+  string str = 1 [(buf.validate.field).string.min_len = 1];
+}

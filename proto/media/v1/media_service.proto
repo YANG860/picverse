@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package media.v1;
+
+import "media/v1/requests.proto";
+
+service MediaService {
+  rpc UploadMedia(UploadMediaRequest) returns (UploadMediaResponse);
+  rpc GetMediaAssets(GetMediaAssetsRequest) returns (GetMediaAssetsResponse);
+  rpc GetMediaAssetFiles(GetMediaAssetFilesRequest) returns (GetMediaAssetFilesResponse);
+  rpc ListMediaAssetsBefore(ListMediaAssetsBeforeRequest) returns (ListMediaAssetsBeforeResponse);
+
+  rpc SetMediaAssetStatus(SetMediaAssetStatusRequest) returns (SetMediaAssetStatusResponse);
+  rpc ModifyMediaAssetRefCount(ModifyMediaAssetRefCountRequest) returns (ModifyMediaAssetRefCountResponse);
+  rpc DeleteUnusedMedia(DeleteUnusedMediaRequest) returns (DeleteUnusedMediaResponse);
+}

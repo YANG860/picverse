@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package media.v1;
+
+import "buf/validate/validate.proto";
+
+enum MediaAssetStatus {
+  MEDIA_ASSET_STATUS_UNSPECIFIED = 0;
+  MEDIA_ASSET_STATUS_UPLOADING = 1;
+  MEDIA_ASSET_STATUS_AUDITING = 2;
+  MEDIA_ASSET_STATUS_PROCESSING = 5;
+  MEDIA_ASSET_STATUS_ACTIVE = 3;
+  MEDIA_ASSET_STATUS_BANNED = 4;
+  MEDIA_ASSET_STATUS_UPLOAD_FAILED = 6;
+}
+
+enum MediaFileType {
+  MEDIA_FILE_TYPE_UNSPECIFIED = 0;
+  MEDIA_FILE_TYPE_ORIGIN = 1;
+  MEDIA_FILE_TYPE_216 = 2;
+  MEDIA_FILE_TYPE_540 = 3;
+  MEDIA_FILE_TYPE_1080 = 4;
+}
+enum MediaFormat {
+  MEDIA_FORMAT_UNSPECIFIED = 0;
+  MEDIA_FORMAT_PNG = 1;
+  MEDIA_FORMAT_JPG = 2;
+  MEDIA_FORMAT_WEBP = 3;
+}
+
+message MediaAsset {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+  int64 created_at = 2;
+  int64 updated_at = 3;
+  MediaAssetStatus status = 4;
+  int64 ref_count = 5;
+}
+
+message MediaFile {
+  MediaAsset asset = 1;
+  MediaFormat format = 2;
+  MediaFileType type = 4;
+  optional string url = 3;
+}
