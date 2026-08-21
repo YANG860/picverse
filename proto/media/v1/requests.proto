@@ -21,7 +21,7 @@ message GetMediaAssetsRequest {
 }
 
 message GetMediaAssetsResponse {
-  map<int64, MediaAssetResult> results = 1;
+  map<string, MediaAssetResult> results = 1;
 }
 
 message MediaAssetResult {
