@@ -1,0 +1,29 @@
+package db
+
+import (
+	"rednote/packages/common/logger"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+)
+
+// NewSQLite 创建 SQLite 数据库连接（用于本地测试）
+// dbPath: 数据库文件路径，例如 ":memory:" 或 "./test.db"
+func NewSQLite(dbPath string, lf *logger.LoggerFactory) *gorm.DB {
+	log := lf.GetLoggerOf("gorm")
+
+	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
+		Logger: NewSlogAdapter(log),
+	})
+
+	if err != nil {
+		panic(err)
+	}
+
+	return db
+}
+
+// NewSQLiteMemory 创建内存 SQLite 数据库（用于单元测试）
+func NewSQLiteMemory(lf *logger.LoggerFactory) *gorm.DB {
+	return NewSQLite(":memory:", lf)
+}
