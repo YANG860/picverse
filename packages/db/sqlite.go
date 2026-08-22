@@ -1,7 +1,7 @@
 package db
 
 import (
-	"rednote/packages/common/logger"
+	"rednote/packages/logger"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"

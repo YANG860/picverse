@@ -3,14 +3,43 @@ package minio
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
+	"time"
 
 	"rednote/config"
-	"rednote/packages/common/logger"
+	"rednote/packages/logger"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
+
+type S3Repo interface {
+	// Upload 上传文件到 S3
+	Upload(ctx context.Context, key string, reader io.Reader, size int64, contentType string) (*UploadResult, error)
+	// Download 下载文件
+	Download(ctx context.Context, key string) (*DownloadResult, error)
+	// DownloadToWriter 下载文件到 Writer
+	DownloadToWriter(ctx context.Context, key string, writer io.Writer) (int64, error)
+	// GetObjectInfo 获取对象信息（不下载内容）
+	GetObjectInfo(ctx context.Context, key string) (*minio.ObjectInfo, error)
+	// DeleteObject 删除对象
+	DeleteObject(ctx context.Context, key string) error
+	// DeleteObjects 批量删除对象
+	DeleteObjects(ctx context.Context, keys []string) error
+	// PresignedPutURL 生成预签名上传 URL
+	PresignedPutURL(ctx context.Context, key string, expiry time.Duration, contentType string) (*PresignedURLResult, error)
+	// PresignedGetURL 生成预签名下载 URL
+	PresignedGetURL(ctx context.Context, key string, expiry time.Duration) (*PresignedURLResult, error)
+	// PresignedDeleteURL 生成预签名删除 URL
+	PresignedDeleteURL(ctx context.Context, key string, expiry time.Duration) (*PresignedURLResult, error)
+	// PresignedURL 生成预签名 URL（通用方法）
+	PresignedURL(ctx context.Context, method PresignMethod, key string, expiry time.Duration, reqParams map[string][]string) (*PresignedURLResult, error)
+	// Bucket 获取存储桶名称
+	Bucket() string
+	// HealthCheck 健康检查
+	HealthCheck(ctx context.Context) error
+}
 
 // Client S3/Minio 客户端封装
 type Client struct {
@@ -31,6 +60,7 @@ func NewClient(cfg *config.S3Config, lf *logger.LoggerFactory) (*Client, error) 
 		Secure: cfg.UseSSL,
 		Region: cfg.Region,
 	})
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to create minio client: %w", err)
 	}

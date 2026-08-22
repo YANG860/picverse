@@ -19,6 +19,7 @@ func NewLoggerFactory(cfg *config.Config) *LoggerFactory {
 }
 
 func (lf *LoggerFactory) GetLoggerOf(name string) *slog.Logger {
+	// TODO: 根据组件发放logger
 	return slog.Default()
 }
 
