@@ -1,0 +1,29 @@
+snowflake:
+  id: 1
+
+database:
+  pg:
+    url: >-
+      postgres://postgres:postgres123@106.53.172.186:5432/prod
+      ?sslmode=disable
+
+server:
+  logger:
+    level: "info"
+    file: true
+    out: "./logs/app.log"
+    rotate: true
+    maxsize: 100
+    maxbackups: 7
+    maxage: 28
+    compress: false
+    buffersize: 262144
+    std: true
+
+s3:
+  endpoint: "106.53.172.186:9000"
+  access_key: "minioadmin"
+  secret_key: "minioadmin123"
+  region: "us-east-1"
+  use_ssl: false
+  bucket: ""
