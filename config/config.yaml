@@ -4,21 +4,19 @@ snowflake:
 database:
   pg:
     url: >-
-      postgres://postgres:postgres123@106.53.172.186:5432/prod
-      ?sslmode=disable
+      postgres://postgres:postgres123@106.53.172.186:5432/prod?sslmode=disable
 
-server:
-  logger:
-    level: "info"
-    file: true
-    out: "./logs/app.log"
-    rotate: true
-    maxsize: 100
-    maxbackups: 7
-    maxage: 28
-    compress: false
-    buffersize: 262144
-    std: true
+logger:
+  level: "info"
+  file: true
+  out: "./logs/app.log"
+  rotate: true
+  maxsize: 100
+  maxbackups: 7
+  maxage: 28
+  compress: false
+  buffersize: 262144
+  std: true
 
 s3:
   endpoint: "106.53.172.186:9000"
@@ -26,4 +24,20 @@ s3:
   secret_key: "minioadmin123"
   region: "us-east-1"
   use_ssl: false
-  bucket: ""
+  bucket: "rednote"
+
+jetstream:
+  url: "nats://106.53.172.186:4222"
+
+poller:
+  workers: 2
+  interval: 5s
+  batch_size: 100
+  publish_timeout: 10s
+
+consumer:
+  media:
+    name: "media_consumer"
+    max_retry: 5
+    worker_pool_size: 1
+    working_dir: "/tmp/rednote/media"

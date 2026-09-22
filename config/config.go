@@ -1,5 +1,7 @@
 package config
 
+import "time"
+
 var Global = &Config{}
 
 type Config struct {
@@ -8,6 +10,9 @@ type Config struct {
 	Server    ServerConfig    `mapstructure:"server"`
 	S3        S3Config        `mapstructure:"s3"`
 	JetStream JetStreamConfig `mapstructure:"jetstream"`
+	Poller    PollerConfig    `mapstructure:"poller"`
+	Consumer  ConsumerConfig  `mapstructure:"consumer"`
+	Logger    LoggerConfig    `mapstructure:"logger"`
 }
 
 type DatabaseConfig struct {
@@ -21,7 +26,6 @@ type SnowFlakeConfig struct {
 }
 
 type ServerConfig struct {
-	Logger LoggerConfig `mapstructure:"logger"`
 }
 
 // S3Config S3/Minio 对象存储配置
@@ -62,4 +66,22 @@ type LoggerConfig struct {
 
 type JetStreamConfig struct {
 	Url string `mapstructure:"url"`
+}
+
+type PollerConfig struct {
+	Workers        int           `mapstructure:"workers"`
+	Interval       time.Duration `mapstructure:"interval"`
+	BatchSize      int           `mapstructure:"batch_size"`
+	MaxRetry       int           `mapstructure:"max_retry"`
+	PublishTimeout time.Duration `mapstructure:"publish_timeout"`
+}
+
+type ConsumerConfig struct {
+	Media MediaConsumerConfig `mapstructure:"media"`
+}
+
+type MediaConsumerConfig struct {
+	Name       string `mapstructure:"name"`
+	MaxRetry   int    `mapstructure:"max_retry"`
+	WorkingDir string `mapstructure:"working_dir"`
 }

@@ -1,4 +1,4 @@
-package minio
+package oss
 
 import (
 	"context"
@@ -21,6 +21,8 @@ type S3Repo interface {
 	Download(ctx context.Context, key string) (*DownloadResult, error)
 	// DownloadToWriter 下载文件到 Writer
 	DownloadToWriter(ctx context.Context, key string, writer io.Writer) (int64, error)
+	// Exist 检查对象是否存在
+	Exist(ctx context.Context, key string) (bool, error)
 	// GetObjectInfo 获取对象信息（不下载内容）
 	GetObjectInfo(ctx context.Context, key string) (*minio.ObjectInfo, error)
 	// DeleteObject 删除对象
@@ -41,8 +43,8 @@ type S3Repo interface {
 	HealthCheck(ctx context.Context) error
 }
 
-// Client S3/Minio 客户端封装
-type Client struct {
+// MinioClient S3/Minio 客户端封装
+type MinioClient struct {
 	*minio.Client
 	bucket string
 	log    *slog.Logger
@@ -50,53 +52,53 @@ type Client struct {
 
 // NewClient 创建新的 S3/Minio 客户端
 // cfg 从 config.S3Config 获取配置
-func NewClient(cfg *config.S3Config, lf *logger.LoggerFactory) (*Client, error) {
+func NewClient(cfg *config.Config, lf logger.LoggerFactory) *MinioClient {
 	if cfg == nil {
-		return nil, fmt.Errorf("s3 config is required")
+		panic(fmt.Errorf("s3 config is required"))
 	}
 
-	minioClient, err := minio.New(cfg.Endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
-		Secure: cfg.UseSSL,
-		Region: cfg.Region,
+	minioClient, err := minio.New(cfg.S3.Endpoint, &minio.Options{
+		Creds:  credentials.NewStaticV4(cfg.S3.AccessKey, cfg.S3.SecretKey, ""),
+		Secure: cfg.S3.UseSSL,
+		Region: cfg.S3.Region,
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to create minio client: %w", err)
+		panic(fmt.Errorf("failed to create minio client: %w", err))
 	}
 
-	client := &Client{
+	client := &MinioClient{
 		Client: minioClient,
-		bucket: cfg.Bucket,
+		bucket: cfg.S3.Bucket,
 		log:    lf.GetLoggerOf("minio"),
 	}
 
 	// 确保存储桶存在
 	ctx := context.Background()
-	exists, err := minioClient.BucketExists(ctx, cfg.Bucket)
+	exists, err := minioClient.BucketExists(ctx, cfg.S3.Bucket)
 	if err != nil {
-		return nil, fmt.Errorf("failed to check bucket existence: %w", err)
+		panic(fmt.Errorf("failed to check bucket existence: %w", err))
 	}
 
 	if !exists {
-		if err := minioClient.MakeBucket(ctx, cfg.Bucket, minio.MakeBucketOptions{
-			Region: cfg.Region,
+		if err := minioClient.MakeBucket(ctx, cfg.S3.Bucket, minio.MakeBucketOptions{
+			Region: cfg.S3.Region,
 		}); err != nil {
-			return nil, fmt.Errorf("failed to create bucket %s: %w", cfg.Bucket, err)
+			panic(fmt.Errorf("failed to create bucket %s: %w", cfg.S3.Bucket, err))
 		}
-		client.log.Info("created bucket", slog.String("bucket", cfg.Bucket))
+		client.log.Info("created bucket", slog.String("bucket", cfg.S3.Bucket))
 	}
 
-	return client, nil
+	return client
 }
 
 // Bucket 获取存储桶名称
-func (c *Client) Bucket() string {
+func (c *MinioClient) Bucket() string {
 	return c.bucket
 }
 
 // HealthCheck 健康检查
-func (c *Client) HealthCheck(ctx context.Context) error {
+func (c *MinioClient) HealthCheck(ctx context.Context) error {
 	_, err := c.Client.BucketExists(ctx, c.bucket)
 	if err != nil {
 		return fmt.Errorf("s3 health check failed: %w", err)

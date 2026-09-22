@@ -3,6 +3,7 @@ package main
 import (
 	"gorm.io/gen"
 
+	common "rednote/internal/common/models"
 	media "rednote/internal/media/models"
 )
 
@@ -20,7 +21,7 @@ func main() {
 
 	// 创建代码生成器
 	g := gen.NewGenerator(gen.Config{
-		OutPath:       "./gen/query",
+		OutPath:       "../../../gen/query",
 		Mode:          gen.WithDefaultQuery | gen.WithQueryInterface,
 		FieldNullable: true,
 	})
@@ -32,6 +33,8 @@ func main() {
 		// Media 模块
 		&media.MediaAsset{},
 		&media.MediaFile{},
+		&common.BaseModel{},
+		&common.OutBoxEntry{},
 	)
 
 	// 生成代码

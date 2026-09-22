@@ -1,4 +1,4 @@
-package minio
+package oss
 
 import (
 	"context"
@@ -21,7 +21,7 @@ type UploadResult struct {
 // reader: 文件内容
 // size: 文件大小（字节）
 // contentType: 内容类型
-func (c *Client) Upload(ctx context.Context, key string, reader io.Reader, size int64, contentType string) (*UploadResult, error) {
+func (c *MinioClient) Upload(ctx context.Context, key string, reader io.Reader, size int64, contentType string) (*UploadResult, error) {
 	opts := minio.PutObjectOptions{
 		ContentType: contentType,
 	}
@@ -46,7 +46,7 @@ func (c *Client) Upload(ctx context.Context, key string, reader io.Reader, size 
 
 // UploadWithExpiry 上传带过期时间的文件
 // expiry: 过期时间（秒）
-func (c *Client) UploadWithExpiry(ctx context.Context, key string, reader io.Reader, size int64, contentType string, expiry int) (*UploadResult, error) {
+func (c *MinioClient) UploadWithExpiry(ctx context.Context, key string, reader io.Reader, size int64, contentType string, expiry int) (*UploadResult, error) {
 	opts := minio.PutObjectOptions{
 		ContentType: contentType,
 		// 注意：Minio 服务端需要配置 expiry 策略

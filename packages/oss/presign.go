@@ -1,4 +1,4 @@
-package minio
+package oss
 
 import (
 	"context"
@@ -16,7 +16,7 @@ type PresignedURLResult struct {
 // key: 对象键
 // expiry: 过期时间
 // contentType: 内容类型（可选，空字符串表示不限制）
-func (c *Client) PresignedPutURL(ctx context.Context, key string, expiry time.Duration, contentType string) (*PresignedURLResult, error) {
+func (c *MinioClient) PresignedPutURL(ctx context.Context, key string, expiry time.Duration, contentType string) (*PresignedURLResult, error) {
 	reqParams := make(map[string][]string)
 	if contentType != "" {
 		reqParams["Content-Type"] = []string{contentType}
@@ -41,7 +41,7 @@ func (c *Client) PresignedPutURL(ctx context.Context, key string, expiry time.Du
 // PresignedGetURL 生成预签名下载 URL
 // key: 对象键
 // expiry: 过期时间
-func (c *Client) PresignedGetURL(ctx context.Context, key string, expiry time.Duration) (*PresignedURLResult, error) {
+func (c *MinioClient) PresignedGetURL(ctx context.Context, key string, expiry time.Duration) (*PresignedURLResult, error) {
 	reqParams := make(map[string][]string)
 
 	url, err := c.Client.PresignedGetObject(ctx, c.bucket, key, expiry, reqParams)
@@ -63,7 +63,7 @@ func (c *Client) PresignedGetURL(ctx context.Context, key string, expiry time.Du
 // PresignedDeleteURL 生成预签名删除 URL
 // key: 对象键
 // expiry: 过期时间
-func (c *Client) PresignedDeleteURL(ctx context.Context, key string, expiry time.Duration) (*PresignedURLResult, error) {
+func (c *MinioClient) PresignedDeleteURL(ctx context.Context, key string, expiry time.Duration) (*PresignedURLResult, error) {
 	reqParams := make(map[string][]string)
 
 	// minio-go 没有直接的 PresignedDeleteURL，使用通用方法
@@ -98,7 +98,7 @@ const (
 // key: 对象键
 // expiry: 过期时间
 // reqParams: 额外的查询参数
-func (c *Client) PresignedURL(ctx context.Context, method PresignMethod, key string, expiry time.Duration, reqParams map[string][]string) (*PresignedURLResult, error) {
+func (c *MinioClient) PresignedURL(ctx context.Context, method PresignMethod, key string, expiry time.Duration, reqParams map[string][]string) (*PresignedURLResult, error) {
 	url, err := c.Client.Presign(ctx, string(method), c.bucket, key, expiry, reqParams)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate presigned %s URL for %s: %w", method, key, err)

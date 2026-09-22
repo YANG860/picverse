@@ -1,4 +1,4 @@
-package minio
+package oss
 
 import (
 	"context"
@@ -19,7 +19,7 @@ type DownloadResult struct {
 // Download 下载文件
 // key: 对象键
 // 返回: 下载结果，包含文件内容和元数据
-func (c *Client) Download(ctx context.Context, key string) (*DownloadResult, error) {
+func (c *MinioClient) Download(ctx context.Context, key string) (*DownloadResult, error) {
 	object, err := c.Client.GetObject(ctx, c.bucket, key, minio.GetObjectOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get object %s: %w", key, err)
@@ -50,7 +50,7 @@ func (c *Client) Download(ctx context.Context, key string) (*DownloadResult, err
 // key: 对象键
 // writer: 目标 Writer
 // 返回: 写入的字节数
-func (c *Client) DownloadToWriter(ctx context.Context, key string, writer io.Writer) (int64, error) {
+func (c *MinioClient) DownloadToWriter(ctx context.Context, key string, writer io.Writer) (int64, error) {
 	object, err := c.Client.GetObject(ctx, c.bucket, key, minio.GetObjectOptions{})
 	if err != nil {
 		return 0, fmt.Errorf("failed to get object %s: %w", key, err)
@@ -70,8 +70,23 @@ func (c *Client) DownloadToWriter(ctx context.Context, key string, writer io.Wri
 	return n, nil
 }
 
+// Exist 检查对象是否存在
+func (c *MinioClient) Exist(ctx context.Context, key string) (bool, error) {
+	_, err := c.StatObject(ctx, c.bucket, key, minio.StatObjectOptions{})
+	if err != nil {
+		// 检查是否是对象不存在的错误
+		resp := minio.ToErrorResponse(err)
+		if resp.Code == "NoSuchKey" || resp.Code == "NoSuchObject" || resp.Code == "NotFound" {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to check object existence %s: %w", key, err)
+	}
+
+	return true, nil
+}
+
 // GetObjectInfo 获取对象信息（不下载内容）
-func (c *Client) GetObjectInfo(ctx context.Context, key string) (*minio.ObjectInfo, error) {
+func (c *MinioClient) GetObjectInfo(ctx context.Context, key string) (*minio.ObjectInfo, error) {
 	info, err := c.Client.StatObject(ctx, c.bucket, key, minio.StatObjectOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to stat object %s: %w", key, err)
@@ -87,7 +102,7 @@ func (c *Client) GetObjectInfo(ctx context.Context, key string) (*minio.ObjectIn
 }
 
 // DeleteObject 删除对象
-func (c *Client) DeleteObject(ctx context.Context, key string) error {
+func (c *MinioClient) DeleteObject(ctx context.Context, key string) error {
 	err := c.Client.RemoveObject(ctx, c.bucket, key, minio.RemoveObjectOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to delete object %s: %w", key, err)
@@ -98,7 +113,7 @@ func (c *Client) DeleteObject(ctx context.Context, key string) error {
 }
 
 // DeleteObjects 批量删除对象
-func (c *Client) DeleteObjects(ctx context.Context, keys []string) error {
+func (c *MinioClient) DeleteObjects(ctx context.Context, keys []string) error {
 	objectsCh := make(chan minio.ObjectInfo)
 
 	go func() {

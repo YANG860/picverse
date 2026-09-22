@@ -8,7 +8,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func NewPG(cfg *config.Config, lf *logger.LoggerFactory) *gorm.DB {
+func NewPG(cfg *config.Config, lf logger.LoggerFactory) (*gorm.DB, func()) {
 	log := lf.GetLoggerOf("gorm")
 
 	db, err := gorm.Open(postgres.Open(cfg.Database.PG.URL), &gorm.Config{
@@ -19,5 +19,12 @@ func NewPG(cfg *config.Config, lf *logger.LoggerFactory) *gorm.DB {
 		panic(err)
 	}
 
-	return db
+	sqlConn, err := db.DB()
+	if err != nil {
+		panic(err)
+	}
+
+	return db, func() {
+		_ = sqlConn.Close()
+	}
 }
