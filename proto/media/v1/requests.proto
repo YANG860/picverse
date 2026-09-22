@@ -3,25 +3,30 @@ syntax = "proto3";
 package media.v1;
 
 import "buf/validate/validate.proto";
-import "common/v1/message.proto";
+import "common/v1/common.proto";
 import "media/v1/media.proto";
 
 message UploadMediaRequest {
-  MediaFormat format = 1;
-  string sha256_sum = 2;
+  string uploader_id = 1;
+
+  MediaMetaData media_meta = 3;
 }
 
 message UploadMediaResponse {
+  bool fail = 3;
+  common.v1.Error err = 4;
+
   MediaAsset asset = 1;
   string signed_url = 2;
+  int64 expire_at = 5;
 }
 
 message GetMediaAssetsRequest {
-  repeated string id = 1 [(buf.validate.field).repeated.items.string.min_len = 1];
+  repeated string ids = 1 [(buf.validate.field).repeated.items.string.min_len = 1];
 }
 
 message GetMediaAssetsResponse {
-  map<string, MediaAssetResult> results = 1;
+  repeated MediaAssetResult results = 1;
 }
 
 message MediaAssetResult {
@@ -60,40 +65,30 @@ message ListMediaAssetsBeforeRequest {
 }
 
 message ListMediaAssetsBeforeResponse {
-  repeated ListMediaAssetsBeforeResult results = 1;
+  bool fail = 3;
+  common.v1.Error err = 4;
+
+  repeated MediaAsset assets = 1;
+  common.v1.Cursor cursor = 2;
 }
 
-message ListMediaAssetsBeforeResult {
-  MediaAsset asset = 1;
-  string origin_url = 2;
+message BanMediaRequest {
+  string asset_id = 1;
 }
 
-message SetMediaAssetStatusRequest {
-  repeated SetMediaAssetStatusQuery queries = 1;
-}
-
-message SetMediaAssetStatusResponse {
-  repeated SetMediaAssetStatusResult results = 1;
-}
-
-message SetMediaAssetStatusQuery {
-  string id = 1 [(buf.validate.field).string.min_len = 1];
-  MediaAssetStatus status = 2;
-}
-
-message SetMediaAssetStatusResult {
+message BanMediaResponse {
   bool fail = 1;
   common.v1.Error err = 2;
-
-  SetMediaAssetStatusQuery query = 3;
 }
 
+// 原子接口 全部成功或全部失败
 message ModifyMediaAssetRefCountRequest {
   repeated ModifyMediaAssetRefCountQuery queries = 1;
 }
 
 message ModifyMediaAssetRefCountResponse {
-  repeated ModifyMediaAssetRefCountResult results = 1;
+  bool fail = 1;
+  common.v1.Error err = 2;
 }
 
 message ModifyMediaAssetRefCountQuery {
@@ -101,13 +96,13 @@ message ModifyMediaAssetRefCountQuery {
   sint64 delta = 2;
 }
 
-message ModifyMediaAssetRefCountResult {
-  bool fail = 1;
-  common.v1.Error err = 2;
-
-  MediaAssetFileQuery query = 3;
+message DeleteUnusedMediaRequest {
+  int64 limit = 1;
 }
 
-message DeleteUnusedMediaRequest {}
+message DeleteUnusedMediaResponse {
+  bool fail = 2;
+  common.v1.Error err = 3;
 
-message DeleteUnusedMediaResponse {}
+  int64 rows_affected = 1;
+}

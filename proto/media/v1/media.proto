@@ -3,6 +3,7 @@ syntax = "proto3";
 package media.v1;
 
 import "buf/validate/validate.proto";
+import "common/v1/common.proto";
 
 enum MediaAssetStatus {
   MEDIA_ASSET_STATUS_UNSPECIFIED = 0;
@@ -10,8 +11,10 @@ enum MediaAssetStatus {
   MEDIA_ASSET_STATUS_AUDITING = 2;
   MEDIA_ASSET_STATUS_PROCESSING = 5;
   MEDIA_ASSET_STATUS_ACTIVE = 3;
-  MEDIA_ASSET_STATUS_BANNED = 4;
-  MEDIA_ASSET_STATUS_UPLOAD_FAILED = 6;
+  MEDIA_ASSET_STATUS_FAILED = 4;
+  MEDIA_ASSET_STATUS_BANNED = 7;
+  MEDIA_ASSET_STATUS_ERROR = 6;
+  MEDIA_ASSET_STATUS_DELETED = 8;
 }
 
 enum MediaFileType {
@@ -29,16 +32,30 @@ enum MediaFormat {
 }
 
 message MediaAsset {
-  string id = 1 [(buf.validate.field).string.min_len = 1];
-  int64 created_at = 2;
-  int64 updated_at = 3;
+  common.v1.BaseModel base = 1;
   MediaAssetStatus status = 4;
   int64 ref_count = 5;
+  string uploader_id = 6;
 }
 
 message MediaFile {
-  MediaAsset asset = 1;
-  MediaFormat format = 2;
-  MediaFileType type = 4;
-  optional string url = 3;
+  common.v1.BaseModel base = 1;
+  string asset_id = 2 [(buf.validate.field).string.min_len = 1];
+  MediaFileType type = 5;
+
+  string obj_key = 6;
+  string bucket = 7;
+
+  MediaMetaData meta = 8;
+}
+
+message MediaMetaData {
+  string sha_256_sum = 8;
+  int64 size_bytes = 9;
+
+  MediaFormat format = 3;
+  int64 height = 10;
+  int64 width = 11;
+
+  bytes metadata = 12;
 }

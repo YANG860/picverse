@@ -5,12 +5,24 @@ package media.v1;
 import "media/v1/requests.proto";
 
 service MediaService {
+  // 上传媒体
   rpc UploadMedia(UploadMediaRequest) returns (UploadMediaResponse);
+
+  // 获取媒体资产的元数据
   rpc GetMediaAssets(GetMediaAssetsRequest) returns (GetMediaAssetsResponse);
+
+  // 获取媒体资产的文件
   rpc GetMediaAssetFiles(GetMediaAssetFilesRequest) returns (GetMediaAssetFilesResponse);
+
+  // 按时间列举媒体资产
   rpc ListMediaAssetsBefore(ListMediaAssetsBeforeRequest) returns (ListMediaAssetsBeforeResponse);
 
-  rpc SetMediaAssetStatus(SetMediaAssetStatusRequest) returns (SetMediaAssetStatusResponse);
+  // 封禁媒体
+  rpc BanMedia(BanMediaRequest) returns (BanMediaResponse);
+
+  // 修改引用计数
   rpc ModifyMediaAssetRefCount(ModifyMediaAssetRefCountRequest) returns (ModifyMediaAssetRefCountResponse);
+
+  // 删除未使用的媒体资源
   rpc DeleteUnusedMedia(DeleteUnusedMediaRequest) returns (DeleteUnusedMediaResponse);
 }

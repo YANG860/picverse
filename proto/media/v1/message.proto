@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package media.v1;
+
+import "media/v1/media.proto";
+
+message MediaMessage {
+  oneof payload {
+    UploadMedia upload_media = 1;
+    AuditMedia audit_media = 3;
+    DeleteMedia delete_media = 2;
+    ProcessMedia process_media = 4;
+    PublishMedia publish_media = 5;
+  }
+}
+
+message UploadMedia {
+  string asset_id = 1;
+  string bucket = 2;
+  string key = 3;
+
+  string uploader_id = 5;
+  MediaMetaData meta = 6;
+}
+
+message AuditMedia {
+  string asset_id = 1;
+  string bucket = 2;
+  string key = 3;
+
+  string uploader_id = 5;
+  string origin_file_id = 6;
+}
+
+message ProcessMedia {
+  string asset_id = 1;
+  string bucket = 2;
+  string key = 3;
+
+  string uploader_id = 5;
+  string origin_file_id = 6;
+}
+
+message PublishMedia {
+  string asset_id = 1;
+  string uploader_id = 5;
+}
+
+message DeleteMedia {
+  string asset_id = 1;
+}
