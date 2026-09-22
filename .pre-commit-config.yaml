@@ -1,11 +1,6 @@
 fail_fast: true # 第一个错就停
 
 repos:
-  - repo: https://github.com/dnephin/pre-commit-golang
-    rev: v0.5.1
-    hooks:
-      - id: go-fmt # 格式化
-      - id: go-vet # 官方错误检测
 
   - repo: https://github.com/golangci/golangci-lint
     rev: v2.12.2
