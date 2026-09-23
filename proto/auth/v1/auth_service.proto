@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package auth.v1;
+
+import "auth/v1/request.proto";
+
+service AuthService {
+  // 注册
+  rpc Register(RegisterRequest) returns (RegisterResponse) {}
+  // 登录
+  rpc Login(LoginRequest) returns (LoginResponse) {}
+
+  // 获取新的refresh token
+  rpc GetRefreshToken(GetRefreshTokenRequest) returns (GetRefreshTokenResponse) {}
+
+  // 获取新的access token
+  rpc GetAccessToken(GetAccessTokenRequest) returns (GetAccessTokenResponse) {}
+}

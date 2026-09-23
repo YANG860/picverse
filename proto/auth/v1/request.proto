@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package auth.v1;
+
+import "auth/v1/auth.proto";
+import "common/v1/common.proto";
+
+message RegisterRequest {
+  Credential credential = 1;
+}
+
+message RegisterResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  string assigned_id = 3;
+  Token token = 4;
+}
+
+message LoginRequest {
+  Credential credential = 1;
+}
+
+message LoginResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+  Token token = 3;
+}
+
+message GetRefreshTokenRequest {}
+
+message GetRefreshTokenResponse {
+  bool fail = 2;
+  common.v1.Error err = 3;
+
+  Token token = 1;
+}
+
+message GetAccessTokenRequest {}
+
+message GetAccessTokenResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  Token access_token = 3;
+  Token refresh_token = 4;
+}
