@@ -11,6 +11,7 @@ import (
 	mediav1 "rednote/internal/media/v1"
 	"rednote/internal/poller"
 	"rednote/packages/db"
+	"rednote/packages/jwt"
 	"rednote/packages/logger"
 	"rednote/packages/mq"
 	"rednote/packages/oss"
@@ -47,6 +48,12 @@ var Middlewares = wire.NewSet(
 	wire.Bind(new(oss.S3Repo), new(*oss.MinioClient)),
 )
 
+var Utils = wire.NewSet(
+	jwt.NewManager,
+	wire.Bind(new(jwt.Manager), new(*jwt.ManagerImpl)),
+	jwt.NewServerInterceptor,
+)
+
 func InitializeConsumer(cfg *config.Config) (*consumer.MediaConsumer, func()) {
 	wire.Build(
 		consumer.NewMediaConsumer,
@@ -73,4 +80,11 @@ func InitializeMediaServiceHandler(cfg *config.Config) (mediav1connect.MediaServ
 		Usecases,
 	)
 	return nil, func() {}
+}
+
+func InitializeAuthInterceptor(cfg *config.Config) *jwt.ServerInterceptor {
+	wire.Build(
+		Utils,
+	)
+	return nil
 }

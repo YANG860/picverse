@@ -15,6 +15,7 @@ import (
 	"rednote/internal/media/v1"
 	"rednote/internal/poller"
 	"rednote/packages/db"
+	"rednote/packages/jwt"
 	"rednote/packages/logger"
 	"rednote/packages/mq"
 	"rednote/packages/oss"
@@ -64,6 +65,12 @@ func InitializeMediaServiceHandler(cfg *config.Config) (mediav1connect.MediaServ
 	}
 }
 
+func InitializeAuthInterceptor(cfg *config.Config) *jwt.ServerInterceptor {
+	managerImpl := jwt.NewManager(cfg)
+	serverInterceptor := jwt.NewServerInterceptor(managerImpl)
+	return serverInterceptor
+}
+
 // wire.go:
 
 var Repos = wire.NewSet(v1.NewMediaRepo, wire.Bind(new(v1.MediaRepository), new(*v1.MediaRepoImpl)), v1_2.NewOutBoxRepo, wire.Bind(new(v1_2.OutBoxRepository), new(*v1_2.OutBoxRepoImpl)))
@@ -73,3 +80,5 @@ var Services = wire.NewSet(v1.NewMediaServiceHandler, wire.Bind(new(mediav1conne
 var Usecases = wire.NewSet(v1.NewMediaUsecase, wire.Bind(new(v1.MediaUsecase), new(*v1.MediaUsecaseImpl)))
 
 var Middlewares = wire.NewSet(db.NewPG, mq.NewJetStreamClient, logger.NewLoggerFactory, wire.Bind(new(logger.LoggerFactory), new(*logger.LoggerFactoryImpl)), oss.NewClient, wire.Bind(new(oss.S3Repo), new(*oss.MinioClient)))
+
+var Utils = wire.NewSet(jwt.NewManager, wire.Bind(new(jwt.Manager), new(*jwt.ManagerImpl)), jwt.NewServerInterceptor)
