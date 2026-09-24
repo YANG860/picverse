@@ -26,6 +26,17 @@ s3:
   use_ssl: false
   bucket: "rednote"
 
+jwt:
+  secret: "rednote_jwt_secret_change_me"
+  issuer: "rednote"
+  expire: 24h
+
+redis:
+  addr: "106.53.172.186:6379"
+  password: ""
+  db: 0
+  pool_size: 10
+
 jetstream:
   url: "nats://106.53.172.186:4222"
 

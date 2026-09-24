@@ -13,6 +13,30 @@ type Config struct {
 	Poller    PollerConfig    `mapstructure:"poller"`
 	Consumer  ConsumerConfig  `mapstructure:"consumer"`
 	Logger    LoggerConfig    `mapstructure:"logger"`
+	JWT       JWTConfig       `mapstructure:"jwt"`
+	Redis     RedisConfig     `mapstructure:"redis"`
+}
+
+// RedisConfig Redis 连接配置
+type RedisConfig struct {
+	// 连接地址，如 "127.0.0.1:6379"
+	Addr string `mapstructure:"addr"`
+	// 密码，可为空
+	Password string `mapstructure:"password"`
+	// 库编号，默认 0
+	DB int `mapstructure:"db"`
+	// 连接池大小，0 表示使用默认值（10）
+	PoolSize int `mapstructure:"pool_size"`
+}
+
+// JWTConfig JWT 签发配置
+type JWTConfig struct {
+	// HMAC-SHA256 签名密钥，必填
+	Secret string `mapstructure:"secret"`
+	// 签发者，可选
+	Issuer string `mapstructure:"issuer"`
+	// token 有效期，默认 24h
+	Expire time.Duration `mapstructure:"expire"`
 }
 
 type DatabaseConfig struct {
