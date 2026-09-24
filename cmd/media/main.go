@@ -10,7 +10,10 @@ import (
 	"os/signal"
 	"rednote/cmd/gen"
 	"rednote/config"
+
+	"connectrpc.com/connect"
 	"rednote/gen/go/media/v1/mediav1connect"
+	"rednote/packages/trace"
 	"syscall"
 	"time"
 )
@@ -23,7 +26,10 @@ func main() {
 	cfg := config.Init(cfgPath)
 
 	svc, cleanup := gen.InitializeMediaServiceHandler(cfg)
-	path, hander := mediav1connect.NewMediaServiceHandler(svc)
+	path, hander := mediav1connect.NewMediaServiceHandler(
+		svc,
+		connect.WithInterceptors(trace.NewServerInterceptor()),
+	)
 
 	mux := http.NewServeMux()
 	mux.Handle(path, hander)
