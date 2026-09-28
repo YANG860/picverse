@@ -14,6 +14,8 @@ func NewSQLite(dbPath string, lf logger.LoggerFactory) *gorm.DB {
 
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
 		Logger: NewSlogAdapter(log),
+		// 与 PG 连接保持一致：翻译驱动错误为 gorm.ErrDuplicatedKey 等语义化错误
+		TranslateError: true,
 	})
 
 	if err != nil {
