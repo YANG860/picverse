@@ -8,7 +8,17 @@ enum Role {
   ROLE_ADMIN = 2;
 }
 
-message Token {
+enum Platform {
+  PLATFORM_UNSPECIFIED = 0;
+  PLATFORM_MOBILE = 1;
+  PLATFORM_WEB = 3;
+}
+
+message AccessToken {
+  string value = 1;
+}
+
+message RefreshToken {
   string value = 1;
 }
 

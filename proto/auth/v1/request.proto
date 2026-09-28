@@ -7,6 +7,7 @@ import "common/v1/common.proto";
 
 message RegisterRequest {
   Credential credential = 1;
+  Role role = 2;
 }
 
 message RegisterResponse {
@@ -14,17 +15,18 @@ message RegisterResponse {
   common.v1.Error err = 2;
 
   string assigned_id = 3;
-  Token token = 4;
 }
 
 message LoginRequest {
   Credential credential = 1;
+  Platform platform = 2;
 }
 
 message LoginResponse {
   bool fail = 1;
   common.v1.Error err = 2;
-  Token token = 3;
+  RefreshToken refresh_token = 3;
+  AccessToken access_token = 4;
 }
 
 message GetRefreshTokenRequest {}
@@ -33,7 +35,7 @@ message GetRefreshTokenResponse {
   bool fail = 2;
   common.v1.Error err = 3;
 
-  Token token = 1;
+  RefreshToken token = 1;
 }
 
 message GetAccessTokenRequest {}
@@ -42,6 +44,15 @@ message GetAccessTokenResponse {
   bool fail = 1;
   common.v1.Error err = 2;
 
-  Token access_token = 3;
-  Token refresh_token = 4;
+  AccessToken token = 3;
+}
+
+message LogoutRequest {
+  string uid = 2;
+  Platform platform = 1;
+}
+
+message LogoutResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
 }
