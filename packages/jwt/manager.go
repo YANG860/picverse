@@ -20,9 +20,10 @@ type Manager interface {
 
 // ManagerImpl 基于 HMAC-SHA256 的 JWT 实现
 type ManagerImpl struct {
-	secret []byte
-	issuer string
-	expire time.Duration
+	secret        []byte
+	issuer        string
+	accessExpiry  time.Duration
+	refreshExpiry time.Duration
 }
 
 // NewManager 创建 JWT 管理器，配置从 config.JWTConfig 读取
@@ -31,15 +32,21 @@ func NewManager(cfg *config.Config) *ManagerImpl {
 		panic("jwt secret is required")
 	}
 
-	expire := cfg.JWT.Expire
-	if expire <= 0 {
-		expire = defaults.TokenExpire
+	accessExpiry := cfg.JWT.AccessExpire
+	if accessExpiry <= 0 {
+		accessExpiry = defaults.TokenExpire
+	}
+
+	refreshExpiry := cfg.JWT.RefreshExpire
+	if refreshExpiry <= 0 {
+		refreshExpiry = defaults.TokenExpire
 	}
 
 	return &ManagerImpl{
-		secret: []byte(cfg.JWT.Secret),
-		issuer: cfg.JWT.Issuer,
-		expire: expire,
+		secret:        []byte(cfg.JWT.Secret),
+		issuer:        cfg.JWT.Issuer,
+		accessExpiry:  accessExpiry,
+		refreshExpiry: refreshExpiry,
 	}
 }
 
@@ -51,18 +58,25 @@ func (m *ManagerImpl) Generate(claims *Claims) (string, error) {
 	if claims.Issuer == "" && m.issuer != "" {
 		claims.Issuer = m.issuer
 	}
-	if claims.IssuedAt == nil {
-		claims.IssuedAt = jwtlib.NewNumericDate(now)
-	}
-	if claims.ExpiresAt == nil {
-		claims.ExpiresAt = jwtlib.NewNumericDate(now.Add(m.expire))
+
+	claims.IssuedAt = jwtlib.NewNumericDate(now)
+
+	switch claims.Type {
+	case defaults.JwtAccessToken:
+		claims.ExpiresAt = jwtlib.NewNumericDate(time.Now().Add(m.accessExpiry))
+	case defaults.JwtRefreshToken:
+		claims.ExpiresAt = jwtlib.NewNumericDate(time.Now().Add(m.refreshExpiry))
+	default:
+		return "", fmt.Errorf("invalid jwt token type")
 	}
 
 	token := jwtlib.NewWithClaims(jwtlib.SigningMethodHS256, claims)
 	signed, err := token.SignedString(m.secret)
+
 	if err != nil {
 		return "", fmt.Errorf("jwt: 签发 token 失败: %w", err)
 	}
+
 	return signed, nil
 }
 

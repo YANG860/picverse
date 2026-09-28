@@ -2,7 +2,10 @@ package jwt
 
 import (
 	"context"
+	authv1 "rednote/gen/go/auth/v1"
+	"rednote/packages/utils"
 
+	"github.com/bwmarrin/snowflake"
 	jwtlib "github.com/golang-jwt/jwt/v5"
 )
 
@@ -18,6 +21,17 @@ type Claims struct {
 	Type string `json:"type"`
 	Role string `json:"role"`
 	UID  string `json:"uid"`
+}
+
+func NewClaim(tokenType string, role authv1.Role, uid int64) *Claims {
+	return &Claims{
+		RegisteredClaims: jwtlib.RegisteredClaims{
+			ID: utils.GenID().String(),
+		},
+		Type: tokenType,
+		Role: role.String(),
+		UID:  snowflake.ParseInt64(uid).String(),
+	}
 }
 
 // WithToken 把原始 token 附加到 ctx

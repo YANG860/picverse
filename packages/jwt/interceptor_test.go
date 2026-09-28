@@ -29,9 +29,10 @@ func newTestManager(t *testing.T) *ManagerImpl {
 	t.Helper()
 	return NewManager(&config.Config{
 		JWT: config.JWTConfig{
-			Secret: testSecret,
-			Issuer: "test",
-			Expire: time.Hour,
+			Secret:        testSecret,
+			Issuer:        "test",
+			AccessExpire:  time.Hour,
+			RefreshExpire: time.Hour,
 		},
 	})
 }
