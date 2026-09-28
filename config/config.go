@@ -36,7 +36,8 @@ type JWTConfig struct {
 	// 签发者，可选
 	Issuer string `mapstructure:"issuer"`
 	// token 有效期，默认 24h
-	Expire time.Duration `mapstructure:"expire"`
+	AccessExpire  time.Duration `mapstructure:"access_expire"`
+	RefreshExpire time.Duration `mapstructure:"refresh_expire"`
 }
 
 type DatabaseConfig struct {
