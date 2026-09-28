@@ -65,6 +65,19 @@ func DSN() string {
 	return DefaultDSN
 }
 
+// DSNDatabaseName 提取连接串中的库名（scripts/dbsync 等工具用其确定同步目标库）。
+func DSNDatabaseName() (string, error) {
+	u, err := url.Parse(DSN())
+	if err != nil {
+		return "", fmt.Errorf("解析连接串失败: %w", err)
+	}
+	name := strings.TrimPrefix(u.Path, "/")
+	if name == "" {
+		return "", fmt.Errorf("连接串缺少数据库名: %s", DSN())
+	}
+	return name, nil
+}
+
 // dsnFor 返回指向指定数据库的连接串（复用 DSN 的服务器与凭据）。
 func dsnFor(name string) (string, error) {
 	u, err := url.Parse(DSN())
