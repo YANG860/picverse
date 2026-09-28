@@ -3,6 +3,7 @@ package main
 import (
 	"gorm.io/gen"
 
+	auth "rednote/internal/auth/models"
 	common "rednote/internal/common/models"
 	media "rednote/internal/media/models"
 )
@@ -35,6 +36,7 @@ func main() {
 		&media.MediaFile{},
 		&common.BaseModel{},
 		&common.OutBoxEntry{},
+		&auth.UserCredential{},
 	)
 
 	// 生成代码
