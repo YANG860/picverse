@@ -3,6 +3,7 @@ package common
 import (
 	commonv1 "rednote/gen/go/common/v1"
 	"rednote/packages/utils"
+	"time"
 
 	"github.com/bwmarrin/snowflake"
 	"gorm.io/gorm"
@@ -20,6 +21,16 @@ func (b *BaseModel) BeforeCreate(tx *gorm.DB) error {
 	if b.ID == 0 {
 		b.ID = utils.GenID().Int64()
 	}
+
+	if b.CreatedAt == 0 {
+		b.CreatedAt = time.Now().UnixMilli()
+	}
+
+	return nil
+}
+
+func (b *BaseModel) BeforeUpdate(tx *gorm.DB) error {
+	b.UpdatedAt = time.Now().UnixMilli()
 	return nil
 }
 
