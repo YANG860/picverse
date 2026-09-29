@@ -44,6 +44,15 @@ const (
 	RETRY = false
 )
 
+var (
+	AllMediaTypes = [4]mediav1.MediaFileType{
+		mediav1.MediaFileType_MEDIA_FILE_TYPE_ORIGIN,
+		mediav1.MediaFileType_MEDIA_FILE_TYPE_216,
+		mediav1.MediaFileType_MEDIA_FILE_TYPE_540,
+		mediav1.MediaFileType_MEDIA_FILE_TYPE_1080,
+	}
+)
+
 func NewMediaConsumer(db *gorm.DB, mqClient *mq.JetStreamClient, s3 oss.S3Repo, lf logger.LoggerFactory, cfg *config.Config, repo v1.MediaRepository) *MediaConsumer {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &MediaConsumer{
@@ -139,7 +148,7 @@ func (c *MediaConsumer) HandleMessage(msg jetstream.Msg) {
 
 	switch message := m.Payload.(type) {
 	case *mediav1.MediaMessage_DeleteMedia:
-		ack, err = c.HandlerDeleteMedia(ctx, message.DeleteMedia)
+		ack, err = c.HandleDeleteMedia(ctx, message.DeleteMedia)
 	case *mediav1.MediaMessage_UploadMedia:
 		ack, err = c.HandleUploadMedia(ctx, message.UploadMedia)
 	case *mediav1.MediaMessage_AuditMedia:
@@ -438,11 +447,6 @@ func (c *MediaConsumer) SetMediaStatusProcessing(ctx context.Context, assetID in
 	return ACK, nil
 }
 
-func (c *MediaConsumer) HandleDeleteMedia(ctx context.Context, message *mediav1.DeleteMedia) error {
-	// Implementation for handling delete media message
-	return nil
-}
-
 func (c *MediaConsumer) HandleProcessMedia(ctx context.Context, message *mediav1.ProcessMedia) (ack bool, err error) {
 
 	assetID, err := snowflake.ParseString(message.GetAssetId())
@@ -620,18 +624,13 @@ func (c *MediaConsumer) HandlePublishMedia(ctx context.Context, message *mediav1
 	return ACK, nil
 }
 
-func (c *MediaConsumer) HandlerDeleteMedia(ctx context.Context, message *mediav1.DeleteMedia) (ack bool, err error) {
+func (c *MediaConsumer) HandleDeleteMedia(ctx context.Context, message *mediav1.DeleteMedia) (ack bool, err error) {
 	assetID, err := snowflake.ParseString(message.GetAssetId())
 	if err != nil {
 		return ACK, err
 	}
 
-	types := []mediav1.MediaFileType{
-		mediav1.MediaFileType_MEDIA_FILE_TYPE_ORIGIN,
-		mediav1.MediaFileType_MEDIA_FILE_TYPE_216,
-		mediav1.MediaFileType_MEDIA_FILE_TYPE_540,
-		mediav1.MediaFileType_MEDIA_FILE_TYPE_1080,
-	}
+	types := AllMediaTypes[:]
 
 	ids := []int64{
 		assetID.Int64(),
@@ -677,4 +676,43 @@ func (c *MediaConsumer) HandlerDeleteMedia(ctx context.Context, message *mediav1
 	}
 
 	return ACK, nil
+}
+
+func (c *MediaConsumer) HandleBanMedia(ctx context.Context, message *mediav1.BanMedia) (ack bool, err error) {
+	assetID, err := snowflake.ParseString(message.GetAssetId())
+	if err != nil {
+		return ACK, err
+	}
+
+	assets, err := c.Repo.GetMediaAssets(ctx, []int64{assetID.Int64()})
+	if err != nil {
+		return RETRY, err
+	}
+	if len(assets) == 0 {
+		return ACK, nil
+	}
+	if assets[0].Status != mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_BANNED {
+		return ACK, nil
+	}
+
+	files, err := c.Repo.GetMediaFiles(ctx, []int64{assetID.Int64()}, AllMediaTypes[:])
+	if err != nil {
+		return RETRY, err
+	}
+
+	for _, f := range files {
+		exist, err := c.S3.Exist(ctx, f.ObjKey)
+		if err != nil {
+			return RETRY, err
+		}
+		if !exist {
+			continue
+		}
+		err = c.S3.DeleteObject(ctx, f.ObjKey)
+		if err != nil {
+			return RETRY, err
+		}
+	}
+	return ACK, nil
+
 }

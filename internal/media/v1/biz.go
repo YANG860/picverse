@@ -282,7 +282,28 @@ func (u *MediaUsecaseImpl) BanMedia(ctx context.Context, req *mediav1.BanMediaRe
 		return &mediav1.BanMediaResponse{Fail: true, Err: errmsg.InvalidID}, nil
 	}
 
-	_, err = u.Repo.SetMediaAssetBanned(ctx, assetID.Int64())
+	banMsg := &mediav1.MediaMessage{
+		Payload: &mediav1.MediaMessage_BanMedia{
+			BanMedia: &mediav1.BanMedia{
+				AssetId: assetID.String(),
+			},
+		},
+	}
+	msg, err := mq.NewMQMessage(defaults.MediaMessageStream, nil, banMsg)
+
+	err = u.DB.Transaction(func(tx *gorm.DB) error {
+		_, err := u.Repo.WithTX(tx).SetMediaAssetBanned(ctx, assetID.Int64())
+		if err != nil {
+			return err
+		}
+
+		err = u.MQ.SendTX(ctx, msg, tx)
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to ban media: %w", err)
 	}

@@ -11,6 +11,7 @@ message MediaMessage {
     DeleteMedia delete_media = 2;
     ProcessMedia process_media = 4;
     PublishMedia publish_media = 5;
+    BanMedia ban_media = 6;
   }
 }
 
@@ -47,5 +48,9 @@ message PublishMedia {
 }
 
 message DeleteMedia {
+  string asset_id = 1;
+}
+
+message BanMedia {
   string asset_id = 1;
 }
