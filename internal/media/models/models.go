@@ -30,6 +30,7 @@ func (MediaAsset) TableName() string {
 
 // MediaFile 图片的一个变体
 // 宽度1080px 540px 216px 之一的.webp图片，或者原图
+// 不可变类型 创建后不会修改 只可删除
 type MediaFile struct {
 	common.BaseModel
 
