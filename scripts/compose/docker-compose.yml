@@ -1,0 +1,95 @@
+# rednote 测试容器编排：PostgreSQL + NATS JetStream + MinIO
+# 用法见同目录 README.md
+# 凭据从 .env 注入（参考 .env.example，真实 .env 不入库）
+name: rednote-test
+
+services:
+  pg:
+    image: postgres:16-alpine
+    container_name: rednote-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-prod}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # 首次启动（数据卷为空）按文件名序自动执行 sql/001~003，非 *.sql 文件被忽略
+      - ../../sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ${POSTGRES_DB:-prod}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  nats:
+    image: nats:2.10-alpine
+    container_name: rednote-nats
+    restart: unless-stopped
+    command: ["-js", "-sd", "/data", "-m", "8222", "--name", "rednote"]
+    ports:
+      - "4222:4222"
+      - "8222:8222" # 监控端口（/healthz、/jsz 等）
+    volumes:
+      - natsdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8222/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio
+    container_name: rednote-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    command: ["server", "/data", "--console-address", ":9001"]
+    ports:
+      - "9000:9000"
+      - "9001:9001" # Web 控制台
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # 一次性初始化：创建 JetStream stream（幂等：已存在即跳过），完成后退出
+  init-nats:
+    image: natsio/nats-box
+    restart: "no"
+    depends_on:
+      nats:
+        condition: service_healthy
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        nats -s nats://nats:4222 stream info media >/dev/null 2>&1 ||
+          nats -s nats://nats:4222 stream add media --subjects="media,media.>" --defaults
+        nats -s nats://nats:4222 stream ls
+
+  # 一次性初始化：创建 MinIO bucket（幂等），完成后退出
+  init-minio:
+    image: minio/mc
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
+        mc mb --ignore-existing local/${MINIO_BUCKET:-rednote}
+        mc ls local
+
+volumes:
+  pgdata:
+  natsdata:
+  miniodata:
