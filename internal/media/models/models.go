@@ -1,6 +1,7 @@
 package media
 
 import (
+	"errors"
 	mediav1 "rednote/gen/go/media/v1"
 	common "rednote/internal/common/models"
 
@@ -55,7 +56,7 @@ type MediaFile struct {
 	Width  int64               `gorm:"type:bigint;not null;comment:宽度" json:"width"`
 
 	// 元数据
-	MetaData datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}';comment:元数据" json:"meta_data"`
+	MediaMetaData datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}';comment:元数据" json:"meta_data"`
 }
 
 // TableName 指定表名
@@ -63,7 +64,6 @@ func (MediaFile) TableName() string {
 	return "media_files"
 }
 func (m *MediaAsset) ToProto() *mediav1.MediaAsset {
-	// Implementation for converting MediaAsset to proto message
 	return &mediav1.MediaAsset{
 		Base: m.BaseModel.ToProto(),
 
@@ -74,8 +74,11 @@ func (m *MediaAsset) ToProto() *mediav1.MediaAsset {
 }
 
 func (m *MediaFile) ToProto() *mediav1.MediaFile {
+	if m == nil {
+		return nil
+	}
 
-	metadata, _ := m.MetaData.MarshalJSON()
+	mediaMetadata, _ := m.MediaMetaData.MarshalJSON()
 
 	return &mediav1.MediaFile{
 		Base: m.BaseModel.ToProto(),
@@ -92,7 +95,47 @@ func (m *MediaFile) ToProto() *mediav1.MediaFile {
 			Height:     m.Height,
 			Width:      m.Width,
 
-			Metadata: metadata,
+			Metadata: mediaMetadata,
 		},
 	}
+}
+
+func MediaFileFromProto(proto *mediav1.MediaFile) (m MediaFile, err error) {
+	if proto == nil {
+		return MediaFile{}, errors.New("nil media file proto")
+	}
+
+	basemodel, err := common.BaseModelFromProto(proto.Base)
+	if err != nil {
+		return MediaFile{}, err
+	}
+
+	id, err := snowflake.ParseString(proto.AssetId)
+	if err != nil {
+		return MediaFile{}, err
+	}
+
+	m.BaseModel = basemodel
+	m.AssetID = id.Int64()
+
+	m.Type = proto.Type
+	m.ObjKey = proto.ObjKey
+	m.Bucket = proto.Bucket
+
+	meta := proto.GetMeta()
+
+	m.Sha256Sum = meta.GetSha_256Sum()
+	m.SizeBytes = meta.GetSizeBytes()
+	m.Format = meta.GetFormat()
+	m.Height = meta.GetHeight()
+	m.Width = meta.GetWidth()
+
+	metadata := meta.GetMetadata()
+	m.MediaMetaData = datatypes.JSONMap{}
+	if len(metadata) > 0 {
+		if err = m.MediaMetaData.UnmarshalJSON(metadata); err != nil {
+			return MediaFile{}, err
+		}
+	}
+	return m, nil
 }

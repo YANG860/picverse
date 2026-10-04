@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS media_files (
     height      INTEGER         NOT NULL,                          -- 高度(px)
     width       INTEGER         NOT NULL,                          -- 宽度(px)
 
-    meta_data   JSONB           NOT NULL DEFAULT '{}'              -- 扩展元数据
+    media_meta_data JSONB           NOT NULL DEFAULT '{}'              -- 扩展元数据（与 models.MediaFile.MediaMetaData 对应）
 );
 
 -- -----------------------------------------------------------
