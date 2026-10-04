@@ -50,17 +50,17 @@ func seedAsset(t *testing.T, db *gorm.DB, id int64, status mediav1.MediaAssetSta
 func seedFile(t *testing.T, db *gorm.DB, id, assetID int64, ftype mediav1.MediaFileType) *models.MediaFile {
 	t.Helper()
 	f := &models.MediaFile{
-		BaseModel: common.BaseModel{ID: id},
-		AssetID:   assetID,
-		Type:      ftype,
-		ObjKey:    "media/obj",
-		Bucket:    "rednote",
-		Sha256Sum: "abc",
-		SizeBytes: 1024,
-		Format:    mediav1.MediaFormat_MEDIA_FORMAT_WEBP,
-		Height:    100,
-		Width:     200,
-		MetaData:  datatypes.JSONMap{"k": "v"},
+		BaseModel:     common.BaseModel{ID: id},
+		AssetID:       assetID,
+		Type:          ftype,
+		ObjKey:        "media/obj",
+		Bucket:        "rednote",
+		Sha256Sum:     "abc",
+		SizeBytes:     1024,
+		Format:        mediav1.MediaFormat_MEDIA_FORMAT_WEBP,
+		Height:        100,
+		Width:         200,
+		MediaMetaData: datatypes.JSONMap{"k": "v"},
 	}
 	require.NoError(t, db.Create(f).Error)
 	return f
@@ -348,16 +348,16 @@ func TestCreateMediaFile(t *testing.T) {
 	ctx := context.Background()
 
 	file := &models.MediaFile{
-		AssetID:   assetID1,
-		Type:      mediav1.MediaFileType_MEDIA_FILE_TYPE_ORIGIN,
-		ObjKey:    "media/origin.jpg",
-		Bucket:    "rednote",
-		Sha256Sum: "deadbeef",
-		SizeBytes: 2048,
-		Format:    mediav1.MediaFormat_MEDIA_FORMAT_JPG,
-		Height:    1080,
-		Width:     1920,
-		MetaData:  datatypes.JSONMap{"source": "test"},
+		AssetID:       assetID1,
+		Type:          mediav1.MediaFileType_MEDIA_FILE_TYPE_ORIGIN,
+		ObjKey:        "media/origin.jpg",
+		Bucket:        "rednote",
+		Sha256Sum:     "deadbeef",
+		SizeBytes:     2048,
+		Format:        mediav1.MediaFormat_MEDIA_FORMAT_JPG,
+		Height:        1080,
+		Width:         1920,
+		MediaMetaData: datatypes.JSONMap{"source": "test"},
 	}
 	require.NoError(t, repo.CreateMediaFile(ctx, file))
 	assert.NotZero(t, file.ID)
@@ -366,7 +366,7 @@ func TestCreateMediaFile(t *testing.T) {
 	require.NoError(t, db.Where("id = ?", file.ID).First(&got).Error)
 	assert.Equal(t, assetID1, got.AssetID)
 	assert.Equal(t, "media/origin.jpg", got.ObjKey)
-	assert.Equal(t, "test", got.MetaData["source"], "jsonb 元数据应完整往返")
+	assert.Equal(t, "test", got.MediaMetaData["source"], "jsonb 元数据应完整往返")
 }
 
 func TestGetMediaFiles(t *testing.T) {

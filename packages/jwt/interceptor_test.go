@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"rednote/config"
+	"rednote/packages/defaults"
 )
 
 const echoProcedure = "/jwt.v1.EchoService/Echo"
@@ -55,9 +56,10 @@ func newEchoHandler(mgr Manager) http.Handler {
 }
 
 // signToken 用 Manager 签发一个指定 UID 的 token，失败直接终止测试
+// Claims.Type 必须为有效 token 类型（access/refresh），否则 Generate 拒绝签发
 func signToken(t *testing.T, mgr Manager, uid string) string {
 	t.Helper()
-	token, err := mgr.Generate(&Claims{UID: uid})
+	token, err := mgr.Generate(&Claims{UID: uid, Type: defaults.JwtAccessToken})
 	if err != nil {
 		t.Fatalf("签发 token 失败: %v", err)
 	}
