@@ -1,6 +1,6 @@
 # test — 测试体系
 
-详细说明见 [`test/README.md`](../../test/README.md)，本文为概览。
+
 
 ## 测试类型
 
