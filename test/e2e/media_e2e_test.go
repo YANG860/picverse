@@ -42,8 +42,8 @@ const (
 	defaultAddr = "http://localhost:8080"
 
 	defaultS3Endpoint = "106.53.172.186:9000"
-	defaultS3Key      = "minioadmin"
-	defaultS3Secret   = "minioadmin123"
+	defaultS3Key      = "rednote-3e2533eb" // 须与测试服务器容器 rednote-minio 的 MINIO_ROOT_USER 一致
+	defaultS3Secret   = "LwFebgYHVFg2JRaO18iprgHPe5BQgpXv8okatw9"
 	defaultS3Bucket   = "rednote"
 
 	pollInterval      = 5 * time.Second

@@ -1,54 +1,63 @@
+# 配置说明见 doc/config/config.md
+# 测试服务器：106.53.172.186
+# 认证信息已按测试环境填写（docker 容器：rednote-pg / rednote-nats / rednote-minio）
+# 注意：真实凭据勿提交到公开仓库；生产环境改用环境变量/密钥管理注入
+
 snowflake:
+  # 雪花节点 ID（0–1023），多实例部署时需互不相同
   id: 1
 
 database:
   pg:
-    url: >-
-      postgres://postgres:postgres123@106.53.172.186:5432/prod?sslmode=disable
+    # PostgreSQL 连接串（容器 rednote-pg，库 prod）
+    url: "postgres://postgres:wV5r46Z3yyumNjIRjzeaXqLGSMVYEjkd@106.53.172.186:5432/prod?sslmode=disable"
 
-logger:
-  level: "info"
-  file: true
-  out: "./logs/app.log"
-  rotate: true
-  maxsize: 100
-  maxbackups: 7
-  maxage: 28
-  compress: false
-  buffersize: 262144
-  std: true
+server: {}
 
 s3:
   endpoint: "106.53.172.186:9000"
-  access_key: "minioadmin"
-  secret_key: "minioadmin123"
+  access_key: "rednote-3e2533eb"   # 容器 rednote-minio（MINIO_ROOT_USER）
+  secret_key: "LwFebgYHVFg2JRaO18iprgHPe5BQgpXv8okatw9"
   region: "us-east-1"
   use_ssl: false
   bucket: "rednote"
 
-jwt:
-  secret: "rednote_jwt_secret_change_me"
-  issuer: "rednote"
-  expire: 24h
-
-redis:
-  addr: "106.53.172.186:6379"
-  password: ""
-  db: 0
-  pool_size: 10
-
 jetstream:
   url: "nats://106.53.172.186:4222"
 
+redis:
+  addr: "106.53.172.186:6379"
+  password: ""     # 留空——未部署 redis 容器（当前代码未实际使用 redis）
+  db: 0
+  pool_size: 10    # 0 表示使用默认值（10）
+
+jwt:
+  secret: "a8de244a1570e97d9e07f9144c78ca7bfe2ed303c7846c32f1201a2d22e2184e"  # HMAC-SHA256 密钥，必填
+  issuer: "rednote"
+  access_expire: 24h
+  refresh_expire: 168h
+
 poller:
-  workers: 2
+  workers: 4
   interval: 5s
   batch_size: 100
+  max_retry: 5
   publish_timeout: 10s
 
 consumer:
   media:
     name: "media_consumer"
     max_retry: 5
-    worker_pool_size: 1
-    working_dir: "/tmp/rednote/media"
+    working_dir: "./tmp/media_work"
+
+logger:
+  level: "info"
+  file: true
+  out: "./logs/app.log"
+  rotate: true
+  maxsize: 100        # 单文件最大 MB
+  maxbackups: 7       # 保留旧文件数
+  maxage: 28          # 保留天数
+  compress: false
+  buffersize: 262144  # 256KB
+  std: true

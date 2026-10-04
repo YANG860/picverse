@@ -42,7 +42,8 @@ import (
 
 // DefaultDSN 测试服务器默认连接串（指向远程 PostgreSQL，不走生产库）。
 // 串中的库名不参与测试，仅作为服务器/凭据的默认来源。
-const DefaultDSN = "postgres://postgres:postgres123@106.53.172.186:5432/test?sslmode=disable"
+// 密码须与测试服务器容器 rednote-pg 的 POSTGRES_PASSWORD 保持一致。
+const DefaultDSN = "postgres://postgres:wV5r46Z3yyumNjIRjzeaXqLGSMVYEjkd@106.53.172.186:5432/test?sslmode=disable"
 
 // TemplateDBName 已执行过全量迁移的模板库名，由 scripts/dbinit 重建维护。
 const TemplateDBName = "test_template"
@@ -137,13 +138,15 @@ func databaseExists(maint *gorm.DB, name string) (bool, error) {
 	return exists, nil
 }
 
-// dropDatabase 删除指定数据库（先终止残留连接，重试一次）。无守卫，仅限本包内部使用。
+// dropDatabase 删除指定数据库（先终止残留连接，重试一次；库不存在视为成功）。
+// 无守卫，仅限本包内部使用。
 func dropDatabase(maint *gorm.DB, name string) error {
 	terminate := fmt.Sprintf(
 		"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s' AND pid <> pg_backend_pid()", name)
 	for range 2 {
 		_ = maint.Exec(terminate).Error // 容忍无连接可终止的报错，DROP 的错误才是关键
-		if err := execOn(maint, "DROP DATABASE "+name); err == nil {
+		// IF EXISTS：库本就不存在（如首次初始化）时不应视为失败
+		if err := execOn(maint, "DROP DATABASE IF EXISTS "+name); err == nil {
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond) // 连接完全释放可能略有延迟
