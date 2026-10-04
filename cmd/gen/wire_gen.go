@@ -11,11 +11,13 @@ import (
 	"rednote/config"
 	"rednote/gen/go/auth/v1/authv1connect"
 	"rednote/gen/go/media/v1/mediav1connect"
+	"rednote/gen/go/post/v1/postv1connect"
 	v1_3 "rednote/internal/auth/v1"
 	v1_2 "rednote/internal/common/v1"
 	"rednote/internal/consumer"
 	"rednote/internal/media/v1"
 	"rednote/internal/poller"
+	v1_4 "rednote/internal/post/v1"
 	"rednote/packages/db"
 	"rednote/packages/jwt"
 	"rednote/packages/logger"
@@ -80,6 +82,20 @@ func InitializeAuthServiceHandler(cfg *config.Config) (authv1connect.AuthService
 	}
 }
 
+func InitializePostServiceHandler(cfg *config.Config) (postv1connect.PostServiceHandler, func()) {
+	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
+	gormDB, cleanup2 := db.NewPG(cfg, loggerFactoryImpl)
+	postRepoImpl := v1_4.NewPostRepo(gormDB)
+	jetStreamClient, cleanup3 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
+	postUsecaseImpl := v1_4.NewPostUsecase(postRepoImpl, jetStreamClient, gormDB)
+	postServiceHandler := v1_4.NewPostServiceHandler(gormDB, loggerFactoryImpl, postUsecaseImpl, postRepoImpl)
+	return postServiceHandler, func() {
+		cleanup3()
+		cleanup2()
+		cleanup()
+	}
+}
+
 func InitializeAuthInterceptor(cfg *config.Config) *jwt.ServerInterceptor {
 	managerImpl := jwt.NewManager(cfg)
 	serverInterceptor := jwt.NewServerInterceptor(managerImpl)
@@ -88,11 +104,11 @@ func InitializeAuthInterceptor(cfg *config.Config) *jwt.ServerInterceptor {
 
 // wire.go:
 
-var Repos = wire.NewSet(v1.NewMediaRepo, wire.Bind(new(v1.MediaRepository), new(*v1.MediaRepoImpl)), v1_3.NewAuthRepoImpl, wire.Bind(new(v1_3.AuthRepository), new(*v1_3.AuthRepoImpl)), v1_2.NewOutBoxRepo, wire.Bind(new(v1_2.OutBoxRepository), new(*v1_2.OutBoxRepoImpl)))
+var Repos = wire.NewSet(v1.NewMediaRepo, wire.Bind(new(v1.MediaRepository), new(*v1.MediaRepoImpl)), v1_3.NewAuthRepoImpl, wire.Bind(new(v1_3.AuthRepository), new(*v1_3.AuthRepoImpl)), v1_4.NewPostRepo, wire.Bind(new(v1_4.PostRepository), new(*v1_4.PostRepoImpl)), v1_2.NewOutBoxRepo, wire.Bind(new(v1_2.OutBoxRepository), new(*v1_2.OutBoxRepoImpl)))
 
-var Services = wire.NewSet(v1.NewMediaServiceHandler, wire.Bind(new(mediav1connect.MediaServiceHandler), new(*v1.MediaServiceHandler)), v1_3.NewAuthServiceHandler, wire.Bind(new(authv1connect.AuthServiceHandler), new(*v1_3.AuthServiceHandler)))
+var Services = wire.NewSet(v1.NewMediaServiceHandler, wire.Bind(new(mediav1connect.MediaServiceHandler), new(*v1.MediaServiceHandler)), v1_3.NewAuthServiceHandler, wire.Bind(new(authv1connect.AuthServiceHandler), new(*v1_3.AuthServiceHandler)), v1_4.NewPostServiceHandler, wire.Bind(new(postv1connect.PostServiceHandler), new(*v1_4.PostServiceHandler)))
 
-var Usecases = wire.NewSet(v1.NewMediaUsecase, wire.Bind(new(v1.MediaUsecase), new(*v1.MediaUsecaseImpl)), v1_3.NewAuthUsecaseImpl, wire.Bind(new(v1_3.AuthUsecase), new(*v1_3.AuthUsecaseImpl)))
+var Usecases = wire.NewSet(v1.NewMediaUsecase, wire.Bind(new(v1.MediaUsecase), new(*v1.MediaUsecaseImpl)), v1_3.NewAuthUsecaseImpl, wire.Bind(new(v1_3.AuthUsecase), new(*v1_3.AuthUsecaseImpl)), v1_4.NewPostUsecase, wire.Bind(new(v1_4.PostUsecase), new(*v1_4.PostUsecaseImpl)))
 
 var Middlewares = wire.NewSet(db.NewPG, mq.NewJetStreamClient, logger.NewLoggerFactory, wire.Bind(new(logger.LoggerFactory), new(*logger.LoggerFactoryImpl)), oss.NewClient, wire.Bind(new(oss.S3Repo), new(*oss.MinioClient)))
 
