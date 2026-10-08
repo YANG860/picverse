@@ -4,20 +4,27 @@
 
 | 文件 | 用途 |
 |------|------|
-| `001_create_tables.sql` | 建表 DDL（3 张表，含字段注释） |
-| `002_create_indexes.sql` | 索引 DDL（8 个索引，含部分索引） |
+| `001_create_tables.sql` | media / common 建表 DDL（3 张表，含字段注释） |
+| `002_create_indexes.sql` | media / outbox 索引 DDL（8 个索引，含部分索引） |
+| `003_create_auth_tables.sql` | auth 建表 DDL（user_credentials） |
+| `004_create_post_tables.sql` | post 建表 DDL（posts、post_medias）及索引 |
+| `005_create_user_tables.sql` | user 建表 DDL（user_profiles） |
 
 ---
 
 ## 数据模型总览
 
-共 **3 张表**，均使用雪花 ID 作为主键，时间字段为 unix 毫秒：
+共 **7 张表**，均使用雪花 ID 作为主键，时间字段为 unix 毫秒：
 
 | 表名 | 用途 | 模型来源 |
 | ------ | ------ | ---------- |
-| `media_assets` | 媒体资产（一个原图 + 所有变体的抽象） | `internal/media/models/media.go` |
-| `media_files` | 媒体文件（原图/216px/540px/1080px 具体变体） | `internal/media/models/media.go` |
-| `out_box_entries` | Outbox 消息发件箱（事务性可靠消息投递） | `internal/common/common/outbox.go` |
+| `media_assets` | 媒体资产（一个原图 + 所有变体的抽象） | `internal/media/models/models.go` |
+| `media_files` | 媒体文件（原图/216px/540px/1080px 具体变体） | `internal/media/models/models.go` |
+| `out_box_entries` | Outbox 消息发件箱（事务性可靠消息投递） | `internal/common/models/outbox.go` |
+| `user_credentials` | 用户凭证（邮箱、密码哈希、角色、刷新令牌） | `internal/auth/models/models.go` |
+| `user_profiles` | 用户资料（昵称、简介、统计、头像嵌入列） | `internal/user/models/models.go` |
+| `posts` | 帖子（草稿与已发布同表，status 区分） | `internal/post/models/models.go` |
+| `post_medias` | 帖子与媒体关联 | `internal/post/models/models.go` |
 
 ---
 
