@@ -12,6 +12,7 @@
 | `1100–1199` | 认证（auth） |
 | `1200–1299` | 媒体（media） |
 | `1300–1399` | 帖子（post） |
+| `1400–1499` | 用户（user） |
 
 ## 错误码表
 
@@ -23,6 +24,7 @@
 | 1002 | `NotFound` | 资源未找到 |
 | 1003 | `Unauthorized` | 未授权 |
 | 1004 | `InvalidArgument` | 无效参数 |
+| 1005 | `Forbidden` | 无权限 |
 
 ### auth
 | code | 变量 | 含义 |
@@ -40,8 +42,16 @@
 ### post
 | code | 变量 | 含义 |
 | --- | --- | --- |
-| 1301 | `InvalidName` | 名称非法 |
-| 1302 | `InvalidBio` | 简介非法 |
+| 1301 | `InvalidTitle` | 标题非法 |
+| 1302 | `InvalidContent` | 正文非法 |
+| 1303 | `InvalidMedia` | 帖子媒体非法 |
+
+### user
+| code | 变量 | 含义 |
+| --- | --- | --- |
+| 1401 | `InvalidName` | 昵称非法 |
+| 1402 | `InvalidBio` | 简介非法 |
+| 1403 | `InvalidAvatar` | 头像非法（含缺失） |
 
 ## 用法
 
