@@ -7,6 +7,7 @@ import (
 	common "rednote/internal/common/models"
 	media "rednote/internal/media/models"
 	post "rednote/internal/post/models"
+	user "rednote/internal/user/models"
 )
 
 func main() {
@@ -40,7 +41,8 @@ func main() {
 		&auth.UserCredential{},
 		&post.PostDetail{},
 		&post.PostMedia{},
-		&post.UserProfile{},
+		&user.UserProfile{},
+		&user.UserFollow{},
 	)
 
 	// 生成代码

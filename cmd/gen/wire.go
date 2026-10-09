@@ -9,12 +9,14 @@ import (
 
 	authv1connect "rednote/gen/go/auth/v1/authv1connect"
 	"rednote/gen/go/post/v1/postv1connect"
+	userv1connect "rednote/gen/go/user/v1/userv1connect"
 	commonv1 "rednote/internal/common/v1"
 	"rednote/internal/consumer"
 
 	authv1 "rednote/internal/auth/v1"
 	mediav1 "rednote/internal/media/v1"
 	postv1 "rednote/internal/post/v1"
+	userv1 "rednote/internal/user/v1"
 	"rednote/internal/poller"
 	"rednote/packages/db"
 	"rednote/packages/jwt"
@@ -35,6 +37,9 @@ var Repos = wire.NewSet(
 	postv1.NewPostRepo,
 	wire.Bind(new(postv1.PostRepository), new(*postv1.PostRepoImpl)),
 
+	userv1.NewUserRepo,
+	wire.Bind(new(userv1.UserRepository), new(*userv1.UserRepoImpl)),
+
 	commonv1.NewOutBoxRepo,
 	wire.Bind(new(commonv1.OutBoxRepository), new(*commonv1.OutBoxRepoImpl)),
 )
@@ -49,6 +54,9 @@ var Services = wire.NewSet(
 
 	postv1.NewPostServiceHandler,
 	wire.Bind(new(postv1connect.PostServiceHandler), new(*postv1.PostServiceHandler)),
+
+	userv1.NewUserServiceHandler,
+	wire.Bind(new(userv1connect.UserServiceHandler), new(*userv1.UserServiceHandler)),
 )
 
 var Usecases = wire.NewSet(
@@ -60,6 +68,9 @@ var Usecases = wire.NewSet(
 
 	postv1.NewPostUsecase,
 	wire.Bind(new(postv1.PostUsecase), new(*postv1.PostUsecaseImpl)),
+
+	userv1.NewUserUsecase,
+	wire.Bind(new(userv1.UserUsecase), new(*userv1.UserUsecaseImpl)),
 )
 
 var Middlewares = wire.NewSet(
@@ -118,6 +129,16 @@ func InitializeAuthServiceHandler(cfg *config.Config) (authv1connect.AuthService
 }
 
 func InitializePostServiceHandler(cfg *config.Config) (postv1connect.PostServiceHandler, func()) {
+	wire.Build(
+		Services,
+		Middlewares,
+		Repos,
+		Usecases,
+	)
+	return nil, func() {}
+}
+
+func InitializeUserServiceHandler(cfg *config.Config) (userv1connect.UserServiceHandler, func()) {
 	wire.Build(
 		Services,
 		Middlewares,
