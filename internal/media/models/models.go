@@ -4,6 +4,7 @@ import (
 	"errors"
 	mediav1 "rednote/gen/go/media/v1"
 	common "rednote/internal/common/models"
+	"rednote/packages/utils"
 
 	"github.com/bwmarrin/snowflake"
 	"gorm.io/datatypes"
@@ -131,11 +132,11 @@ func MediaFileFromProto(proto *mediav1.MediaFile) (m MediaFile, err error) {
 	m.Width = meta.GetWidth()
 
 	metadata := meta.GetMetadata()
-	m.MediaMetaData = datatypes.JSONMap{}
-	if len(metadata) > 0 {
-		if err = m.MediaMetaData.UnmarshalJSON(metadata); err != nil {
-			return MediaFile{}, err
-		}
+
+	m.MediaMetaData, err = utils.UnmarshalJSON(metadata)
+	if err != nil {
+		return MediaFile{}, err
 	}
+
 	return m, nil
 }

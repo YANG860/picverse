@@ -3,10 +3,7 @@ package v1
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"time"
 
-	commonv1 "rednote/gen/go/common/v1"
 	mediav1 "rednote/gen/go/media/v1"
 	models "rednote/internal/media/models"
 	"rednote/packages/defaults"
@@ -240,15 +237,7 @@ func (u *MediaUsecaseImpl) GetMediaAssetFiles(ctx context.Context, req *mediav1.
 
 func (u *MediaUsecaseImpl) ListMediaAssetsBefore(ctx context.Context, req *mediav1.ListMediaAssetsBeforeRequest) (*mediav1.ListMediaAssetsBeforeResponse, error) {
 
-	stamp, err := strconv.ParseInt(req.GetCursor().GetStr(), 10, 64)
-	if err != nil {
-		stamp = time.Now().UnixMilli()
-	}
-
-	limit := req.GetCursor().GetLimit()
-	if limit <= 0 {
-		limit = defaults.CursorLimit
-	}
+	stamp, limit := utils.ParseTimeCursor(req.GetCursor())
 
 	assets, err := u.Repo.ListMediaAssetsBefore(ctx, stamp, limit)
 	if err != nil {
@@ -265,10 +254,7 @@ func (u *MediaUsecaseImpl) ListMediaAssetsBefore(ctx context.Context, req *media
 	}
 
 	stamp = results[len(results)-1].GetBase().GetCreatedAt()
-	cursor := &commonv1.Cursor{
-		Str:   strconv.FormatInt(stamp, 10),
-		Limit: limit,
-	}
+	cursor := utils.NewTimeCursor(stamp, limit)
 
 	return &mediav1.ListMediaAssetsBeforeResponse{
 		Assets: results,
@@ -289,10 +275,14 @@ func (u *MediaUsecaseImpl) BanMedia(ctx context.Context, req *mediav1.BanMediaRe
 			},
 		},
 	}
-	msg, err := mq.NewMQMessage(defaults.MediaMessageStream, nil, banMsg)
 
 	err = u.DB.Transaction(func(tx *gorm.DB) error {
 		_, err := u.Repo.WithTX(tx).SetMediaAssetBanned(ctx, assetID.Int64())
+		if err != nil {
+			return err
+		}
+
+		msg, err := mq.NewMQMessage(defaults.MediaMessageStream, nil, banMsg)
 		if err != nil {
 			return err
 		}

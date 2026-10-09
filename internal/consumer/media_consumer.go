@@ -39,10 +39,7 @@ type MediaConsumer struct {
 	ConsumeCtx jetstream.ConsumeContext
 }
 
-const (
-	ACK   = true
-	RETRY = false
-)
+
 
 var (
 	AllMediaTypes = [4]mediav1.MediaFileType{

@@ -25,3 +25,8 @@ type Consumer struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 }
+
+const (
+	ACK   = true
+	RETRY = false
+)

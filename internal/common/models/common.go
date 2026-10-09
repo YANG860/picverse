@@ -1,6 +1,7 @@
 package common
 
 import (
+	"errors"
 	commonv1 "rednote/gen/go/common/v1"
 	"rednote/packages/utils"
 	"time"
@@ -40,4 +41,20 @@ func (b BaseModel) ToProto() *commonv1.BaseModel {
 		CreatedAt: b.CreatedAt,
 		UpdatedAt: b.UpdatedAt,
 	}
+}
+
+func BaseModelFromProto(proto *commonv1.BaseModel) (model BaseModel, err error) {
+	if proto == nil {
+		return BaseModel{}, errors.New("nil base model proto")
+	}
+
+	id, err := snowflake.ParseString(proto.Id)
+	if err != nil {
+		return model, err
+	}
+
+	model.ID = id.Int64()
+	model.CreatedAt = proto.CreatedAt
+	model.UpdatedAt = proto.UpdatedAt
+	return model, nil
 }
