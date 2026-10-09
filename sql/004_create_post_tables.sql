@@ -59,14 +59,14 @@ CREATE TABLE IF NOT EXISTS post_medias (
 -- ============================================================
 
 -- 索引 1: 作者帖子游标分页
--- 对应 repo.ListPostsByAuthor()
---   WHERE author_id = ? AND created_at < ? ORDER BY created_at DESC LIMIT ?
+-- 对应 repo.GetPostsByAuthor() / repo.GetPublishedPostsByAuthor()
+--   WHERE author_id = ? AND created_at < ? [AND status = ?] ORDER BY created_at DESC LIMIT ?
 -- author_id 等值过滤 + created_at 范围过滤/排序，复合索引覆盖最左前缀
 CREATE INDEX IF NOT EXISTS idx_posts_author_created
     ON posts (author_id, created_at DESC);
 
 -- 索引 2: 按帖子取媒体 / 删除媒体
--- 对应 repo.GetPostMedias() / DeletePostMedias()
+-- 对应 repo.GetPostMedias() / DeletePostMedias() / GetPostCover()
 --   WHERE post_id = ?
 CREATE INDEX IF NOT EXISTS idx_post_medias_post_id
     ON post_medias (post_id);

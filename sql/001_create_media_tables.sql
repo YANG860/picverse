@@ -1,6 +1,6 @@
 -- ============================================================
--- rednote 建表 SQL
--- 生成自 GORM 模型定义（internal/common/common、internal/media/models）
+-- media 相关表
+-- 生成自 GORM 模型定义（internal/media/models/models.go）
 -- 数据库: PostgreSQL
 -- ============================================================
 
@@ -44,22 +44,37 @@ CREATE TABLE IF NOT EXISTS media_files (
     media_meta_data JSONB           NOT NULL DEFAULT '{}'              -- 扩展元数据（与 models.MediaFile.MediaMetaData 对应）
 );
 
--- -----------------------------------------------------------
--- 3. out_box_entries — Outbox 消息表
---    事务性消息发件箱，由 Poller 轮询投递到 NATS JetStream
--- -----------------------------------------------------------
-CREATE TABLE IF NOT EXISTS out_box_entries (
-    id          BIGINT          NOT NULL PRIMARY KEY,              -- 雪花ID
-    created_at  BIGINT          NOT NULL DEFAULT 0,                -- 创建时间(unix毫秒)
-    updated_at  BIGINT          NOT NULL DEFAULT 0,                -- 更新时间(unix毫秒)
+-- ============================================================
+-- 索引（查询驱动）
+-- ============================================================
 
-    trace_id    VARCHAR(255)    NOT NULL,                          -- 链路追踪ID
-    subject     VARCHAR(255)    NOT NULL,                          -- NATS 主题
-    send_at     BIGINT          NOT NULL,                          -- 计划发送时间(unix毫秒)
+-- 索引 1: 游标分页查询
+-- 对应 repo.ListMediaAssetsBefore()
+--   WHERE created_at < ? ORDER BY created_at DESC LIMIT ?
+-- 时间范围过滤 + 降序排序，需要 B-tree 索引
+CREATE INDEX IF NOT EXISTS idx_media_assets_created_at
+    ON media_assets (created_at DESC);
 
-    header      JSON,                                               -- NATS 消息头
-    payload     BYTEA           NOT NULL,                          -- NATS 消息体(protobuf序列化)
+-- 索引 2: 未使用媒体查询（清理任务）
+-- 对应 repo.GetUnusedMedia()
+--   WHERE (ref_count <= 0 AND status = 4 AND created_at < ?)
+--      OR (ref_count <= 0 AND status = 3 AND created_at < ?)
+--   LIMIT ?
+-- 需要覆盖 ref_count、status、created_at 三列以支持 OR 条件扫描
+CREATE INDEX IF NOT EXISTS idx_media_assets_status_refcount_created
+    ON media_assets (status, ref_count, created_at);
 
-    status      INTEGER         NOT NULL DEFAULT 0,                -- 状态(0待处理/1处理中/2已完成/3已取消/4失败)
-    retry_count INTEGER         NOT NULL DEFAULT 0                 -- 发布重试次数
-);
+-- 索引 3: 按上传者查询（未来扩展：用户查看自己上传的媒体）
+-- 当前代码中 UploaderID 已有 gorm:"index" tag
+-- GORM AutoMigrate 会创建单列索引 idx_media_assets_uploader_id
+-- 此处显式创建以确保一致性
+CREATE INDEX IF NOT EXISTS idx_media_assets_uploader_id
+    ON media_assets (uploader_id);
+
+-- 索引 4: 按资产ID+文件类型联合查询
+-- 对应 repo.GetMediaFiles()
+--   WHERE (id = ? AND type = ?) OR (id = ? AND type = ?) ...
+-- 模型中已有复合索引 idx_media_files_asset_type (asset_id, type)
+-- 此处显式创建以确保一致
+CREATE INDEX IF NOT EXISTS idx_media_files_asset_type
+    ON media_files (asset_id, type);

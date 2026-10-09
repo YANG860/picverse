@@ -4,17 +4,21 @@
 
 | 文件 | 用途 |
 |------|------|
-| `001_create_tables.sql` | media / common 建表 DDL（3 张表，含字段注释） |
-| `002_create_indexes.sql` | media / outbox 索引 DDL（8 个索引，含部分索引） |
-| `003_create_auth_tables.sql` | auth 建表 DDL（user_credentials） |
+| `001_create_media_tables.sql` | media 建表 DDL（media_assets、media_files）及索引 |
+| `002_create_outbox_tables.sql` | outbox 建表 DDL（out_box_entries）及索引（含部分索引） |
+| `003_create_auth_tables.sql` | auth 建表 DDL（user_credentials）及索引 |
 | `004_create_post_tables.sql` | post 建表 DDL（posts、post_medias）及索引 |
-| `005_create_user_tables.sql` | user 建表 DDL（user_profiles） |
+| `005_create_user_tables.sql` | user 建表 DDL（user_profiles、user_follows）及索引 |
+
+> **文件组织**：按模块组织，一个模块一个文件 = 建表 + 索引。
+> 所有脚本幂等（`IF NOT EXISTS`），按文件名序执行，由 `scripts/dbsync`、`scripts/dbinit`、
+> docker-entrypoint-initdb.d（首次建库）三处统一消费 `sql/*.sql`。
 
 ---
 
 ## 数据模型总览
 
-共 **7 张表**，均使用雪花 ID 作为主键，时间字段为 unix 毫秒：
+共 **8 张表**，均使用雪花 ID 作为主键，时间字段为 unix 毫秒：
 
 | 表名 | 用途 | 模型来源 |
 | ------ | ------ | ---------- |
@@ -23,6 +27,7 @@
 | `out_box_entries` | Outbox 消息发件箱（事务性可靠消息投递） | `internal/common/models/outbox.go` |
 | `user_credentials` | 用户凭证（邮箱、密码哈希、角色、刷新令牌） | `internal/auth/models/models.go` |
 | `user_profiles` | 用户资料（昵称、简介、统计、头像嵌入列） | `internal/user/models/models.go` |
+| `user_follows` | 用户关注关系（一行 = Fan 关注 Following） | `internal/user/models/models.go` |
 | `posts` | 帖子（草稿与已发布同表，status 区分） | `internal/post/models/models.go` |
 | `post_medias` | 帖子与媒体关联 | `internal/post/models/models.go` |
 
@@ -30,7 +35,7 @@
 
 ## 索引设计与依据
 
-### media_assets（3 个索引）
+### media_assets（3 个索引，`001_create_media_tables.sql`）
 
 #### 1. `idx_media_assets_created_at` — 时间分页查询
 
@@ -78,7 +83,7 @@ ON media_assets (uploader_id)
 
 ---
 
-### media_files（1 个索引）
+### media_files（1 个索引，`001_create_media_tables.sql`）
 
 #### 4. `idx_media_files_asset_type` — 资产文件联合查询
 
@@ -96,7 +101,7 @@ WHERE (id = ? AND type = ?) OR (id = ? AND type = ?) ...
 
 ---
 
-### out_box_entries（4 个索引）
+### out_box_entries（4 个索引，`002_create_outbox_tables.sql`）
 
 #### 5. `idx_outbox_pending_poll` — Poller 轮询热路径 ⭐ 最关键
 
@@ -156,6 +161,106 @@ ON out_box_entries (subject)
 
 ---
 
+### user_credentials（1 个索引，`003_create_auth_tables.sql`）
+
+#### 9. `idx_user_credentials_email` — 邮箱唯一登录
+
+```sql
+ON user_credentials (email)  -- UNIQUE
+```
+
+**对应代码**：模型定义 `gorm:"uniqueIndex"` tag（`internal/auth/models/models.go`）
+
+```sql
+WHERE email = ?   -- 注册查重 / 登录取凭证
+```
+
+**依据**：邮箱是用户的登录标识，唯一索引同时承担业务唯一约束（防止重复注册）与登录查询路径。模型 tag `uniqueIndex` 默认生成同名索引 `idx_user_credentials_email`，与 SQL 一致。
+
+---
+
+### posts（1 个索引，`004_create_post_tables.sql`）
+
+#### 10. `idx_posts_author_created` — 作者帖子游标分页
+
+```sql
+ON posts (author_id, created_at DESC)
+```
+
+**对应代码**：`repo.GetPostsByAuthor()` / `repo.GetPublishedPostsByAuthor()`
+
+```go
+WHERE author_id = ? AND created_at < ? [AND status = ?] ORDER BY created_at DESC LIMIT ?
+```
+
+**依据**：作者维度游标分页是帖子流的核心查询。`author_id` 等值过滤占最左前缀；`created_at DESC` 同时承担范围过滤（`< ?` 游标）与排序，B-tree 一索引两用，避免全表扫描和 filesort。`GetPublishedPostsByAuthor` 额外带 `status` 等值过滤时仍走同一索引（扫描时行过滤）；若该查询成为热点，可升级为 `(author_id, status, created_at DESC)` 复合索引，当前遵循"不冗余"原则不预建。
+
+---
+
+### post_medias（1 个索引，`004_create_post_tables.sql`）
+
+#### 11. `idx_post_medias_post_id` — 帖子媒体关联查询 / 删除
+
+```sql
+ON post_medias (post_id)
+```
+
+**对应代码**：`repo.GetPostMedias()` / `repo.DeletePostMedias()` / `repo.GetPostCover()`
+
+```sql
+WHERE post_id = ?   -- 或 WHERE post_id IN (...)
+```
+
+**依据**：帖子↔媒体关联的唯一查询入口是 `post_id`（取列表、删关联、取封面均按它过滤），单列索引精确覆盖。单帖媒体数量很小，`sort_order` 排序在结果集内完成，无需复合索引。
+
+---
+
+### user_follows（2 个索引，`005_create_user_tables.sql`）
+
+表上约束：
+
+- **CHECK** `chk_user_follows_no_self`（`fan_id <> following_id`）：防止自关注
+- **外键** `fk_user_follows_following`（`following_id` → `user_profiles.id`）、`fk_user_follows_fan`（`fan_id` → `user_profiles.id`），均 `ON UPDATE CASCADE ON DELETE CASCADE`：用户注销/删除时由 DB 级联清理关注关系，模型侧对应 `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE"` tag
+- **已有库兜底**：`CREATE TABLE IF NOT EXISTS` 不会为已存在的表追加约束，`005` 尾部以幂等 `ALTER TABLE ... DROP CONSTRAINT IF EXISTS / ADD CONSTRAINT` 重建同名外键；要求表内无孤儿数据（`fan_id`/`following_id` 均存在于 `user_profiles.id`），否则 `ADD CONSTRAINT` 失败
+- **计数维护**：级联删除只清理关系行，不回写 `user_profiles.followers/followings` 计数，计数由应用层维护
+
+> `user_follows` 是全库唯一建 DB 级外键的表（其余表沿用应用层一致性约定）——关注关系对用户行强归属且注销时必须级联清理，交给 DB 保证。
+
+#### 12. `idx_user_follows_fan_following` — 防重复关注 + 关注列表
+
+```sql
+ON user_follows (fan_id, following_id)  -- UNIQUE
+```
+
+**对应查询**：
+
+```sql
+WHERE fan_id = ? AND following_id = ?   -- 判重 / 取关
+WHERE fan_id = ?                        -- "我关注的人"列表（最左前缀覆盖）
+```
+
+**依据**：复合唯一索引同时承担唯一约束，从 DB 层杜绝重复关注，无需额外建唯一约束。`fan_id` 在前（等值过滤，最左前缀覆盖"我关注的人"查询），`following_id` 在后（等值过滤，判重/取关精确匹配）。
+
+---
+
+#### 13. `idx_user_follows_following_id` — 粉丝列表
+
+```sql
+ON user_follows (following_id)
+```
+
+**对应查询**：
+
+```sql
+WHERE following_id = ?   -- "我的粉丝"列表
+```
+
+**依据**：复合唯一索引最左前缀为 `fan_id`，无法覆盖 `following_id` 的反向查询，需单列索引。与索引 12 不冗余：两个方向的等值查询各占一个最左前缀。模型中通过 `gorm:"index:idx_user_follows_following_id"` tag 声明，与 SQL 同名。
+
+> **预留**：若后续 repo 落地游标分页（`WHERE fan_id = ? AND created_at < ? ORDER BY created_at DESC`），需补充 `(fan_id, created_at DESC)` / `(following_id, created_at DESC)` 复合索引。当前无对应查询代码，遵循"不做猜测性索引"原则暂不建。
+
+---
+
 ## 索引总结表
 
 | # | 索引名 | 表 | 列 | 类型 | 核心查询 |
@@ -168,6 +273,11 @@ ON out_box_entries (subject)
 | 6 | `idx_outbox_send_at` | out_box_entries | send_at | B-tree | 时间范围查询 |
 | 7 | `idx_outbox_trace_id` | out_box_entries | trace_id | B-tree | 链路追踪 |
 | 8 | `idx_outbox_subject` | out_box_entries | subject | B-tree | 按主题查询 |
+| 9 | `idx_user_credentials_email` | user_credentials | email | **UNIQUE** | 邮箱唯一约束 / 登录 |
+| 10 | `idx_posts_author_created` | posts | author_id, created_at DESC | B-tree | 作者帖子游标分页 |
+| 11 | `idx_post_medias_post_id` | post_medias | post_id | B-tree | 帖子媒体关联查询/删除 |
+| 12 | `idx_user_follows_fan_following` | user_follows | fan_id, following_id | **UNIQUE** | 防重复关注 + 关注列表 |
+| 13 | `idx_user_follows_following_id` | user_follows | following_id | B-tree | 粉丝列表 |
 
 ## 设计原则
 
