@@ -4,7 +4,7 @@
 
 | 服务 | 镜像 | 端口 | 初始化 |
 | --- | --- | --- | --- |
-| `pg` | postgres:16-alpine | 5432 | 首次启动自动执行 `sql/001~003`（挂载到 `/docker-entrypoint-initdb.d`） |
+| `pg` | postgres:16-alpine | 5432 | 首次启动自动执行 `sql/*.sql`（001~005，挂载到 `/docker-entrypoint-initdb.d`） |
 | `nats` | nats:2.10-alpine (`-js`) | 4222 / 8222 | `init-nats` 创建 stream `media`（subjects `media`, `media.>`） |
 | `minio` | minio/minio | 9000 / 9001 | `init-minio` 创建 bucket（默认 `rednote`） |
 

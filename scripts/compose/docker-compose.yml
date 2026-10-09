@@ -15,7 +15,7 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # 首次启动（数据卷为空）按文件名序自动执行 sql/001~003，非 *.sql 文件被忽略
+      # 首次启动（数据卷为空）按文件名序自动执行 sql/*.sql（当前 001~005），非 *.sql 文件被忽略
       - ../../sql:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d ${POSTGRES_DB:-prod}"]

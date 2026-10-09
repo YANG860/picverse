@@ -25,6 +25,7 @@
 | 1003 | `Unauthorized` | 未授权 |
 | 1004 | `InvalidArgument` | 无效参数 |
 | 1005 | `Forbidden` | 无权限 |
+| 1006 | `AlreadyExist` | 资源已存在 |
 
 ### auth
 | code | 变量 | 含义 |
