@@ -1,0 +1,136 @@
+syntax = "proto3";
+
+package user.v1;
+
+import "buf/validate/validate.proto";
+import "common/v1/common.proto";
+import "media/v1/media.proto";
+import "user/v1/user.proto";
+
+// ==================== 用户 ====================
+// 创建用户资料
+// uid 由鉴权服务注册时分配（RegisterResponse.assigned_id），此处透传
+message CreateUserRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  string name = 2 [(buf.validate.field).string.min_len = 1];
+
+  media.v1.MediaFile avatar = 3;
+  string bio = 4;
+
+  common.v1.JsonStr metadata = 5;
+}
+
+message CreateUserResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  UserProfile profile = 3;
+}
+
+message UpdateUserRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  string name = 2 [(buf.validate.field).string.min_len = 1];
+
+  media.v1.MediaFile avatar = 3;
+  string bio = 4;
+
+  common.v1.JsonStr metadata = 5;
+}
+
+message UpdateUserResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  UserProfile profile = 3;
+}
+
+message GetUserBriefRequest {
+  repeated string uids = 1 [(buf.validate.field).repeated.items.string.min_len = 1];
+}
+message GetUserBriefResponse {
+  repeated UserBriefResult results = 1;
+}
+
+message UserBriefResult {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  UserBrief brief = 3;
+}
+
+message GetUserProfileRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message GetUserProfileResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  UserProfile profile = 3;
+}
+
+message GetUserStatusRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message GetUserStatusResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  UserStatus status = 3;
+}
+
+message BanUserRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message BanUserResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+}
+
+message SetFollowRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  string target_uid = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message SetFollowResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+}
+
+message SetUnFollowRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  string target_uid = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message SetUnFollowResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+}
+
+message GetFollowingsRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  common.v1.Cursor cursor = 2;
+}
+
+message GetFollowingsResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  repeated UserBrief user_briefs = 3;
+  common.v1.Cursor cursor = 4;
+}
+
+message GetFollowingRelationRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  string target_uid = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message GetFollowingRelationResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  bool is_following = 3;
+  bool is_follower = 4;
+}

@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package user.v1;
+
+import "user/v1/requests.proto";
+
+service UserService {
+  // 创建用户
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+  // 更新资料
+  rpc UpdateUser(UpdateUserRequest) returns (UpdateUserResponse);
+  // 获取简介，批处理
+  rpc GetUserBrief(GetUserBriefRequest) returns (GetUserBriefResponse);
+  // 获取详细资料
+  rpc GetUserProfile(GetUserProfileRequest) returns (GetUserProfileResponse);
+  // 用户状态
+  rpc GetUserStatus(GetUserStatusRequest) returns (GetUserStatusResponse);
+  // 封禁用户
+  rpc BanUser(BanUserRequest) returns (BanUserResponse);
+  // 关注关系
+  rpc SetFollow(SetFollowRequest) returns (SetFollowResponse);
+  // 取消关注
+  rpc SetUnFollow(SetUnFollowRequest) returns (SetUnFollowResponse);
+  // 获取关注列表
+  rpc GetFollowings(GetFollowingsRequest) returns (GetFollowingsResponse);
+  // 获取关注关系
+  rpc GetFollowingRelation(GetFollowingRelationRequest) returns (GetFollowingRelationResponse);
+}
