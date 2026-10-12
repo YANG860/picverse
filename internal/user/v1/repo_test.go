@@ -169,59 +169,137 @@ func TestCreateUser(t *testing.T) {
 
 // ---------- UpdateUser ----------
 
-func TestUpdateUser(t *testing.T) {
+// ---------- UpdateUserName / UpdateUserBio / UpdateUserMetadata / UpdateUserAvatar ----------
+
+func TestUpdateUserName(t *testing.T) {
 	repo, db := newRepo(t)
 	ctx := context.Background()
 
-	t.Run("全量覆盖并自动更新 updated_at", func(t *testing.T) {
+	t.Run("更新成功并自动刷新 updated_at", func(t *testing.T) {
 		seedProfile(t, db, uid1, "旧昵称", "旧简介", userv1.UserStatus_USER_STATUS_ACTIVE)
 		// 人为把 updated_at 改旧，避免同毫秒精度导致断言不稳定
 		require.NoError(t, db.Exec("UPDATE user_profiles SET updated_at = 1 WHERE id = ?", uid1).Error)
 
-		profile := newProfile(uid1, "新昵称", "新简介")
-		profile.MetaData = datatypes.JSONMap{"theme": "light"}
-		profile.Avatar.ObjKey = "avatar/new-obj"
-
-		info, err := repo.UpdateUser(ctx, profile)
+		info, err := repo.UpdateUserName(ctx, uid1, "新昵称")
 		require.NoError(t, err)
 		assert.Equal(t, int64(1), info.RowsAffected)
 
 		var got models.UserProfile
 		require.NoError(t, db.Where("id = ?", uid1).First(&got).Error)
 		assert.Equal(t, "新昵称", got.Name)
-		assert.Equal(t, "新简介", got.Bio)
-		assert.Equal(t, datatypes.JSONMap{"theme": "light"}, got.MetaData)
-		require.NotNil(t, got.Avatar)
-		assert.Equal(t, "avatar/new-obj", got.Avatar.ObjKey)
+		assert.Equal(t, "旧简介", got.Bio, "只更新昵称，简介不应变化")
 		assert.Greater(t, got.UpdatedAt, int64(1), "updated_at 应自动更新")
 	})
 
-	t.Run("零值字段也被覆盖（全量语义）", func(t *testing.T) {
-		seedProfile(t, db, uid2, "有简介", "非空简介", userv1.UserStatus_USER_STATUS_BANNED)
-
-		profile := newProfile(uid2, "清空简介", "")
-		profile.MetaData = datatypes.JSONMap{}
-
-		info, err := repo.UpdateUser(ctx, profile)
-		require.NoError(t, err)
-		assert.Equal(t, int64(1), info.RowsAffected)
-
-		var got models.UserProfile
-		require.NoError(t, db.Where("id = ?", uid2).First(&got).Error)
-		assert.Equal(t, "", got.Bio, "bio 应被清空为零值")
-		assert.Empty(t, got.MetaData, "metadata 应被清空为 {}")
-		assert.Equal(t, userv1.UserStatus_USER_STATUS_BANNED, got.Status, "状态不在更新范围")
-		assert.Equal(t, int64(5), got.Followers, "统计不在更新范围")
-	})
-
 	t.Run("用户不存在时 RowsAffected 为 0", func(t *testing.T) {
-		info, err := repo.UpdateUser(ctx, newProfile(999999, "不存在", ""))
+		info, err := repo.UpdateUserName(ctx, 999999, "不存在")
 		require.NoError(t, err)
 		assert.Equal(t, int64(0), info.RowsAffected)
 	})
 }
 
-// ---------- GetUserProfiles ----------
+func TestUpdateUserBio(t *testing.T) {
+	repo, db := newRepo(t)
+	ctx := context.Background()
+
+	t.Run("更新成功且不影响其他字段", func(t *testing.T) {
+		seedProfile(t, db, uid1, "旧昵称", "旧简介", userv1.UserStatus_USER_STATUS_ACTIVE)
+
+		info, err := repo.UpdateUserBio(ctx, uid1, "新简介")
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), info.RowsAffected)
+
+		var got models.UserProfile
+		require.NoError(t, db.Where("id = ?", uid1).First(&got).Error)
+		assert.Equal(t, "新简介", got.Bio)
+		assert.Equal(t, "旧昵称", got.Name, "只更新简介，昵称不应变化")
+	})
+
+	t.Run("可清空为零值", func(t *testing.T) {
+		seedProfile(t, db, uid2, "有简介", "非空简介", userv1.UserStatus_USER_STATUS_ACTIVE)
+
+		info, err := repo.UpdateUserBio(ctx, uid2, "")
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), info.RowsAffected)
+
+		var got models.UserProfile
+		require.NoError(t, db.Where("id = ?", uid2).First(&got).Error)
+		assert.Empty(t, got.Bio, "bio 应被清空为零值")
+		assert.Equal(t, "有简介", got.Name)
+	})
+
+	t.Run("用户不存在时 RowsAffected 为 0", func(t *testing.T) {
+		info, err := repo.UpdateUserBio(ctx, 999999, "不存在")
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), info.RowsAffected)
+	})
+}
+
+func TestUpdateUserMetadata(t *testing.T) {
+	repo, db := newRepo(t)
+	ctx := context.Background()
+
+	t.Run("更新成功", func(t *testing.T) {
+		seedProfile(t, db, uid1, "旧昵称", "旧简介", userv1.UserStatus_USER_STATUS_ACTIVE)
+
+		info, err := repo.UpdateUserMetadata(ctx, uid1, datatypes.JSONMap{"theme": "light"})
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), info.RowsAffected)
+
+		var got models.UserProfile
+		require.NoError(t, db.Where("id = ?", uid1).First(&got).Error)
+		assert.Equal(t, datatypes.JSONMap{"theme": "light"}, got.MetaData)
+		assert.Equal(t, "旧昵称", got.Name)
+	})
+
+	t.Run("可清空为 {}", func(t *testing.T) {
+		seedProfile(t, db, uid2, "有元数据", "", userv1.UserStatus_USER_STATUS_ACTIVE)
+
+		info, err := repo.UpdateUserMetadata(ctx, uid2, datatypes.JSONMap{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), info.RowsAffected)
+
+		var got models.UserProfile
+		require.NoError(t, db.Where("id = ?", uid2).First(&got).Error)
+		assert.Empty(t, got.MetaData, "metadata 应被清空为 {}")
+	})
+
+	t.Run("用户不存在时 RowsAffected 为 0", func(t *testing.T) {
+		info, err := repo.UpdateUserMetadata(ctx, 999999, datatypes.JSONMap{"a": "b"})
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), info.RowsAffected)
+	})
+}
+
+func TestUpdateUserAvatar(t *testing.T) {
+	repo, db := newRepo(t)
+	ctx := context.Background()
+
+	t.Run("换头像时 avatar_id 应被更新（不受嵌入主键条件影响）", func(t *testing.T) {
+		seedProfile(t, db, uid1, "旧昵称", "旧简介", userv1.UserStatus_USER_STATUS_ACTIVE)
+
+		avatar := newProfile(uid1, "", "").Avatar
+		avatar.ID = uid1*10 + 1 // 新头像文件 ID，与库中旧值不同
+		avatar.ObjKey = "avatar/changed"
+
+		info, err := repo.UpdateUserAvatar(ctx, uid1, avatar)
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), info.RowsAffected)
+
+		var got models.UserProfile
+		require.NoError(t, db.Where("id = ?", uid1).First(&got).Error)
+		require.NotNil(t, got.Avatar)
+		assert.Equal(t, uid1*10+1, got.Avatar.ID, "avatar_id 应更新为新头像")
+		assert.Equal(t, "avatar/changed", got.Avatar.ObjKey)
+		assert.Equal(t, "旧昵称", got.Name, "只更新头像，昵称不应变化")
+	})
+
+	t.Run("用户不存在时 RowsAffected 为 0", func(t *testing.T) {
+		info, err := repo.UpdateUserAvatar(ctx, 999999, newProfile(999999, "", "").Avatar)
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), info.RowsAffected)
+	})
+}
 
 func TestGetUserProfiles(t *testing.T) {
 	repo, db := newRepo(t)

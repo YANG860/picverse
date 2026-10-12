@@ -11,164 +11,28 @@ import (
 	common "rednote/internal/common/models"
 	models "rednote/internal/user/models"
 	"rednote/packages/errmsg"
+	"rednote/test/testdb"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gen"
+	"google.golang.org/protobuf/types/known/wrapperspb"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
-// ---------- ValidateName ----------
-
-func TestValidateName(t *testing.T) {
-	cases := []struct {
-		name string
-		in   string
-		want bool
-	}{
-		{"普通昵称", "alice", true},
-		{"中文昵称", "小红薯123", true},
-		{"含 emoji", "🍑小红薯", true},
-		{"单字符", "a", true},
-		{"首尾空白但有内容", "  alice  ", true},
-		{"正好64字符", strings.Repeat("a", NameMaxLen), true},
-		{"64个汉字", strings.Repeat("好", NameMaxLen), true},
-		{"空串", "", false},
-		{"纯空格", "   ", false},
-		{"纯制表符", "\t\t", false},
-		{"65字符超长", strings.Repeat("a", NameMaxLen+1), false},
-		{"65个汉字超长", strings.Repeat("好", NameMaxLen+1), false},
-		{"含换行", "ali\nce", false},
-		{"含制表符", "ali\tce", false},
-		{"含NUL控制字符", "ali\x00ce", false},
-		{"含ANSI转义序列", "alice\x1b[31m", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, ValidateName(tc.in))
-		})
-	}
+// newUsecase 构造 biz 层测试环境：真实 repo + testdb 克隆库。
+// newProfile / seedProfile / followingsOf / followersOf 复用 repo_test.go 中的同包 helper。
+func newUsecase(t *testing.T) (*UserUsecaseImpl, *gorm.DB) {
+	t.Helper()
+	db := testdb.Setup(t)
+	return NewUserUsecase(NewUserRepo(db), db), db
 }
 
-// ---------- ValidateBio ----------
-
-func TestValidateBio(t *testing.T) {
-	cases := []struct {
-		name string
-		in   string
-		want bool
-	}{
-		{"空简介合法", "", true},
-		{"普通简介", "这个人很懒，什么都没写", true},
-		{"多行简介", "第一行\n第二行\t缩进", true},
-		{"含回车换行", "line1\r\nline2", true},
-		{"正好512字符", strings.Repeat("好", BioMaxLen), true},
-		{"513字符超长", strings.Repeat("好", BioMaxLen+1), false},
-		{"含NUL控制字符", "ab\x00cd", false},
-		{"含ANSI转义序列", "ab\x1b[31mcd", false},
-		{"含退格符", "ab\x08cd", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, ValidateBio(tc.in))
-		})
-	}
-}
-
-// ---------- CreateUser（biz 层） ----------
-
-// fakeUserRepo 内存仓储，用于 biz 层单测（不落库）
-type fakeUserRepo struct {
-	created  []*models.UserProfile
-	updated  []*models.UserProfile
-	profiles map[int64]*models.UserProfile
-	// follows 关注关系：key = [fanID, followingID]
-	follows map[[2]int64]bool
-}
-
-func (f *fakeUserRepo) WithTX(_ *gorm.DB) UserRepository { return f }
-
-// CreateUser 模拟 ON CONFLICT DO NOTHING：重复 ID 幂等返回 ok=false
-func (f *fakeUserRepo) CreateUser(_ context.Context, profile *models.UserProfile) (bool, error) {
-	if _, ok := f.profiles[profile.ID]; ok {
-		return false, nil
-	}
-	f.created = append(f.created, profile)
-	if f.profiles == nil {
-		f.profiles = make(map[int64]*models.UserProfile)
-	}
-	f.profiles[profile.ID] = profile
-	return true, nil
-}
-
-func (f *fakeUserRepo) UpdateUser(_ context.Context, profile *models.UserProfile) (gen.ResultInfo, error) {
-	old, ok := f.profiles[profile.ID]
-	if !ok {
-		return gen.ResultInfo{RowsAffected: 0}, nil
-	}
-	// 与 repo 实现同语义：仅覆盖 name/bio/头像/metadata，状态与统计保留
-	updated := *profile
-	updated.CreatedAt = old.CreatedAt
-	updated.Followers = old.Followers
-	updated.Followings = old.Followings
-	updated.Status = old.Status
-	f.profiles[profile.ID] = &updated
-	f.updated = append(f.updated, &updated)
-	return gen.ResultInfo{RowsAffected: 1}, nil
-}
-
-func (f *fakeUserRepo) GetUserProfiles(_ context.Context, uids []int64) ([]*models.UserProfile, error) {
-	out := make([]*models.UserProfile, 0, len(uids))
-	for _, id := range uids {
-		if p, ok := f.profiles[id]; ok {
-			out = append(out, p)
-		}
-	}
-	return out, nil
-}
-
-func (f *fakeUserRepo) SetFollow(_ context.Context, fanID, followingID int64) (bool, error) {
-	// 与 repo 同语义：双方用户均存在才关注，自关注拒绝
-	if _, ok := f.profiles[fanID]; !ok {
-		return false, nil
-	}
-	if _, ok := f.profiles[followingID]; !ok {
-		return false, nil
-	}
-	if fanID == followingID {
-		return false, nil
-	}
-	if f.follows == nil {
-		f.follows = make(map[[2]int64]bool)
-	}
-	f.follows[[2]int64{fanID, followingID}] = true
-	return true, nil
-}
-
-func (f *fakeUserRepo) SetUnFollow(_ context.Context, fanID, followingID int64) error {
-	delete(f.follows, [2]int64{fanID, followingID})
-	return nil
-}
-
-func (f *fakeUserRepo) GetFollowings(_ context.Context, uid int64, _ int64, _ int64) ([]*models.UserFollow, error) {
-	out := make([]*models.UserFollow, 0)
-	for pair := range f.follows {
-		if pair[0] == uid {
-			out = append(out, &models.UserFollow{FanID: pair[0], FollowingID: pair[1], Following: f.profiles[pair[1]]})
-		}
-	}
-	return out, nil
-}
-
-func (f *fakeUserRepo) GetFollowingRelation(_ context.Context, fanID, followingID int64) (bool, bool, error) {
-	return f.follows[[2]int64{fanID, followingID}], f.follows[[2]int64{followingID, fanID}], nil
-}
-
-func (f *fakeUserRepo) BanUser(_ context.Context, uid int64) error {
-	if p, ok := f.profiles[uid]; ok {
-		p.Status = userv1.UserStatus_USER_STATUS_BANNED
-	}
-	return nil
+// setupFollowers 预置两个用户（uid1 粉丝 / uid2 被关注者）
+func setupFollowers(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	seedProfile(t, db, uid1, "fan", "", userv1.UserStatus_USER_STATUS_ACTIVE)
+	seedProfile(t, db, uid2, "target", "", userv1.UserStatus_USER_STATUS_ACTIVE)
 }
 
 // validAvatar 合法头像 proto（仅结构校验，内容审核由审核服务负责）
@@ -198,6 +62,11 @@ func newCreateUserReq(uid, name, bio string, avatar *mediav1.MediaFile) *userv1.
 		Avatar:   avatar,
 		Metadata: &commonv1.JsonStr{Payload: "{}"},
 	}
+}
+
+// strVal 构造可空字符串字段（nil 表示不更新）
+func strVal(s string) *wrapperspb.StringValue {
+	return wrapperspb.String(s)
 }
 
 func TestUserUsecase_CreateUser(t *testing.T) {
@@ -283,13 +152,12 @@ func TestUserUsecase_CreateUser(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			repo := &fakeUserRepo{}
+			uc, db := newUsecase(t)
 			if tc.exist {
-				_, err := repo.CreateUser(ctx, newProfile(3001, "已存在", ""))
-				require.NoError(t, err)
+				seedProfile(t, db, uid1, "已存在", "", userv1.UserStatus_USER_STATUS_ACTIVE)
 			}
-			baseCreated := len(repo.created) // 预置记录不计入落库断言
-			uc := NewUserUsecase(repo)
+			var baseCount int64
+			require.NoError(t, db.Model(&models.UserProfile{}).Count(&baseCount).Error)
 
 			resp, err := uc.CreateUser(ctx, tc.req)
 			require.NoError(t, err)
@@ -298,7 +166,9 @@ func TestUserUsecase_CreateUser(t *testing.T) {
 			if tc.wantErr != nil {
 				assert.True(t, resp.GetFail())
 				assert.Equal(t, tc.wantErr, resp.GetErr())
-				assert.Len(t, repo.created, baseCreated, "被拒绝的请求不应落库")
+				var cnt int64
+				require.NoError(t, db.Model(&models.UserProfile{}).Count(&cnt).Error)
+				assert.Equal(t, baseCount, cnt, "被拒绝的请求不应落库")
 				return
 			}
 
@@ -307,111 +177,371 @@ func TestUserUsecase_CreateUser(t *testing.T) {
 			assert.Equal(t, "3001", resp.GetProfile().GetBrief().GetUid())
 			assert.Equal(t, "小红薯", resp.GetProfile().GetBrief().GetName())
 			assert.Equal(t, userv1.UserStatus_USER_STATUS_ACTIVE, resp.GetProfile().GetStatus())
-			require.Len(t, repo.created, 1)
-			assert.Equal(t, int64(3001), repo.created[0].ID)
-			assert.NotNil(t, repo.created[0].MetaData, "metadata 空值应落库为空对象 {}")
+
+			// 落库校验
+			var got models.UserProfile
+			require.NoError(t, db.Where("id = ?", uid1).First(&got).Error)
+			assert.Equal(t, "小红薯", got.Name)
+			assert.Empty(t, got.MetaData, "metadata 空值应落库为 {}")
 		})
 	}
 }
 
-// newUpdateUserReq 构造更新用户请求（头像按需传入）
-func newUpdateUserReq(uid, name, bio string, avatar *mediav1.MediaFile) *userv1.UpdateUserRequest {
-	return &userv1.UpdateUserRequest{
-		Uid:      uid,
-		Name:     name,
-		Bio:      bio,
-		Avatar:   avatar,
-		Metadata: &commonv1.JsonStr{Payload: "{}"},
-	}
-}
-
+// TestUserUsecase_UpdateUser 部分更新语义：仅更新传入的字段，nil 字段不修改
 func TestUserUsecase_UpdateUser(t *testing.T) {
 	ctx := context.Background()
 
-	cases := []struct {
-		name    string
-		exist   bool // 目标用户是否已存在
-		req     *userv1.UpdateUserRequest
-		wantErr *commonv1.Error // nil 表示应更新成功
-	}{
-		{
-			name:    "无头像请求被拒绝",
-			exist:   true,
-			req:     newUpdateUserReq("3001", "新昵称", "新简介", nil),
-			wantErr: errmsg.InvalidAvatar,
-		},
-		{
-			name:    "非法uid被拒绝",
-			req:     newUpdateUserReq("not-a-number", "新昵称", "新简介", validAvatar()),
-			wantErr: errmsg.InvalidID,
-		},
-		{
-			name:    "纯空白昵称被拒绝",
-			exist:   true,
-			req:     newUpdateUserReq("3001", "   ", "新简介", validAvatar()),
-			wantErr: errmsg.InvalidName,
-		},
-		{
-			name:    "超长简介被拒绝",
-			exist:   true,
-			req:     newUpdateUserReq("3001", "新昵称", strings.Repeat("好", BioMaxLen+1), validAvatar()),
-			wantErr: errmsg.InvalidBio,
-		},
-		{
-			name:  "非法 metadata 被拒绝",
-			exist: true,
-			req: &userv1.UpdateUserRequest{
-				Uid:      "3001",
-				Name:     "新昵称",
-				Bio:      "新简介",
-				Avatar:   validAvatar(),
-				Metadata: &commonv1.JsonStr{Payload: "not-json"},
-			},
-			wantErr: errmsg.InvalidArgument,
-		},
-		{
-			name:    "用户不存在返回 NotFound",
-			req:     newUpdateUserReq("3001", "新昵称", "新简介", validAvatar()),
-			wantErr: errmsg.NotFound,
-		},
-		{
-			name:  "更新成功",
-			exist: true,
-			req:   newUpdateUserReq("3001", "新昵称", "新简介", validAvatar()),
-		},
-	}
+	t.Run("无任何更新字段被拒绝", func(t *testing.T) {
+		uc, _ := newUsecase(t)
+		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "3001"})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidArgument, resp.GetErr())
+	})
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			repo := &fakeUserRepo{}
-			if tc.exist {
-				_, err := repo.CreateUser(ctx, newProfile(3001, "旧昵称", "旧简介"))
-				require.NoError(t, err)
-			}
-			uc := NewUserUsecase(repo)
+	t.Run("非法uid被拒绝", func(t *testing.T) {
+		uc, _ := newUsecase(t)
+		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "bad", Name: strVal("新昵称")})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
+	})
 
-			resp, err := uc.UpdateUser(ctx, tc.req)
-			require.NoError(t, err)
-			require.NotNil(t, resp)
+	t.Run("非法昵称被拒绝", func(t *testing.T) {
+		uc, db := newUsecase(t)
+		seedProfile(t, db, uid1, "旧昵称", "旧简介", userv1.UserStatus_USER_STATUS_ACTIVE)
+		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "3001", Name: strVal("   ")})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidName, resp.GetErr())
+	})
 
-			if tc.wantErr != nil {
-				assert.True(t, resp.GetFail())
-				assert.Equal(t, tc.wantErr, resp.GetErr())
-				assert.Empty(t, repo.updated, "被拒绝的请求不应更新落库")
-				return
-			}
+	t.Run("超长简介被拒绝", func(t *testing.T) {
+		uc, db := newUsecase(t)
+		seedProfile(t, db, uid1, "旧昵称", "旧简介", userv1.UserStatus_USER_STATUS_ACTIVE)
+		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "3001", Bio: strVal(strings.Repeat("好", BioMaxLen+1))})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidBio, resp.GetErr())
+	})
 
-			assert.False(t, resp.GetFail())
-			require.NotNil(t, resp.GetProfile())
-			assert.Equal(t, "新昵称", resp.GetProfile().GetBrief().GetName())
-			assert.Equal(t, "新简介", resp.GetProfile().GetBio())
-			assert.Equal(t, userv1.UserStatus_USER_STATUS_ACTIVE, resp.GetProfile().GetStatus(),
-				"回读应包含未在本接口修改的状态与统计")
-			require.Len(t, repo.updated, 1)
-			assert.Equal(t, "新昵称", repo.updated[0].Name)
-			assert.Empty(t, repo.updated[0].MetaData, "空 metadata 应覆盖为 {}")
-		})
-	}
+	t.Run("非法头像被拒绝", func(t *testing.T) {
+		uc, db := newUsecase(t)
+		seedProfile(t, db, uid1, "旧昵称", "旧简介", userv1.UserStatus_USER_STATUS_ACTIVE)
+		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "3001", Avatar: &mediav1.MediaFile{
+			Base:    &commonv1.BaseModel{Id: "10001"},
+			AssetId: "not-a-number",
+		}})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidAvatar, resp.GetErr())
+	})
+
+	t.Run("非法 metadata 被拒绝", func(t *testing.T) {
+		uc, db := newUsecase(t)
+		seedProfile(t, db, uid1, "旧昵称", "旧简介", userv1.UserStatus_USER_STATUS_ACTIVE)
+		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "3001", Metadata: &commonv1.JsonStr{Payload: "not-json"}})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidArgument, resp.GetErr())
+	})
+
+	t.Run("用户不存在返回 NotFound", func(t *testing.T) {
+		uc, _ := newUsecase(t)
+		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "3001", Name: strVal("新昵称")})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.NotFound, resp.GetErr())
+	})
+
+	t.Run("只更新昵称", func(t *testing.T) {
+		uc, db := newUsecase(t)
+		seedProfile(t, db, uid1, "旧昵称", "旧简介", userv1.UserStatus_USER_STATUS_ACTIVE)
+
+		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "3001", Name: strVal("新昵称")})
+		require.NoError(t, err)
+		require.False(t, resp.GetFail())
+		assert.Equal(t, "新昵称", resp.GetProfile().GetBrief().GetName())
+
+		var got models.UserProfile
+		require.NoError(t, db.Where("id = ?", uid1).First(&got).Error)
+		assert.Equal(t, "新昵称", got.Name)
+		assert.Equal(t, "旧简介", got.Bio, "未传入的字段不应被修改")
+		assert.Equal(t, datatypes.JSONMap{"theme": "dark"}, got.MetaData, "未传入的字段不应被修改")
+		assert.Equal(t, "avatar/obj", got.Avatar.ObjKey, "未传入的字段不应被修改")
+		assert.Equal(t, userv1.UserStatus_USER_STATUS_ACTIVE, got.Status, "状态不在更新范围")
+	})
+
+	t.Run("只更新简介（可清空）", func(t *testing.T) {
+		uc, db := newUsecase(t)
+		seedProfile(t, db, uid1, "旧昵称", "旧简介", userv1.UserStatus_USER_STATUS_ACTIVE)
+
+		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "3001", Bio: strVal("")})
+		require.NoError(t, err)
+		require.False(t, resp.GetFail())
+
+		var got models.UserProfile
+		require.NoError(t, db.Where("id = ?", uid1).First(&got).Error)
+		assert.Empty(t, got.Bio, "简介应被清空")
+		assert.Equal(t, "旧昵称", got.Name, "未传入的字段不应被修改")
+	})
+
+	t.Run("只更新 metadata（清空为 {}）", func(t *testing.T) {
+		uc, db := newUsecase(t)
+		seedProfile(t, db, uid1, "旧昵称", "旧简介", userv1.UserStatus_USER_STATUS_ACTIVE)
+
+		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "3001", Metadata: &commonv1.JsonStr{Payload: "{}"}})
+		require.NoError(t, err)
+		require.False(t, resp.GetFail())
+
+		var got models.UserProfile
+		require.NoError(t, db.Where("id = ?", uid1).First(&got).Error)
+		assert.Empty(t, got.MetaData, "metadata 应被清空为 {}")
+		assert.Equal(t, "旧昵称", got.Name, "未传入的字段不应被修改")
+		assert.Equal(t, "旧简介", got.Bio, "未传入的字段不应被修改")
+	})
+
+	t.Run("只更新头像（avatar_id 换新）", func(t *testing.T) {
+		uc, db := newUsecase(t)
+		seedProfile(t, db, uid1, "旧昵称", "旧简介", userv1.UserStatus_USER_STATUS_ACTIVE)
+
+		avatar := validAvatar()
+		avatar.Base.Id = "10002" // 新头像文件 ID，与库中旧值不同
+		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "3001", Avatar: avatar})
+		require.NoError(t, err)
+		require.False(t, resp.GetFail())
+
+		var got models.UserProfile
+		require.NoError(t, db.Where("id = ?", uid1).First(&got).Error)
+		require.NotNil(t, got.Avatar)
+		assert.Equal(t, int64(10002), got.Avatar.ID, "avatar_id 应更新为新头像")
+		assert.Equal(t, "旧昵称", got.Name, "未传入的字段不应被修改")
+		assert.Equal(t, "旧简介", got.Bio, "未传入的字段不应被修改")
+		assert.Equal(t, datatypes.JSONMap{"theme": "dark"}, got.MetaData, "未传入的字段不应被修改")
+	})
+
+	t.Run("组合更新（昵称+简介）", func(t *testing.T) {
+		uc, db := newUsecase(t)
+		seedProfile(t, db, uid1, "旧昵称", "旧简介", userv1.UserStatus_USER_STATUS_ACTIVE)
+
+		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "3001", Name: strVal("新昵称"), Bio: strVal("新简介")})
+		require.NoError(t, err)
+		require.False(t, resp.GetFail())
+		assert.Equal(t, userv1.UserStatus_USER_STATUS_ACTIVE, resp.GetProfile().GetStatus(),
+			"回读应包含未在本接口修改的状态与统计")
+
+		var got models.UserProfile
+		require.NoError(t, db.Where("id = ?", uid1).First(&got).Error)
+		assert.Equal(t, "新昵称", got.Name)
+		assert.Equal(t, "新简介", got.Bio)
+		assert.Equal(t, datatypes.JSONMap{"theme": "dark"}, got.MetaData, "未传入的字段不应被修改")
+	})
+}
+
+func TestUserUsecase_SetFollow(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("非法uid被拒绝", func(t *testing.T) {
+		uc, _ := newUsecase(t)
+		resp, err := uc.SetFollow(ctx, &userv1.SetFollowRequest{Uid: "bad", TargetUid: "3002"})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
+	})
+
+	t.Run("非法目标uid被拒绝", func(t *testing.T) {
+		uc, _ := newUsecase(t)
+		resp, err := uc.SetFollow(ctx, &userv1.SetFollowRequest{Uid: "3001", TargetUid: "bad"})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
+	})
+
+	t.Run("自关注被拒绝", func(t *testing.T) {
+		uc, db := newUsecase(t)
+		setupFollowers(t, db)
+		resp, err := uc.SetFollow(ctx, &userv1.SetFollowRequest{Uid: "3001", TargetUid: "3001"})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidArgument, resp.GetErr())
+
+		assert.Equal(t, int64(7), followingsOf(t, db, uid1), "自关注不应改变计数")
+	})
+
+	t.Run("目标用户不存在返回 NotFound", func(t *testing.T) {
+		uc, db := newUsecase(t)
+		setupFollowers(t, db)
+		resp, err := uc.SetFollow(ctx, &userv1.SetFollowRequest{Uid: "3001", TargetUid: "999999"})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.NotFound, resp.GetErr())
+
+		var cnt int64
+		require.NoError(t, db.Table("user_follows").Count(&cnt).Error)
+		assert.Zero(t, cnt)
+	})
+
+	t.Run("关注成功并递增双端计数", func(t *testing.T) {
+		uc, db := newUsecase(t)
+		setupFollowers(t, db)
+		resp, err := uc.SetFollow(ctx, &userv1.SetFollowRequest{Uid: "3001", TargetUid: "3002"})
+		require.NoError(t, err)
+		assert.False(t, resp.GetFail())
+
+		var cnt int64
+		require.NoError(t, db.Table("user_follows").
+			Where("fan_id = ? AND following_id = ?", uid1, uid2).Count(&cnt).Error)
+		assert.Equal(t, int64(1), cnt)
+		assert.Equal(t, int64(8), followingsOf(t, db, uid1), "fan.followings 应 +1")
+		assert.Equal(t, int64(6), followersOf(t, db, uid2), "following.followers 应 +1")
+	})
+}
+
+func TestUserUsecase_SetUnFollow(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("非法uid被拒绝", func(t *testing.T) {
+		uc, _ := newUsecase(t)
+		resp, err := uc.SetUnFollow(ctx, &userv1.SetUnFollowRequest{Uid: "bad", TargetUid: "3002"})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
+	})
+
+	t.Run("自取关被拒绝", func(t *testing.T) {
+		uc, db := newUsecase(t)
+		setupFollowers(t, db)
+		resp, err := uc.SetUnFollow(ctx, &userv1.SetUnFollowRequest{Uid: "3001", TargetUid: "3001"})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidArgument, resp.GetErr())
+	})
+
+	t.Run("取关成功并递减双端计数", func(t *testing.T) {
+		uc, db := newUsecase(t)
+		setupFollowers(t, db)
+		_, err := uc.SetFollow(ctx, &userv1.SetFollowRequest{Uid: "3001", TargetUid: "3002"})
+		require.NoError(t, err)
+
+		resp, err := uc.SetUnFollow(ctx, &userv1.SetUnFollowRequest{Uid: "3001", TargetUid: "3002"})
+		require.NoError(t, err)
+		assert.False(t, resp.GetFail())
+
+		var cnt int64
+		require.NoError(t, db.Table("user_follows").Count(&cnt).Error)
+		assert.Zero(t, cnt, "关注关系应被删除")
+		assert.Equal(t, int64(7), followingsOf(t, db, uid1), "fan.followings 应 -1")
+		assert.Equal(t, int64(5), followersOf(t, db, uid2), "following.followers 应 -1")
+	})
+
+	t.Run("未关注时幂等成功", func(t *testing.T) {
+		uc, db := newUsecase(t)
+		setupFollowers(t, db)
+		resp, err := uc.SetUnFollow(ctx, &userv1.SetUnFollowRequest{Uid: "3001", TargetUid: "3002"})
+		require.NoError(t, err)
+		assert.False(t, resp.GetFail())
+		assert.Equal(t, int64(7), followingsOf(t, db, uid1), "关系不存在不应递减")
+	})
+}
+
+func TestUserUsecase_GetFollowingRelation(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("非法uid被拒绝", func(t *testing.T) {
+		uc, _ := newUsecase(t)
+		resp, err := uc.GetFollowingRelation(ctx, &userv1.GetFollowingRelationRequest{Uid: "bad", TargetUid: "3002"})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
+	})
+
+	t.Run("单向关注", func(t *testing.T) {
+		uc, db := newUsecase(t)
+		setupFollowers(t, db)
+		_, err := uc.SetFollow(ctx, &userv1.SetFollowRequest{Uid: "3001", TargetUid: "3002"})
+		require.NoError(t, err)
+
+		resp, err := uc.GetFollowingRelation(ctx, &userv1.GetFollowingRelationRequest{Uid: "3001", TargetUid: "3002"})
+		require.NoError(t, err)
+		assert.False(t, resp.GetFail())
+		assert.True(t, resp.GetIsFollowing())
+		assert.False(t, resp.GetIsFollower())
+	})
+
+	t.Run("互相关注", func(t *testing.T) {
+		uc, db := newUsecase(t)
+		setupFollowers(t, db)
+		_, err := uc.SetFollow(ctx, &userv1.SetFollowRequest{Uid: "3001", TargetUid: "3002"})
+		require.NoError(t, err)
+		_, err = uc.SetFollow(ctx, &userv1.SetFollowRequest{Uid: "3002", TargetUid: "3001"})
+		require.NoError(t, err)
+
+		resp, err := uc.GetFollowingRelation(ctx, &userv1.GetFollowingRelationRequest{Uid: "3001", TargetUid: "3002"})
+		require.NoError(t, err)
+		assert.True(t, resp.GetIsFollowing())
+		assert.True(t, resp.GetIsFollower())
+	})
+}
+
+func TestUserUsecase_GetFollowings(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("非法uid被拒绝", func(t *testing.T) {
+		uc, _ := newUsecase(t)
+		resp, err := uc.GetFollowings(ctx, &userv1.GetFollowingsRequest{Uid: "bad"})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
+	})
+
+	t.Run("返回关注列表与游标", func(t *testing.T) {
+		uc, db := newUsecase(t)
+		setupFollowers(t, db)
+		_, err := uc.SetFollow(ctx, &userv1.SetFollowRequest{Uid: "3001", TargetUid: "3002"})
+		require.NoError(t, err)
+
+		resp, err := uc.GetFollowings(ctx, &userv1.GetFollowingsRequest{Uid: "3001"})
+		require.NoError(t, err)
+		require.False(t, resp.GetFail())
+		require.Len(t, resp.GetUserBriefs(), 1)
+		assert.Equal(t, "3002", resp.GetUserBriefs()[0].GetUid())
+		assert.Equal(t, "target", resp.GetUserBriefs()[0].GetName())
+		assert.NotNil(t, resp.GetCursor(), "有数据时应返回游标")
+	})
+
+	t.Run("无关注返回空列表且无游标", func(t *testing.T) {
+		uc, db := newUsecase(t)
+		setupFollowers(t, db)
+		resp, err := uc.GetFollowings(ctx, &userv1.GetFollowingsRequest{Uid: "3001"})
+		require.NoError(t, err)
+		assert.False(t, resp.GetFail())
+		assert.Empty(t, resp.GetUserBriefs())
+		assert.Nil(t, resp.GetCursor())
+	})
+}
+
+func TestUserUsecase_BanUser(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("非法uid被拒绝", func(t *testing.T) {
+		uc, _ := newUsecase(t)
+		resp, err := uc.BanUser(ctx, &userv1.BanUserRequest{Uid: "bad"})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
+	})
+
+	t.Run("封禁成功", func(t *testing.T) {
+		uc, db := newUsecase(t)
+		setupFollowers(t, db)
+		resp, err := uc.BanUser(ctx, &userv1.BanUserRequest{Uid: "3001"})
+		require.NoError(t, err)
+		assert.False(t, resp.GetFail())
+
+		var got models.UserProfile
+		require.NoError(t, db.Where("id = ?", uid1).First(&got).Error)
+		assert.Equal(t, userv1.UserStatus_USER_STATUS_BANNED, got.Status)
+	})
 }
 
 // ---------- ToBrief 防御 ----------
@@ -425,193 +555,4 @@ func TestToBriefNilAvatar(t *testing.T) {
 	assert.Equal(t, "3001", brief.GetUid())
 	assert.Equal(t, "no-avatar", brief.GetName())
 	assert.Nil(t, brief.GetAvatar(), "无头像时不应填充 avatar 字段")
-}
-
-// ---------- 关注关系（biz 层） ----------
-
-// newFollowRepo 预置两个用户（uid1/uid2）的仓储
-func newFollowRepo(ctx context.Context) *fakeUserRepo {
-	repo := &fakeUserRepo{}
-	_, _ = repo.CreateUser(ctx, newProfile(uid1, "fan", ""))
-	_, _ = repo.CreateUser(ctx, newProfile(uid2, "target", ""))
-	return repo
-}
-
-func TestUserUsecase_SetFollow(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("非法uid被拒绝", func(t *testing.T) {
-		uc := NewUserUsecase(newFollowRepo(ctx))
-		resp, err := uc.SetFollow(ctx, &userv1.SetFollowRequest{Uid: "bad", TargetUid: "3002"})
-		require.NoError(t, err)
-		assert.True(t, resp.GetFail())
-		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
-	})
-
-	t.Run("非法目标uid被拒绝", func(t *testing.T) {
-		uc := NewUserUsecase(newFollowRepo(ctx))
-		resp, err := uc.SetFollow(ctx, &userv1.SetFollowRequest{Uid: "3001", TargetUid: "bad"})
-		require.NoError(t, err)
-		assert.True(t, resp.GetFail())
-		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
-	})
-
-	t.Run("自关注被拒绝", func(t *testing.T) {
-		uc := NewUserUsecase(newFollowRepo(ctx))
-		resp, err := uc.SetFollow(ctx, &userv1.SetFollowRequest{Uid: "3001", TargetUid: "3001"})
-		require.NoError(t, err)
-		assert.True(t, resp.GetFail())
-		assert.Equal(t, errmsg.InvalidArgument, resp.GetErr())
-	})
-
-	t.Run("目标用户不存在返回 NotFound", func(t *testing.T) {
-		uc := NewUserUsecase(newFollowRepo(ctx))
-		resp, err := uc.SetFollow(ctx, &userv1.SetFollowRequest{Uid: "3001", TargetUid: "999999"})
-		require.NoError(t, err)
-		assert.True(t, resp.GetFail())
-		assert.Equal(t, errmsg.NotFound, resp.GetErr())
-	})
-
-	t.Run("关注成功", func(t *testing.T) {
-		repo := newFollowRepo(ctx)
-		uc := NewUserUsecase(repo)
-		resp, err := uc.SetFollow(ctx, &userv1.SetFollowRequest{Uid: "3001", TargetUid: "3002"})
-		require.NoError(t, err)
-		assert.False(t, resp.GetFail())
-		assert.True(t, repo.follows[[2]int64{uid1, uid2}], "关注关系应建立")
-	})
-}
-
-func TestUserUsecase_SetUnFollow(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("非法uid被拒绝", func(t *testing.T) {
-		uc := NewUserUsecase(newFollowRepo(ctx))
-		resp, err := uc.SetUnFollow(ctx, &userv1.SetUnFollowRequest{Uid: "bad", TargetUid: "3002"})
-		require.NoError(t, err)
-		assert.True(t, resp.GetFail())
-		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
-	})
-
-	t.Run("自取关被拒绝", func(t *testing.T) {
-		uc := NewUserUsecase(newFollowRepo(ctx))
-		resp, err := uc.SetUnFollow(ctx, &userv1.SetUnFollowRequest{Uid: "3001", TargetUid: "3001"})
-		require.NoError(t, err)
-		assert.True(t, resp.GetFail())
-		assert.Equal(t, errmsg.InvalidArgument, resp.GetErr())
-	})
-
-	t.Run("取关成功", func(t *testing.T) {
-		repo := newFollowRepo(ctx)
-		_, err := repo.SetFollow(ctx, uid1, uid2)
-		require.NoError(t, err)
-
-		uc := NewUserUsecase(repo)
-		resp, err := uc.SetUnFollow(ctx, &userv1.SetUnFollowRequest{Uid: "3001", TargetUid: "3002"})
-		require.NoError(t, err)
-		assert.False(t, resp.GetFail())
-		assert.False(t, repo.follows[[2]int64{uid1, uid2}], "关注关系应被移除")
-	})
-
-	t.Run("未关注时幂等成功", func(t *testing.T) {
-		uc := NewUserUsecase(newFollowRepo(ctx))
-		resp, err := uc.SetUnFollow(ctx, &userv1.SetUnFollowRequest{Uid: "3001", TargetUid: "3002"})
-		require.NoError(t, err)
-		assert.False(t, resp.GetFail())
-	})
-}
-
-func TestUserUsecase_GetFollowingRelation(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("非法uid被拒绝", func(t *testing.T) {
-		uc := NewUserUsecase(newFollowRepo(ctx))
-		resp, err := uc.GetFollowingRelation(ctx, &userv1.GetFollowingRelationRequest{Uid: "bad", TargetUid: "3002"})
-		require.NoError(t, err)
-		assert.True(t, resp.GetFail())
-		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
-	})
-
-	t.Run("单向关注", func(t *testing.T) {
-		repo := newFollowRepo(ctx)
-		_, err := repo.SetFollow(ctx, uid1, uid2)
-		require.NoError(t, err)
-
-		uc := NewUserUsecase(repo)
-		resp, err := uc.GetFollowingRelation(ctx, &userv1.GetFollowingRelationRequest{Uid: "3001", TargetUid: "3002"})
-		require.NoError(t, err)
-		assert.False(t, resp.GetFail())
-		assert.True(t, resp.GetIsFollowing())
-		assert.False(t, resp.GetIsFollower())
-	})
-
-	t.Run("互相关注", func(t *testing.T) {
-		repo := newFollowRepo(ctx)
-		_, err := repo.SetFollow(ctx, uid1, uid2)
-		require.NoError(t, err)
-		_, err = repo.SetFollow(ctx, uid2, uid1)
-		require.NoError(t, err)
-
-		uc := NewUserUsecase(repo)
-		resp, err := uc.GetFollowingRelation(ctx, &userv1.GetFollowingRelationRequest{Uid: "3001", TargetUid: "3002"})
-		require.NoError(t, err)
-		assert.True(t, resp.GetIsFollowing())
-		assert.True(t, resp.GetIsFollower())
-	})
-}
-
-func TestUserUsecase_GetFollowings(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("非法uid被拒绝", func(t *testing.T) {
-		uc := NewUserUsecase(newFollowRepo(ctx))
-		resp, err := uc.GetFollowings(ctx, &userv1.GetFollowingsRequest{Uid: "bad"})
-		require.NoError(t, err)
-		assert.True(t, resp.GetFail())
-		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
-	})
-
-	t.Run("返回关注列表与游标", func(t *testing.T) {
-		repo := newFollowRepo(ctx)
-		_, err := repo.SetFollow(ctx, uid1, uid2)
-		require.NoError(t, err)
-
-		uc := NewUserUsecase(repo)
-		resp, err := uc.GetFollowings(ctx, &userv1.GetFollowingsRequest{Uid: "3001"})
-		require.NoError(t, err)
-		require.False(t, resp.GetFail())
-		require.Len(t, resp.GetUserBriefs(), 1)
-		assert.Equal(t, "3002", resp.GetUserBriefs()[0].GetUid())
-		assert.NotNil(t, resp.GetCursor(), "有数据时应返回游标")
-	})
-
-	t.Run("无关注返回空列表且无游标", func(t *testing.T) {
-		uc := NewUserUsecase(newFollowRepo(ctx))
-		resp, err := uc.GetFollowings(ctx, &userv1.GetFollowingsRequest{Uid: "3001"})
-		require.NoError(t, err)
-		assert.False(t, resp.GetFail())
-		assert.Empty(t, resp.GetUserBriefs())
-		assert.Nil(t, resp.GetCursor())
-	})
-}
-
-func TestUserUsecase_BanUser(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("非法uid被拒绝", func(t *testing.T) {
-		uc := NewUserUsecase(newFollowRepo(ctx))
-		resp, err := uc.BanUser(ctx, &userv1.BanUserRequest{Uid: "bad"})
-		require.NoError(t, err)
-		assert.True(t, resp.GetFail())
-		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
-	})
-
-	t.Run("封禁成功", func(t *testing.T) {
-		repo := newFollowRepo(ctx)
-		uc := NewUserUsecase(repo)
-		resp, err := uc.BanUser(ctx, &userv1.BanUserRequest{Uid: "3001"})
-		require.NoError(t, err)
-		assert.False(t, resp.GetFail())
-		assert.Equal(t, userv1.UserStatus_USER_STATUS_BANNED, repo.profiles[uid1].Status)
-	})
 }

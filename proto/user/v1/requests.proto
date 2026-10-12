@@ -4,6 +4,7 @@ package user.v1;
 
 import "buf/validate/validate.proto";
 import "common/v1/common.proto";
+import "google/protobuf/wrappers.proto";
 import "media/v1/media.proto";
 import "user/v1/user.proto";
 
@@ -29,10 +30,10 @@ message CreateUserResponse {
 
 message UpdateUserRequest {
   string uid = 1 [(buf.validate.field).string.min_len = 1];
-  string name = 2 [(buf.validate.field).string.min_len = 1];
+  google.protobuf.StringValue name = 2;
 
   media.v1.MediaFile avatar = 3;
-  string bio = 4;
+  google.protobuf.StringValue bio = 4;
 
   common.v1.JsonStr metadata = 5;
 }

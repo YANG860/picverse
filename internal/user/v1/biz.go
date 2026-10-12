@@ -2,12 +2,14 @@ package v1
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	commonv1 "rednote/gen/go/common/v1"
+	mediav1 "rednote/gen/go/media/v1"
 	userv1 "rednote/gen/go/user/v1"
 	common "rednote/internal/common/models"
 	media "rednote/internal/media/models"
@@ -16,6 +18,8 @@ import (
 	"rednote/packages/utils"
 
 	"github.com/bwmarrin/snowflake"
+	"gorm.io/datatypes"
+	"gorm.io/gorm"
 )
 
 // UserUsecase 用户业务逻辑接口
@@ -24,7 +28,7 @@ type UserUsecase interface {
 
 	// CreateUser 创建用户资料（uid 由鉴权服务分配后透传）
 	CreateUser(ctx context.Context, req *userv1.CreateUserRequest) (*userv1.CreateUserResponse, error)
-	// UpdateUser 更新用户资料（name/bio/头像/metadata 全量覆盖）
+	// UpdateUser 更新用户资料（部分更新：仅更新传入的字段，nil 字段不修改）
 	UpdateUser(ctx context.Context, req *userv1.UpdateUserRequest) (*userv1.UpdateUserResponse, error)
 	// GetUserBrief 批量获取用户简要信息
 	GetUserBrief(ctx context.Context, req *userv1.GetUserBriefRequest) (*userv1.GetUserBriefResponse, error)
@@ -47,14 +51,16 @@ type UserUsecase interface {
 // UserUsecaseImpl 用户业务逻辑实现
 type UserUsecaseImpl struct {
 	Repo UserRepository
+	DB   *gorm.DB
 }
 
 var _ UserUsecase = (*UserUsecaseImpl)(nil)
 
 // NewUserUsecase 创建 UserUsecase 实例
-func NewUserUsecase(repo UserRepository) *UserUsecaseImpl {
+func NewUserUsecase(repo UserRepository, db *gorm.DB) *UserUsecaseImpl {
 	return &UserUsecaseImpl{
 		Repo: repo,
+		DB:   db,
 	}
 }
 
@@ -118,56 +124,109 @@ func (u *UserUsecaseImpl) CreateUser(ctx context.Context, req *userv1.CreateUser
 	}, nil
 }
 
-// UpdateUser 更新用户资料（name/bio/头像/metadata 全量覆盖；统计与状态不在此接口修改）
+// errUserNotFound 更新目标用户不存在（事务内哨兵，触发整体回滚）
+var errUserNotFound = errors.New("user: profile not found")
+
+// UpdateUser 更新用户资料（部分更新：仅更新传入的字段，nil 字段不修改；统计与状态不在此接口修改）
 func (u *UserUsecaseImpl) UpdateUser(ctx context.Context, req *userv1.UpdateUserRequest) (*userv1.UpdateUserResponse, error) {
+
+	// 可空字段指示更新范围：nil 表示不修改
+	updateName := req.GetName() != nil
+	updateBio := req.GetBio() != nil
+	updateAvatar := req.GetAvatar() != nil
+	updateMetadata := req.GetMetadata() != nil
+
+	if !updateName && !updateBio && !updateAvatar && !updateMetadata {
+		return &userv1.UpdateUserResponse{Fail: true, Err: errmsg.InvalidArgument}, nil
+	}
 
 	id, err := snowflake.ParseString(req.GetUid())
 	if err != nil {
 		return &userv1.UpdateUserResponse{Fail: true, Err: errmsg.InvalidID}, nil
 	}
 
-	if !ValidateName(req.GetName()) {
+	if updateName && !ValidateName(req.GetName().GetValue()) {
 		return &userv1.UpdateUserResponse{Fail: true, Err: errmsg.InvalidName}, nil
 	}
 
-	if !ValidateBio(req.GetBio()) {
+	if updateBio && !ValidateBio(req.GetBio().GetValue()) {
 		return &userv1.UpdateUserResponse{Fail: true, Err: errmsg.InvalidBio}, nil
 	}
 
-	// 头像必填：用户未提供时由 BFF 填充默认头像，此处直接拒绝无头像请求
-	if req.GetAvatar() == nil {
-		return &userv1.UpdateUserResponse{Fail: true, Err: errmsg.InvalidAvatar}, nil
+	var avatarFile *media.MediaFile
+	if updateAvatar {
+		if !ValidateMediaFile(req.GetAvatar()) {
+			return &userv1.UpdateUserResponse{Fail: true, Err: errmsg.InvalidAvatar}, nil
+		}
+		file, err := media.MediaFileFromProto(req.GetAvatar())
+		if err != nil {
+			return &userv1.UpdateUserResponse{Fail: true, Err: errmsg.InvalidAvatar}, nil
+		}
+		avatarFile = &file
 	}
 
-	avatarFile, err := media.MediaFileFromProto(req.GetAvatar())
-	if err != nil {
-		return &userv1.UpdateUserResponse{Fail: true, Err: errmsg.InvalidAvatar}, nil
+	var metadata datatypes.JSONMap
+	if updateMetadata {
+		// metadata 可选：空值等价于 {}（空对象），仅非法 JSON 才拒绝
+		metadata, err = utils.UnmarshalJSON([]byte(req.GetMetadata().GetPayload()))
+		if err != nil {
+			return &userv1.UpdateUserResponse{Fail: true, Err: errmsg.InvalidArgument}, nil
+		}
 	}
 
-	// metadata 可选：空值等价于 {}（空对象），仅非法 JSON 才拒绝
-	metadata, err := utils.UnmarshalJSON([]byte(req.GetMetadata().GetPayload()))
-	if err != nil {
-		return &userv1.UpdateUserResponse{Fail: true, Err: errmsg.InvalidArgument}, nil
+	// 单事务内逐字段更新，保证部分更新的原子性；
+	// PG 中存在的行即使值不变 UPDATE 也计 1 行，故任一更新 0 行即视为用户不存在，整体回滚
+	err = u.DB.Transaction(func(tx *gorm.DB) error {
+		repo := u.Repo.WithTX(tx)
+
+		if updateName {
+			info, err := repo.UpdateUserName(ctx, id.Int64(), req.GetName().GetValue())
+			if err != nil {
+				return err
+			}
+			if info.RowsAffected == 0 {
+				return errUserNotFound
+			}
+		}
+
+		if updateAvatar {
+			info, err := repo.UpdateUserAvatar(ctx, id.Int64(), avatarFile)
+			if err != nil {
+				return err
+			}
+			if info.RowsAffected == 0 {
+				return errUserNotFound
+			}
+		}
+
+		if updateBio {
+			info, err := repo.UpdateUserBio(ctx, id.Int64(), req.GetBio().GetValue())
+			if err != nil {
+				return err
+			}
+			if info.RowsAffected == 0 {
+				return errUserNotFound
+			}
+		}
+
+		if updateMetadata {
+			info, err := repo.UpdateUserMetadata(ctx, id.Int64(), metadata)
+			if err != nil {
+				return err
+			}
+			if info.RowsAffected == 0 {
+				return errUserNotFound
+			}
+		}
+
+		return nil
+	})
+
+	if errors.Is(err, errUserNotFound) {
+		return &userv1.UpdateUserResponse{Fail: true, Err: errmsg.NotFound}, nil
 	}
-
-	profile := &models.UserProfile{
-		BaseModel: common.BaseModel{
-			ID: id.Int64(),
-		},
-		Name: req.GetName(),
-		Bio:  req.GetBio(),
-
-		Avatar: &avatarFile,
-
-		MetaData: metadata,
-	}
-
-	info, err := u.Repo.UpdateUser(ctx, profile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update user: %w", err)
-	}
-	if info.RowsAffected == 0 {
-		return &userv1.UpdateUserResponse{Fail: true, Err: errmsg.NotFound}, nil
 	}
 
 	// 回读完整资料返回（含未在本接口修改的状态与统计）
@@ -209,6 +268,11 @@ func ValidateBio(bio string) bool {
 	return !strings.ContainsFunc(bio, func(r rune) bool {
 		return unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t'
 	})
+}
+
+func ValidateMediaFile(file *mediav1.MediaFile) bool {
+	// 头像媒体文件结构校验（内容审核由审核服务负责）
+	return file != nil && file.GetBase() != nil && file.GetAssetId() != "" && file.GetObjKey() != ""
 }
 
 // GetUserBrief 批量获取用户简要信息
