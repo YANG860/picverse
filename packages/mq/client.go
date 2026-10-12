@@ -25,8 +25,22 @@ type JetStreamClient struct {
 	log  *slog.Logger
 }
 
-// asyncPublishAckTimeout 是异步发布等待 ack 的上限，超时后 future.Err() 收到 ErrAsyncPublishTimeout
-const asyncPublishAckTimeout = 5 * time.Second
+// MQClient 消息队列客户端接口（四个方法全量抽象），
+// 生产实现为 JetStreamClient，单元测试注入 test/testmq 的本地内存模拟。
+type MQClient interface {
+	// Send 非事务性消息，立即发送，不进发件箱
+	Send(ctx context.Context, msg *MQMessage) error
+	// SendTX 事务性消息，写入发件箱（out_box_entries），随业务事务提交
+	SendTX(ctx context.Context, msg *MQMessage, tx *gorm.DB) error
+	// GetStream 获取 JetStream 流控句柄（consumer 消费 / poller 异步发布使用）
+	GetStream() jetstream.JetStream
+	// Close 关闭连接
+	Close()
+}
+
+var _ MQClient = (*JetStreamClient)(nil)
+
+
 
 func NewJetStreamClient(cfg *config.Config, lf logger.LoggerFactory) (*JetStreamClient, func()) {
 
@@ -38,7 +52,7 @@ func NewJetStreamClient(cfg *config.Config, lf logger.LoggerFactory) (*JetStream
 
 	client, err := jetstream.New(conn,
 		// 为异步发布的 ack future 设置超时，否则 ack 丢失时 future 永不 resolve，）
-		jetstream.WithPublishAsyncTimeout(asyncPublishAckTimeout),
+		jetstream.WithPublishAsyncTimeout(defaults.AsyncPublishAckTimeout),
 	)
 	if err != nil {
 		panic(err)

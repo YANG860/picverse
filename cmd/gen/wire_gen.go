@@ -102,7 +102,7 @@ func InitializeUserServiceHandler(cfg *config.Config) (userv1connect.UserService
 	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
 	gormDB, cleanup2 := db.NewPG(cfg, loggerFactoryImpl)
 	userRepoImpl := v1_5.NewUserRepo(gormDB)
-	userUsecaseImpl := v1_5.NewUserUsecase(userRepoImpl)
+	userUsecaseImpl := v1_5.NewUserUsecase(userRepoImpl, gormDB)
 	userServiceHandler := v1_5.NewUserServiceHandler(gormDB, loggerFactoryImpl, userUsecaseImpl, userRepoImpl)
 	return userServiceHandler, func() {
 		cleanup2()
@@ -124,6 +124,6 @@ var Services = wire.NewSet(v1.NewMediaServiceHandler, wire.Bind(new(mediav1conne
 
 var Usecases = wire.NewSet(v1.NewMediaUsecase, wire.Bind(new(v1.MediaUsecase), new(*v1.MediaUsecaseImpl)), v1_3.NewAuthUsecaseImpl, wire.Bind(new(v1_3.AuthUsecase), new(*v1_3.AuthUsecaseImpl)), v1_4.NewPostUsecase, wire.Bind(new(v1_4.PostUsecase), new(*v1_4.PostUsecaseImpl)), v1_5.NewUserUsecase, wire.Bind(new(v1_5.UserUsecase), new(*v1_5.UserUsecaseImpl)))
 
-var Middlewares = wire.NewSet(db.NewPG, mq.NewJetStreamClient, logger.NewLoggerFactory, wire.Bind(new(logger.LoggerFactory), new(*logger.LoggerFactoryImpl)), oss.NewClient, wire.Bind(new(oss.S3Repo), new(*oss.MinioClient)))
+var Middlewares = wire.NewSet(db.NewPG, mq.NewJetStreamClient, wire.Bind(new(mq.MQClient), new(*mq.JetStreamClient)), logger.NewLoggerFactory, wire.Bind(new(logger.LoggerFactory), new(*logger.LoggerFactoryImpl)), oss.NewClient, wire.Bind(new(oss.S3Repo), new(*oss.MinioClient)))
 
 var Utils = wire.NewSet(jwt.NewManager, wire.Bind(new(jwt.Manager), new(*jwt.ManagerImpl)), jwt.NewServerInterceptor)

@@ -85,22 +85,6 @@ func (c *MinioClient) Exist(ctx context.Context, key string) (bool, error) {
 	return true, nil
 }
 
-// GetObjectInfo 获取对象信息（不下载内容）
-func (c *MinioClient) GetObjectInfo(ctx context.Context, key string) (*minio.ObjectInfo, error) {
-	info, err := c.Client.StatObject(ctx, c.bucket, key, minio.StatObjectOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to stat object %s: %w", key, err)
-	}
-
-	return &minio.ObjectInfo{
-		Key:          info.Key,
-		Size:         info.Size,
-		ETag:         info.ETag,
-		ContentType:  info.ContentType,
-		LastModified: info.LastModified,
-	}, nil
-}
-
 // DeleteObject 删除对象
 func (c *MinioClient) DeleteObject(ctx context.Context, key string) error {
 	err := c.Client.RemoveObject(ctx, c.bucket, key, minio.RemoveObjectOptions{})

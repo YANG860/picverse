@@ -50,7 +50,7 @@ var (
 	}
 )
 
-func NewMediaConsumer(db *gorm.DB, mqClient *mq.JetStreamClient, s3 oss.S3Repo, lf logger.LoggerFactory, cfg *config.Config, repo v1.MediaRepository) *MediaConsumer {
+func NewMediaConsumer(db *gorm.DB, mqClient mq.MQClient, s3 oss.S3Repo, lf logger.LoggerFactory, cfg *config.Config, repo v1.MediaRepository) *MediaConsumer {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &MediaConsumer{
 		Consumer: Consumer{

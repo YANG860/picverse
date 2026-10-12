@@ -76,6 +76,7 @@ var Usecases = wire.NewSet(
 var Middlewares = wire.NewSet(
 	db.NewPG,
 	mq.NewJetStreamClient,
+	wire.Bind(new(mq.MQClient), new(*mq.JetStreamClient)),
 	logger.NewLoggerFactory,
 	wire.Bind(new(logger.LoggerFactory), new(*logger.LoggerFactoryImpl)),
 

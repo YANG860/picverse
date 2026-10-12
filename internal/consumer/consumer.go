@@ -14,7 +14,7 @@ type Consumer struct {
 	DB *gorm.DB
 	q  *query.Query
 
-	MQ  *mq.JetStreamClient
+	MQ  mq.MQClient
 	S3  oss.S3Repo
 	log *slog.Logger
 

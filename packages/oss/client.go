@@ -23,8 +23,6 @@ type S3Repo interface {
 	DownloadToWriter(ctx context.Context, key string, writer io.Writer) (int64, error)
 	// Exist 检查对象是否存在
 	Exist(ctx context.Context, key string) (bool, error)
-	// GetObjectInfo 获取对象信息（不下载内容）
-	GetObjectInfo(ctx context.Context, key string) (*minio.ObjectInfo, error)
 	// DeleteObject 删除对象
 	DeleteObject(ctx context.Context, key string) error
 	// DeleteObjects 批量删除对象
