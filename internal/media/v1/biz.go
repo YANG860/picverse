@@ -38,7 +38,7 @@ type MediaUsecase interface {
 // MediaUsecaseImpl 媒体业务逻辑实现
 type MediaUsecaseImpl struct {
 	Repo MediaRepository
-	MQ   *mq.JetStreamClient
+	MQ   mq.MQClient
 	DB   *gorm.DB
 	S3   oss.S3Repo
 }
@@ -46,7 +46,7 @@ type MediaUsecaseImpl struct {
 var _ MediaUsecase = (*MediaUsecaseImpl)(nil)
 
 // NewMediaUsecase 创建 MediaUsecase 实例
-func NewMediaUsecase(repo MediaRepository, mq *mq.JetStreamClient, db *gorm.DB, s3 oss.S3Repo) *MediaUsecaseImpl {
+func NewMediaUsecase(repo MediaRepository, mq mq.MQClient, db *gorm.DB, s3 oss.S3Repo) *MediaUsecaseImpl {
 	return &MediaUsecaseImpl{
 		Repo: repo,
 		MQ:   mq,
