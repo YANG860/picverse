@@ -18,7 +18,6 @@
 | `Download` | 下载对象，返回 `DownloadResult{ContentType, Size, ETag, Body}` |
 | `DownloadToWriter` | 下载到 `io.Writer`，返回写入字节数 |
 | `Exist` | 检查对象是否存在（`NoSuchKey` 等返回 false） |
-| `GetObjectInfo` | 取对象元信息（不下载内容） |
 | `DeleteObject` / `DeleteObjects` | 单个 / 批量删除对象 |
 | `PresignedPutURL` | 预签名上传 URL |
 | `PresignedGetURL` | 预签名下载 URL |

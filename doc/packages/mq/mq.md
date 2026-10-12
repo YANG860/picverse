@@ -21,6 +21,12 @@
 - `WithDelay(t)` — 把 `SendAt` 推后 `t`（延时消息）。
 - `WithID(id)` — 覆盖消息 ID。
 
+## MQClient（接口）
+
+`mq.MQClient` 抽象客户端的四个方法 `Send` / `SendTX` / `GetStream` / `Close`，
+生产实现为 `*JetStreamClient`（wire 中 `Bind` 到接口）；单元测试注入
+`test/testmq` 的内存模拟实现。
+
 ## JetStreamClient
 
 `NewJetStreamClient(cfg, lf)` 建立连接（`cfg.JetStream.Url`），返回 `(*JetStreamClient, cleanup)`。

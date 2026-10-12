@@ -36,10 +36,15 @@ rednote 是一个仿小红书的图片社交论坛后端，基于 Go + ConnectRP
 | [packages/defaults/defaults.md](packages/defaults/defaults.md) | 全局默认常量 |
 | [packages/errmsg/err.md](packages/errmsg/err.md) | 可枚举业务错误码 |
 
-### 其他
+### test — 测试
 | 文档 | 说明 |
 | --- | --- |
-| [test/test.md](test/test.md) | 测试体系（模板库克隆、单元/集成、E2E） |
+| [test/test.md](test/test.md) | 测试体系总览（模板库克隆、单元/集成、E2E） |
+| [test/testdb/testdb.md](test/testdb/testdb.md) | 模板库克隆独立测试库（templateDB 方案） |
+| [test/testsnowflake/testsnowflake.md](test/testsnowflake/testsnowflake.md) | 测试用雪花节点初始化 |
+| [test/testoss/testoss.md](test/testoss/testoss.md) | `oss.S3Repo` 本地内存模拟 |
+| [test/testmq/testmq.md](test/testmq/testmq.md) | `mq.MQClient` 本地内存模拟 |
+| [test/e2e/e2e.md](test/e2e/e2e.md) | 部署后服务的黑盒端到端测试 |
 
 ## 模块完成度
 
