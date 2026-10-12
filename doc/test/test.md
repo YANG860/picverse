@@ -1,33 +1,39 @@
 # test — 测试体系
 
-
-
 ## 测试类型
 
 | 类型 | 位置 | 依赖 | 说明 |
 | --- | --- | --- | --- |
-| 单元/集成测试 | `internal/*/v1/*_test.go`、`packages/*/…_test.go` | 真实 PostgreSQL（克隆库） | 存储层、拦截器等 |
+| 单元/集成测试 | `internal/*/v1/*_test.go`、`packages/*/…_test.go` | 真实 PostgreSQL（克隆库）,内存mock模拟等 | 存储层、拦截器等 |
 | E2E 黑盒测试 | `test/e2e/` | 已部署的服务 | 仅通过 ConnectRPC 访问，服务不可达时自动跳过 |
 
-## 测试数据库（testdb）
+## 单元测试
 
-`test/testdb` 采用 **templateDB 方案**：
-
-- 维护一个已完成全量迁移的模板库 `test_template`。
-- 每个用例用 `testdb.Setup(t)` 通过 `CREATE DATABASE … TEMPLATE` 克隆独立库，用例结束自动 `DROP`。
-- 用例间零共享、互不污染，天然支持 `t.Parallel()`。
-- `testing.Short()`（`go test -short`）下自动跳过依赖真实数据库的用例。
-
-连接串默认 `postgres://…@106.53.172.186:5432/test?sslmode=disable`，用环境变量 **`TEST_PG_URL`** 覆盖（串中库名仅定位服务器，实际测试库按用例克隆）。
-
-## 维护脚本
-
-| 脚本 | 作用 |
+| 维度 | 说明 |
 | --- | --- |
-| `scripts/dbinit` | 重建模板库（DROP → CREATE `test_template` → 执行 `sql/*.sql`） |
-| `scripts/dbsync` | 把 `sql/*.sql` 幂等同步到已有库（不建库、不 DROP、不动数据） |
+| 类型 | ① 纯逻辑测试（无依赖）：验证校验/转换等纯函数，如 `ValidateName` / `ValidateBio` |
+|  | ② 存储集成测试（`internal/*/v1/repo_test.go`）：验证 SQL、事务、outbox 落库等存储语义 |
+|  | ③ 业务逻辑测试（`internal/*/v1/biz_test.go`）：验证业务分支与外部编排（错误码、参数校验、消息/对象操作） |
+| 目的 | 确定性、快速地覆盖存储语义与业务分支；数据库按用例克隆隔离，MQ/S3 用内存模拟注入，天然支持 `t.Parallel()` |
+| 依赖 | [testdb](testdb.md)（模板库克隆真实 PG）、[testsnowflake](testsnowflake.md)（雪花节点）、[testmq](testmq.md)（`mq.MQClient` 模拟）、[testoss](testoss.md)（`oss.S3Repo` 模拟） |
 
-> **`sql/*.sql` 变更后必须重跑 `go run ./scripts/dbinit`**，否则测试将运行在旧 schema 上。
+## E2E 黑盒端到端测试
+
+| 维度 | 说明 |
+| --- | --- |
+| 类型 | 黑盒端到端：仅通过 ConnectRPC 调用已部署服务，不依赖内部实现；现有用例 `TestMediaServiceE2E`（上传→处理→分页→封禁）、`TestAuthServiceE2E`（注册→登录→换发→登出） |
+| 目的 | 验证部署后的真实链路：服务装配、鉴权拦截器、DB / MinIO / NATS 全链路协作 |
+| 依赖 | 已部署的服务进程、真实 PostgreSQL / MinIO / NATS；地址用 `AUTH_E2E_ADDR`、`MEDIA_E2E_ADDR`、`MEDIA_E2E_S3_*` 配置，服务不可达时自动跳过 |
+
+代码：`test/e2e/`。对已部署的服务做黑盒测试，不依赖内部实现，仅通过 ConnectRPC 访问；
+服务不可达时自动跳过，便于本地/CI 按需运行。
+
+
+前置：对应服务已部署；auth e2e 需 PostgreSQL 中
+`jwt.secret` 等加密配置与服务端一致。
+
+
+注：e2e 产生的数据（media 资产、auth 测试账号）留在服务端数据库中不清理。
 
 ## 运行
 
@@ -35,13 +41,6 @@
 go run ./scripts/dbinit                # 准备模板库
 go test ./internal/media/v1/... -count=1
 go test -short ./...                   # 跳过依赖真实数据库的用例
-
-# E2E（服务已部署）
-AUTH_E2E_ADDR=http://localhost:8081 go test ./test/e2e/ -run TestAuthServiceE2E -count=1
 ```
 
-## 其他
-
-- `test/testsnowflake/` — 测试用雪花节点初始化。
-- E2E 产生的数据（media 资产、auth 测试账号）留在服务端数据库中不清理。
-- 测试进程崩溃可能残留 `test_<pid>_<seq>_<随机>` 命名的克隆库，排查/清理见 `test/README.md`。
+> **`sql/*.sql` 变更后必须重跑 `go run ./scripts/dbinit`**，否则测试将运行在旧 schema 上。
