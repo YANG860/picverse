@@ -18,6 +18,7 @@ rednote 是一个仿小红书的图片社交论坛后端，基于 Go + ConnectRP
 | 文档 | 说明 |
 | --- | --- |
 | [internal/auth/auth.md](internal/auth/auth.md) | 认证服务：注册 / 登录 / Token 换发 / 登出 |
+| [internal/user/user.md](internal/user/user.md) | 用户服务：资料增改（含独立头像更新）、关注关系、封禁 |
 | [internal/media/media.md](internal/media/media.md) | 媒体服务：上传、异步处理流水线、引用计数、清理 |
 | [internal/common/common.md](internal/common/common.md) | 公共模型与 Outbox（事务性发件箱） |
 | [internal/consumer/consumer.md](internal/consumer/consumer.md) | 媒体消费者：JetStream 消费 + 图片处理状态机 |
@@ -32,7 +33,7 @@ rednote 是一个仿小红书的图片社交论坛后端，基于 Go + ConnectRP
 | [packages/jwt/jwt.md](packages/jwt/jwt.md) | JWT 签发 / 校验、Claims、ConnectRPC 拦截器 |
 | [packages/trace/trace.md](packages/trace/trace.md) | 链路追踪（trace_id 透传）与拦截器 |
 | [packages/logger/logger.md](packages/logger/logger.md) | slog 日志工厂、缓冲/轮转输出、trace 关联 |
-| [packages/utils/utils.md](packages/utils/utils.md) | 工具集：雪花 ID、S3 key、协程池 |
+| [packages/utils/utils.md](packages/utils/utils.md) | 工具集：雪花 ID、S3 key、协程池、JSON 解析、格式校验 |
 | [packages/defaults/defaults.md](packages/defaults/defaults.md) | 全局默认常量 |
 | [packages/errmsg/err.md](packages/errmsg/err.md) | 可枚举业务错误码 |
 
@@ -50,5 +51,5 @@ rednote 是一个仿小红书的图片社交论坛后端，基于 Go + ConnectRP
 
 文档聚焦于**已实现/可用**的模块。以下模块仍在施工中，暂不展开文档：
 
-- **post（帖子/用户资料）**：proto 与数据模型已定义，业务与仓储层多为脚手架（`ErrNotImplemented`），待实现。
+- **post（帖子）**：接口定义已定稿（12 rpc）；`CreateDraft`/`PublishDraft` 已实现（发布走 outbox 审核消息），查询与管理接口为脚手架，待实现。
 - **redis**：仅封装了客户端与健康检查，业务接口待补全。

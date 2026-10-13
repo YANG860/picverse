@@ -14,6 +14,7 @@
 | `media.go` | `MediaMessageStream` / `MediaStream` | `"media"` | JetStream 流/主题名 |
 | | `UploadMsgDelay` | 15s | 上传检测延时消息延迟 |
 | | `MaxImageWidth` / `MaxImageHeight` | 8192 | 图片尺寸上限 |
+| `post.go` | `PostMessageStream` / `PostStream` | `"post"` | JetStream 流/主题名（帖子审核/事件） |
 | `s3.go` | `PutUrlExpiry` | 15m | 预签名上传 URL 有效期 |
 | `logger.go` | `RotateMaxSize/Backups/Age` | 100 / 7 / 28 | 日志轮转默认参数 |
 | | `BufferSize` | 256KB | 日志写缓冲默认大小 |

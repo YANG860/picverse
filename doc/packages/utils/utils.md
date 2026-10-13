@@ -1,6 +1,6 @@
 # utils — 工具集
 
-代码：`packages/utils/`（`snowflake.go`、`s3.go`、`worker_pool.go`）。
+代码：`packages/utils/`（`snowflake.go`、`s3.go`、`worker_pool.go`、`json.go`、`validate.go`）。
 
 ## 雪花 ID（snowflake.go）
 
@@ -29,3 +29,24 @@ ID 是全局基础约定，DB 主键、消息 ID、`jti` 等都用它生成。
 - `Close()` 等待已提交任务完成；`CloseNow()` 立即关闭；`Len()` 返回待处理数。
 - 泛型 `Submit[T](pool, task)` — 提交带返回值任务，返回 `ResultFuture[T]`（`Wait` / `IsDone`）。
 - worker panic 被 `safeExecute` 捕获（默认记录 slog.Error + 堆栈），不会拖垮整个池。
+
+## JSON（json.go）
+
+- `UnmarshalJSON(data)` — 解析 JSON 对象为 `datatypes.JSONMap`。空数据（未提供/空串）返回空 map，语义上 ≡ `{}`；仅非法 JSON 返回错误。
+
+## 校验（validate.go）
+
+结构/格式校验，媒体内容审核由审核服务负责，此处只做结构校验。
+
+| 函数 | 说明 |
+| --- | --- |
+| `ValidateName(name)` | 昵称：trim 后非空、1~64 rune、不含控制字符 |
+| `ValidateBio(bio)` | 简介：≤512 rune、放行 `\n\r\t`，其余控制字符拒绝；可为空 |
+| `ValidateEmail(email)` | RFC 5322 邮箱格式正则 |
+| `ValidatePassword(pw)` | 8~32 位，须含大写、小写、数字 |
+| `ValidateMedia(file)` | 媒体文件结构：非空 `ObjKey`（TODO 细化） |
+| `ValidateTitle(title)` | 标题非空 ≤100（TODO 细化） |
+| `ValidateContent(content)` | 正文非空 ≤1000（TODO 细化） |
+| `ValidateImage(data, meta)` | 图片数据与元数据一致性：字节数、SHA256、实际解码格式、尺寸上限（`defaults.MaxImageWidth/Height`）与元数据宽高一致；返回具体错误 |
+
+常量 `NameMaxLen = 64` / `BioMaxLen = 512`（rune 计数）与 `user_profiles` 列宽 `VARCHAR(64)/VARCHAR(512)` 对齐，避免落库时截断/报错。
