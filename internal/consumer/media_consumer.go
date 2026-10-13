@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"image"
 	"io"
 	"os"
 	"rednote/config"
@@ -38,8 +37,6 @@ type MediaConsumer struct {
 	Repo       v1.MediaRepository
 	ConsumeCtx jetstream.ConsumeContext
 }
-
-
 
 var (
 	AllMediaTypes = [4]mediav1.MediaFileType{
@@ -230,7 +227,7 @@ func (c *MediaConsumer) HandleUploadMedia(ctx context.Context, message *mediav1.
 		return RETRY, fmt.Errorf("failed to read object body: %w", err)
 	}
 
-	err = ValidateImage(data, message.GetMeta())
+	err = utils.ValidateImage(data, message.GetMeta())
 	if err != nil {
 		return c.SetMediaAssetFailed(ctx, assetID.Int64())
 	}
@@ -321,74 +318,7 @@ func (c *MediaConsumer) SetMediaStatusAuditing(ctx context.Context, assetID int6
 	return ACK, nil
 }
 
-func ValidateImage(ImgData []byte, meta *mediav1.MediaMetaData) (err error) {
 
-	// 校验文件大小
-	if meta.GetSizeBytes() > 0 && int64(len(ImgData)) != meta.GetSizeBytes() {
-		return fmt.Errorf("size mismatch: actual=%d, meta=%d", len(ImgData), meta.GetSizeBytes())
-	}
-
-	// 校验 SHA256
-	if sum := meta.GetSha_256Sum(); sum != "" {
-		hash := sha256.Sum256(ImgData)
-		actual := hex.EncodeToString(hash[:])
-		if actual != sum {
-			return fmt.Errorf("sha256 mismatch: actual=%s, meta=%s", actual, sum)
-		}
-	}
-
-	// 校验实际文件格式
-	cfg, actualFmt, err := image.DecodeConfig(bytes.NewReader(ImgData))
-	if err != nil {
-		return fmt.Errorf("failed to detect image format: %w", err)
-	}
-
-	if convertFormat(meta.GetFormat()) != actualFmt {
-		return fmt.Errorf("format mismatch: actual=%s, meta=%v", actualFmt, convertFormat(meta.GetFormat()))
-	}
-
-	width := int64(cfg.Width)
-	height := int64(cfg.Height)
-
-	if width <= 0 || height <= 0 || width > defaults.MaxImageWidth || height > defaults.MaxImageHeight {
-		return fmt.Errorf("invalid image dimensions: %dx%d", width, height)
-	}
-
-	// 校验元数据中的尺寸是否与实际图片一致
-	if meta.GetWidth() != width {
-		return fmt.Errorf("width mismatch: meta=%d, actual=%d", meta.GetWidth(), width)
-	}
-	if meta.GetHeight() != height {
-		return fmt.Errorf("height mismatch: meta=%d, actual=%d", meta.GetHeight(), height)
-	}
-
-	// 校验格式是否受支持
-	switch meta.GetFormat() {
-
-	// 受支持的格式
-	case mediav1.MediaFormat_MEDIA_FORMAT_PNG,
-		mediav1.MediaFormat_MEDIA_FORMAT_JPG,
-		mediav1.MediaFormat_MEDIA_FORMAT_WEBP:
-
-	default:
-		return fmt.Errorf("unsupported media format: %v", meta.GetFormat())
-	}
-
-	return nil
-}
-
-func convertFormat(format mediav1.MediaFormat) string {
-	switch format {
-	case mediav1.MediaFormat_MEDIA_FORMAT_JPG:
-		return "jpeg"
-	case mediav1.MediaFormat_MEDIA_FORMAT_PNG:
-		return "png"
-	case mediav1.MediaFormat_MEDIA_FORMAT_WEBP:
-		return "webp"
-	default:
-		return "unknown"
-	}
-}
 
 func (c *MediaConsumer) HandleAuditMedia(ctx context.Context, message *mediav1.AuditMedia) (ack bool, err error) {
 	// Implementation for handling audit media message

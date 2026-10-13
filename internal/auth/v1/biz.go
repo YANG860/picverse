@@ -10,7 +10,6 @@ import (
 	"rednote/packages/errmsg"
 	"rednote/packages/jwt"
 	"rednote/packages/utils"
-	"regexp"
 
 	"github.com/bwmarrin/snowflake"
 	"golang.org/x/crypto/bcrypt"
@@ -41,10 +40,10 @@ func NewAuthUsecaseImpl(repo AuthRepository, manager jwt.Manager, db *gorm.DB) *
 
 func (u *AuthUsecaseImpl) Register(ctx context.Context, req *authv1.RegisterRequest) (*authv1.RegisterResponse, error) {
 
-	if !ValidateEmail(req.Credential.GetEmail()) {
+	if !utils.ValidateEmail(req.Credential.GetEmail()) {
 		return &authv1.RegisterResponse{Fail: true, Err: errmsg.InvalidEmail}, nil
 	}
-	if !ValidatePassword(req.Credential.GetPassword()) {
+	if !utils.ValidatePassword(req.Credential.GetPassword()) {
 		return &authv1.RegisterResponse{Fail: true, Err: errmsg.InvalidPassword}, nil
 	}
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Credential.GetPassword()), bcrypt.DefaultCost)
@@ -76,38 +75,11 @@ func (u *AuthUsecaseImpl) Register(ctx context.Context, req *authv1.RegisterRequ
 	}, nil
 }
 
-func ValidateEmail(email string) bool {
-	if len(email) == 0 {
-		return false
-	}
-	// RFC 5322 邮箱格式正则表达式
-	emailRegex := regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
-	return emailRegex.MatchString(email)
-}
-
-func ValidatePassword(pw string) bool {
-	if len(pw) == 0 {
-		return false
-	}
-	// 密码最少8位
-	if len(pw) < 8 {
-		return false
-	}
-	if len(pw) > 32 {
-		return false
-	}
-	// 检查是否包含大小写字母和数字
-	hasUpper := regexp.MustCompile(`[A-Z]`).MatchString(pw)
-	hasLower := regexp.MustCompile(`[a-z]`).MatchString(pw)
-	hasDigit := regexp.MustCompile(`[0-9]`).MatchString(pw)
-	return hasUpper && hasLower && hasDigit
-}
-
 func (u *AuthUsecaseImpl) Login(ctx context.Context, req *authv1.LoginRequest) (*authv1.LoginResponse, error) {
-	if !ValidateEmail(req.Credential.GetEmail()) {
+	if !utils.ValidateEmail(req.Credential.GetEmail()) {
 		return &authv1.LoginResponse{Fail: true, Err: errmsg.IncorrectCredential}, nil
 	}
-	if !ValidatePassword(req.Credential.GetPassword()) {
+	if !utils.ValidatePassword(req.Credential.GetPassword()) {
 		return &authv1.LoginResponse{Fail: true, Err: errmsg.IncorrectCredential}, nil
 	}
 
