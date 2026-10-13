@@ -28,21 +28,32 @@ message CreateUserResponse {
   UserProfile profile = 3;
 }
 
-message UpdateUserRequest {
+message UpdateUserProfileRequest {
   string uid = 1 [(buf.validate.field).string.min_len = 1];
+
   google.protobuf.StringValue name = 2;
-
-  media.v1.MediaFile avatar = 3;
   google.protobuf.StringValue bio = 4;
-
   common.v1.JsonStr metadata = 5;
 }
 
-message UpdateUserResponse {
+message UpdateUserProfileResponse {
   bool fail = 1;
   common.v1.Error err = 2;
 
   UserProfile profile = 3;
+}
+
+message UpdateUserAvatarRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  media.v1.MediaFile avatar = 2;
+}
+
+message UpdateUserAvatarResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  UserProfile profile = 3;
+  string old_asset_id = 4; // 返回旧的asset id 用于bff修改引用计数
 }
 
 message GetUserBriefRequest {

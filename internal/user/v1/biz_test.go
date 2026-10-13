@@ -9,9 +9,12 @@ import (
 	mediav1 "rednote/gen/go/media/v1"
 	userv1 "rednote/gen/go/user/v1"
 	common "rednote/internal/common/models"
+	media "rednote/internal/media/models"
 	models "rednote/internal/user/models"
 	"rednote/packages/errmsg"
+	"rednote/packages/utils"
 	"rednote/test/testdb"
+	"rednote/test/testmq"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,7 +28,7 @@ import (
 func newUsecase(t *testing.T) (*UserUsecaseImpl, *gorm.DB) {
 	t.Helper()
 	db := testdb.Setup(t)
-	return NewUserUsecase(NewUserRepo(db), db), db
+	return NewUserUsecase(NewUserRepo(db), db, testmq.New()), db
 }
 
 // setupFollowers 预置两个用户（uid1 粉丝 / uid2 被关注者）
@@ -95,12 +98,12 @@ func TestUserUsecase_CreateUser(t *testing.T) {
 		},
 		{
 			name:    "超长昵称被拒绝",
-			req:     newCreateUserReq("3001", strings.Repeat("好", NameMaxLen+1), "简介", validAvatar()),
+			req:     newCreateUserReq("3001", strings.Repeat("好", utils.NameMaxLen+1), "简介", validAvatar()),
 			wantErr: errmsg.InvalidName,
 		},
 		{
 			name:    "超长简介被拒绝",
-			req:     newCreateUserReq("3001", "小红薯", strings.Repeat("好", BioMaxLen+1), validAvatar()),
+			req:     newCreateUserReq("3001", "小红薯", strings.Repeat("好", utils.BioMaxLen+1), validAvatar()),
 			wantErr: errmsg.InvalidBio,
 		},
 		{
@@ -187,13 +190,13 @@ func TestUserUsecase_CreateUser(t *testing.T) {
 	}
 }
 
-// TestUserUsecase_UpdateUser 部分更新语义：仅更新传入的字段，nil 字段不修改
-func TestUserUsecase_UpdateUser(t *testing.T) {
+// TestUserUsecase_UpdateUserProfile 部分更新语义：仅更新传入的字段，nil 字段不修改（头像由 UpdateUserAvatar 独立更新）
+func TestUserUsecase_UpdateUserProfile(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("无任何更新字段被拒绝", func(t *testing.T) {
 		uc, _ := newUsecase(t)
-		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "3001"})
+		resp, err := uc.UpdateUserProfile(ctx, &userv1.UpdateUserProfileRequest{Uid: "3001"})
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
 		assert.Equal(t, errmsg.InvalidArgument, resp.GetErr())
@@ -201,7 +204,7 @@ func TestUserUsecase_UpdateUser(t *testing.T) {
 
 	t.Run("非法uid被拒绝", func(t *testing.T) {
 		uc, _ := newUsecase(t)
-		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "bad", Name: strVal("新昵称")})
+		resp, err := uc.UpdateUserProfile(ctx, &userv1.UpdateUserProfileRequest{Uid: "bad", Name: strVal("新昵称")})
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
 		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
@@ -210,7 +213,7 @@ func TestUserUsecase_UpdateUser(t *testing.T) {
 	t.Run("非法昵称被拒绝", func(t *testing.T) {
 		uc, db := newUsecase(t)
 		seedProfile(t, db, uid1, "旧昵称", "旧简介", userv1.UserStatus_USER_STATUS_ACTIVE)
-		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "3001", Name: strVal("   ")})
+		resp, err := uc.UpdateUserProfile(ctx, &userv1.UpdateUserProfileRequest{Uid: "3001", Name: strVal("   ")})
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
 		assert.Equal(t, errmsg.InvalidName, resp.GetErr())
@@ -219,28 +222,16 @@ func TestUserUsecase_UpdateUser(t *testing.T) {
 	t.Run("超长简介被拒绝", func(t *testing.T) {
 		uc, db := newUsecase(t)
 		seedProfile(t, db, uid1, "旧昵称", "旧简介", userv1.UserStatus_USER_STATUS_ACTIVE)
-		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "3001", Bio: strVal(strings.Repeat("好", BioMaxLen+1))})
+		resp, err := uc.UpdateUserProfile(ctx, &userv1.UpdateUserProfileRequest{Uid: "3001", Bio: strVal(strings.Repeat("好", utils.BioMaxLen+1))})
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
 		assert.Equal(t, errmsg.InvalidBio, resp.GetErr())
 	})
 
-	t.Run("非法头像被拒绝", func(t *testing.T) {
-		uc, db := newUsecase(t)
-		seedProfile(t, db, uid1, "旧昵称", "旧简介", userv1.UserStatus_USER_STATUS_ACTIVE)
-		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "3001", Avatar: &mediav1.MediaFile{
-			Base:    &commonv1.BaseModel{Id: "10001"},
-			AssetId: "not-a-number",
-		}})
-		require.NoError(t, err)
-		assert.True(t, resp.GetFail())
-		assert.Equal(t, errmsg.InvalidAvatar, resp.GetErr())
-	})
-
 	t.Run("非法 metadata 被拒绝", func(t *testing.T) {
 		uc, db := newUsecase(t)
 		seedProfile(t, db, uid1, "旧昵称", "旧简介", userv1.UserStatus_USER_STATUS_ACTIVE)
-		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "3001", Metadata: &commonv1.JsonStr{Payload: "not-json"}})
+		resp, err := uc.UpdateUserProfile(ctx, &userv1.UpdateUserProfileRequest{Uid: "3001", Metadata: &commonv1.JsonStr{Payload: "not-json"}})
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
 		assert.Equal(t, errmsg.InvalidArgument, resp.GetErr())
@@ -248,7 +239,7 @@ func TestUserUsecase_UpdateUser(t *testing.T) {
 
 	t.Run("用户不存在返回 NotFound", func(t *testing.T) {
 		uc, _ := newUsecase(t)
-		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "3001", Name: strVal("新昵称")})
+		resp, err := uc.UpdateUserProfile(ctx, &userv1.UpdateUserProfileRequest{Uid: "3001", Name: strVal("新昵称")})
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
 		assert.Equal(t, errmsg.NotFound, resp.GetErr())
@@ -258,7 +249,7 @@ func TestUserUsecase_UpdateUser(t *testing.T) {
 		uc, db := newUsecase(t)
 		seedProfile(t, db, uid1, "旧昵称", "旧简介", userv1.UserStatus_USER_STATUS_ACTIVE)
 
-		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "3001", Name: strVal("新昵称")})
+		resp, err := uc.UpdateUserProfile(ctx, &userv1.UpdateUserProfileRequest{Uid: "3001", Name: strVal("新昵称")})
 		require.NoError(t, err)
 		require.False(t, resp.GetFail())
 		assert.Equal(t, "新昵称", resp.GetProfile().GetBrief().GetName())
@@ -268,15 +259,14 @@ func TestUserUsecase_UpdateUser(t *testing.T) {
 		assert.Equal(t, "新昵称", got.Name)
 		assert.Equal(t, "旧简介", got.Bio, "未传入的字段不应被修改")
 		assert.Equal(t, datatypes.JSONMap{"theme": "dark"}, got.MetaData, "未传入的字段不应被修改")
-		assert.Equal(t, "avatar/obj", got.Avatar.ObjKey, "未传入的字段不应被修改")
-		assert.Equal(t, userv1.UserStatus_USER_STATUS_ACTIVE, got.Status, "状态不在更新范围")
+		assert.Equal(t, int64(uid1*100), got.Avatar.AssetID, "头像不在本接口更新范围")
 	})
 
 	t.Run("只更新简介（可清空）", func(t *testing.T) {
 		uc, db := newUsecase(t)
 		seedProfile(t, db, uid1, "旧昵称", "旧简介", userv1.UserStatus_USER_STATUS_ACTIVE)
 
-		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "3001", Bio: strVal("")})
+		resp, err := uc.UpdateUserProfile(ctx, &userv1.UpdateUserProfileRequest{Uid: "3001", Bio: strVal("")})
 		require.NoError(t, err)
 		require.False(t, resp.GetFail())
 
@@ -290,7 +280,7 @@ func TestUserUsecase_UpdateUser(t *testing.T) {
 		uc, db := newUsecase(t)
 		seedProfile(t, db, uid1, "旧昵称", "旧简介", userv1.UserStatus_USER_STATUS_ACTIVE)
 
-		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "3001", Metadata: &commonv1.JsonStr{Payload: "{}"}})
+		resp, err := uc.UpdateUserProfile(ctx, &userv1.UpdateUserProfileRequest{Uid: "3001", Metadata: &commonv1.JsonStr{Payload: "{}"}})
 		require.NoError(t, err)
 		require.False(t, resp.GetFail())
 
@@ -301,30 +291,11 @@ func TestUserUsecase_UpdateUser(t *testing.T) {
 		assert.Equal(t, "旧简介", got.Bio, "未传入的字段不应被修改")
 	})
 
-	t.Run("只更新头像（avatar_id 换新）", func(t *testing.T) {
-		uc, db := newUsecase(t)
-		seedProfile(t, db, uid1, "旧昵称", "旧简介", userv1.UserStatus_USER_STATUS_ACTIVE)
-
-		avatar := validAvatar()
-		avatar.Base.Id = "10002" // 新头像文件 ID，与库中旧值不同
-		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "3001", Avatar: avatar})
-		require.NoError(t, err)
-		require.False(t, resp.GetFail())
-
-		var got models.UserProfile
-		require.NoError(t, db.Where("id = ?", uid1).First(&got).Error)
-		require.NotNil(t, got.Avatar)
-		assert.Equal(t, int64(10002), got.Avatar.ID, "avatar_id 应更新为新头像")
-		assert.Equal(t, "旧昵称", got.Name, "未传入的字段不应被修改")
-		assert.Equal(t, "旧简介", got.Bio, "未传入的字段不应被修改")
-		assert.Equal(t, datatypes.JSONMap{"theme": "dark"}, got.MetaData, "未传入的字段不应被修改")
-	})
-
 	t.Run("组合更新（昵称+简介）", func(t *testing.T) {
 		uc, db := newUsecase(t)
 		seedProfile(t, db, uid1, "旧昵称", "旧简介", userv1.UserStatus_USER_STATUS_ACTIVE)
 
-		resp, err := uc.UpdateUser(ctx, &userv1.UpdateUserRequest{Uid: "3001", Name: strVal("新昵称"), Bio: strVal("新简介")})
+		resp, err := uc.UpdateUserProfile(ctx, &userv1.UpdateUserProfileRequest{Uid: "3001", Name: strVal("新昵称"), Bio: strVal("新简介")})
 		require.NoError(t, err)
 		require.False(t, resp.GetFail())
 		assert.Equal(t, userv1.UserStatus_USER_STATUS_ACTIVE, resp.GetProfile().GetStatus(),
@@ -335,6 +306,90 @@ func TestUserUsecase_UpdateUser(t *testing.T) {
 		assert.Equal(t, "新昵称", got.Name)
 		assert.Equal(t, "新简介", got.Bio)
 		assert.Equal(t, datatypes.JSONMap{"theme": "dark"}, got.MetaData, "未传入的字段不应被修改")
+	})
+}
+
+// TestUserUsecase_UpdateUserAvatar 头像更新独立接口：返回旧资产 ID 供 BFF 调整引用计数
+func TestUserUsecase_UpdateUserAvatar(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("非法uid被拒绝", func(t *testing.T) {
+		uc, _ := newUsecase(t)
+		resp, err := uc.UpdateUserAvatar(ctx, &userv1.UpdateUserAvatarRequest{Uid: "bad", Avatar: validAvatar()})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
+	})
+
+	t.Run("头像缺失被拒绝", func(t *testing.T) {
+		uc, _ := newUsecase(t)
+		resp, err := uc.UpdateUserAvatar(ctx, &userv1.UpdateUserAvatarRequest{Uid: "3001"})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidAvatar, resp.GetErr())
+	})
+
+	t.Run("头像结构不合法被拒绝", func(t *testing.T) {
+		uc, _ := newUsecase(t)
+		resp, err := uc.UpdateUserAvatar(ctx, &userv1.UpdateUserAvatarRequest{Uid: "3001", Avatar: &mediav1.MediaFile{
+			Base:    &commonv1.BaseModel{Id: "10001"},
+			AssetId: "not-a-number",
+		}})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidAvatar, resp.GetErr())
+	})
+
+	t.Run("用户不存在返回 NotFound", func(t *testing.T) {
+		uc, _ := newUsecase(t)
+		resp, err := uc.UpdateUserAvatar(ctx, &userv1.UpdateUserAvatarRequest{Uid: "3001", Avatar: validAvatar()})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.NotFound, resp.GetErr())
+	})
+
+	t.Run("首次设置头像时旧资产为空", func(t *testing.T) {
+		uc, db := newUsecase(t)
+		// 无头像用户（AssetID 为零值）
+		require.NoError(t, db.Create(&models.UserProfile{
+			BaseModel: common.BaseModel{ID: uid1},
+			Name:      "无头像",
+			Avatar:    &media.MediaFile{},
+			Status:    userv1.UserStatus_USER_STATUS_ACTIVE,
+		}).Error)
+
+		resp, err := uc.UpdateUserAvatar(ctx, &userv1.UpdateUserAvatarRequest{Uid: "3001", Avatar: validAvatar()})
+		require.NoError(t, err)
+		require.False(t, resp.GetFail())
+		assert.Empty(t, resp.GetOldAssetId(), "首次设置头像应返回空旧资产")
+
+		var got models.UserProfile
+		require.NoError(t, db.Where("id = ?", uid1).First(&got).Error)
+		require.NotNil(t, got.Avatar)
+		assert.Equal(t, int64(10002), got.Avatar.AssetID, "头像应更新为新资产")
+	})
+
+	t.Run("换头像返回旧资产ID并更新 avatar_id", func(t *testing.T) {
+		uc, db := newUsecase(t)
+		seedProfile(t, db, uid1, "旧昵称", "旧简介", userv1.UserStatus_USER_STATUS_ACTIVE)
+
+		avatar := validAvatar()
+		avatar.Base.Id = "10002" // 新头像文件 ID，与库中旧值不同
+		resp, err := uc.UpdateUserAvatar(ctx, &userv1.UpdateUserAvatarRequest{Uid: "3001", Avatar: avatar})
+		require.NoError(t, err)
+		require.False(t, resp.GetFail())
+
+		// 旧资产 = seed 的 uid1*100 = 300100，BFF 用它对旧资产减引用计数
+		assert.Equal(t, "300100", resp.GetOldAssetId())
+
+		var got models.UserProfile
+		require.NoError(t, db.Where("id = ?", uid1).First(&got).Error)
+		require.NotNil(t, got.Avatar)
+		assert.Equal(t, int64(10002), got.Avatar.ID, "avatar_id 应更新为新头像")
+		assert.Equal(t, int64(10002), got.Avatar.AssetID, "AssetID 应更新为新资产")
+		assert.Equal(t, "旧昵称", got.Name, "昵称不在本接口更新范围")
+		assert.Equal(t, "旧简介", got.Bio, "简介不在本接口更新范围")
+		assert.Equal(t, datatypes.JSONMap{"theme": "dark"}, got.MetaData, "metadata 不在本接口更新范围")
 	})
 }
 

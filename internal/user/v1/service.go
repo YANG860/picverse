@@ -40,9 +40,15 @@ func (s *UserServiceHandler) CreateUser(ctx context.Context, req *connect.Reques
 	return connect.NewResponse(resp), err
 }
 
-// UpdateUser 更新用户资料
-func (s *UserServiceHandler) UpdateUser(ctx context.Context, req *connect.Request[userv1.UpdateUserRequest]) (*connect.Response[userv1.UpdateUserResponse], error) {
-	resp, err := s.Biz.UpdateUser(ctx, req.Msg)
+// UpdateUserProfile 更新用户资料
+func (s *UserServiceHandler) UpdateUserProfile(ctx context.Context, req *connect.Request[userv1.UpdateUserProfileRequest]) (*connect.Response[userv1.UpdateUserProfileResponse], error) {
+	resp, err := s.Biz.UpdateUserProfile(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+// UpdateUserAvatar 更新用户头像
+func (s *UserServiceHandler) UpdateUserAvatar(ctx context.Context, req *connect.Request[userv1.UpdateUserAvatarRequest]) (*connect.Response[userv1.UpdateUserAvatarResponse], error) {
+	resp, err := s.Biz.UpdateUserAvatar(ctx, req.Msg)
 	return connect.NewResponse(resp), err
 }
 

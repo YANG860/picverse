@@ -8,7 +8,9 @@ service UserService {
   // 创建用户
   rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
   // 更新资料
-  rpc UpdateUser(UpdateUserRequest) returns (UpdateUserResponse);
+  rpc UpdateUserProfile(UpdateUserProfileRequest) returns (UpdateUserProfileResponse);
+  // 更新头像
+  rpc UpdateUserAvatar(UpdateUserAvatarRequest) returns (UpdateUserAvatarResponse);
   // 获取简介，批处理
   rpc GetUserBrief(GetUserBriefRequest) returns (GetUserBriefResponse);
   // 获取详细资料
