@@ -20,7 +20,7 @@ import (
 
 type OutBoxPoller struct {
 	DB *gorm.DB
-	MQ *mq.JetStreamClient
+	MQ mq.MQClient
 
 	Repo commonv1.OutBoxRepository
 
@@ -38,7 +38,7 @@ type OutBoxPoller struct {
 	cancel context.CancelFunc
 }
 
-func NewPoller(cfg *config.Config, db *gorm.DB, mq *mq.JetStreamClient, lf logger.LoggerFactory, repo commonv1.OutBoxRepository) *OutBoxPoller {
+func NewPoller(cfg *config.Config, db *gorm.DB, mq mq.MQClient, lf logger.LoggerFactory, repo commonv1.OutBoxRepository) *OutBoxPoller {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &OutBoxPoller{
 		DB:   db,
