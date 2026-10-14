@@ -169,23 +169,47 @@ func TestUserUsecase_CreateUser(t *testing.T) {
 			if tc.wantErr != nil {
 				assert.True(t, resp.GetFail())
 				assert.Equal(t, tc.wantErr, resp.GetErr())
+				assert.Nil(t, resp.GetProfile(), "被拒绝的请求不应返回资料")
 				var cnt int64
 				require.NoError(t, db.Model(&models.UserProfile{}).Count(&cnt).Error)
 				assert.Equal(t, baseCount, cnt, "被拒绝的请求不应落库")
 				return
 			}
 
+			// Assert：响应完整字段
 			assert.False(t, resp.GetFail())
+			assert.Nil(t, resp.GetErr())
 			require.NotNil(t, resp.GetProfile())
 			assert.Equal(t, "3001", resp.GetProfile().GetBrief().GetUid())
 			assert.Equal(t, "小红薯", resp.GetProfile().GetBrief().GetName())
+			assert.Equal(t, "简介", resp.GetProfile().GetBio())
 			assert.Equal(t, userv1.UserStatus_USER_STATUS_ACTIVE, resp.GetProfile().GetStatus())
+			assert.Zero(t, resp.GetProfile().GetStat().GetFollowers(), "新建用户粉丝数应为 0")
+			assert.Zero(t, resp.GetProfile().GetStat().GetFollowings(), "新建用户关注数应为 0")
 
-			// 落库校验
+			// 落库校验：全部字段完整回读
 			var got models.UserProfile
 			require.NoError(t, db.Where("id = ?", uid1).First(&got).Error)
 			assert.Equal(t, "小红薯", got.Name)
+			assert.Equal(t, "简介", got.Bio)
+			assert.Equal(t, userv1.UserStatus_USER_STATUS_ACTIVE, got.Status)
+			assert.Zero(t, got.Followers)
+			assert.Zero(t, got.Followings)
+			assert.NotZero(t, got.CreatedAt, "创建时间应自动填充")
 			assert.Empty(t, got.MetaData, "metadata 空值应落库为 {}")
+
+			// 头像嵌入列完整回读
+			require.NotNil(t, got.Avatar, "头像应落库")
+			assert.Equal(t, int64(10001), got.Avatar.ID)
+			assert.Equal(t, int64(10002), got.Avatar.AssetID)
+			assert.Equal(t, mediav1.MediaFileType_MEDIA_FILE_TYPE_ORIGIN, got.Avatar.Type)
+			assert.Equal(t, "avatar/obj", got.Avatar.ObjKey)
+			assert.Equal(t, "rednote", got.Avatar.Bucket)
+			assert.Equal(t, "abc", got.Avatar.Sha256Sum)
+			assert.Equal(t, int64(2048), got.Avatar.SizeBytes)
+			assert.Equal(t, mediav1.MediaFormat_MEDIA_FORMAT_WEBP, got.Avatar.Format)
+			assert.Equal(t, int64(100), got.Avatar.Height)
+			assert.Equal(t, int64(100), got.Avatar.Width)
 		})
 	}
 }
@@ -200,6 +224,7 @@ func TestUserUsecase_UpdateUserProfile(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
 		assert.Equal(t, errmsg.InvalidArgument, resp.GetErr())
+		assert.Nil(t, resp.GetProfile(), "失败响应不应携带资料")
 	})
 
 	t.Run("非法uid被拒绝", func(t *testing.T) {
@@ -208,6 +233,7 @@ func TestUserUsecase_UpdateUserProfile(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
 		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
+		assert.Nil(t, resp.GetProfile(), "失败响应不应携带资料")
 	})
 
 	t.Run("非法昵称被拒绝", func(t *testing.T) {
@@ -217,6 +243,7 @@ func TestUserUsecase_UpdateUserProfile(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
 		assert.Equal(t, errmsg.InvalidName, resp.GetErr())
+		assert.Nil(t, resp.GetProfile(), "失败响应不应携带资料")
 	})
 
 	t.Run("超长简介被拒绝", func(t *testing.T) {
@@ -226,6 +253,7 @@ func TestUserUsecase_UpdateUserProfile(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
 		assert.Equal(t, errmsg.InvalidBio, resp.GetErr())
+		assert.Nil(t, resp.GetProfile(), "失败响应不应携带资料")
 	})
 
 	t.Run("非法 metadata 被拒绝", func(t *testing.T) {
@@ -235,6 +263,7 @@ func TestUserUsecase_UpdateUserProfile(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
 		assert.Equal(t, errmsg.InvalidArgument, resp.GetErr())
+		assert.Nil(t, resp.GetProfile(), "失败响应不应携带资料")
 	})
 
 	t.Run("用户不存在返回 NotFound", func(t *testing.T) {
@@ -243,6 +272,7 @@ func TestUserUsecase_UpdateUserProfile(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
 		assert.Equal(t, errmsg.NotFound, resp.GetErr())
+		assert.Nil(t, resp.GetProfile(), "失败响应不应携带资料")
 	})
 
 	t.Run("只更新昵称", func(t *testing.T) {
@@ -319,6 +349,7 @@ func TestUserUsecase_UpdateUserAvatar(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
 		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
+		assert.Nil(t, resp.GetProfile(), "失败响应不应携带资料")
 	})
 
 	t.Run("头像缺失被拒绝", func(t *testing.T) {
@@ -327,6 +358,7 @@ func TestUserUsecase_UpdateUserAvatar(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
 		assert.Equal(t, errmsg.InvalidAvatar, resp.GetErr())
+		assert.Nil(t, resp.GetProfile(), "失败响应不应携带资料")
 	})
 
 	t.Run("头像结构不合法被拒绝", func(t *testing.T) {
@@ -338,6 +370,7 @@ func TestUserUsecase_UpdateUserAvatar(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
 		assert.Equal(t, errmsg.InvalidAvatar, resp.GetErr())
+		assert.Nil(t, resp.GetProfile(), "失败响应不应携带资料")
 	})
 
 	t.Run("用户不存在返回 NotFound", func(t *testing.T) {
@@ -346,6 +379,7 @@ func TestUserUsecase_UpdateUserAvatar(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
 		assert.Equal(t, errmsg.NotFound, resp.GetErr())
+		assert.Nil(t, resp.GetProfile(), "失败响应不应携带资料")
 	})
 
 	t.Run("首次设置头像时旧资产为空", func(t *testing.T) {

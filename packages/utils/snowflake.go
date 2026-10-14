@@ -17,12 +17,13 @@ func init() {
 }
 
 // InitSnowflake 初始化雪花节点，machineID 范围 0-1023
+// 初始化失败时保留原节点不变，避免破坏调用方正在使用的全局 Node
 func InitSnowflake(machineID int64) error {
-	var err error
-	Node, err = snowflake.NewNode(machineID)
+	node, err := snowflake.NewNode(machineID)
 	if err != nil {
 		return fmt.Errorf("初始化雪花节点失败: %w", err)
 	}
+	Node = node
 	return nil
 }
 

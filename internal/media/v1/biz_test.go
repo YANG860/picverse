@@ -49,6 +49,7 @@ func TestMediaUsecase_UploadMedia(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
 		assert.Equal(t, errmsg.InvalidFormat, resp.GetErr())
+		assert.Nil(t, resp.GetAsset(), "被拒绝的请求不应返回资产")
 		assert.Zero(t, mqc.Count(), "被拒绝的请求不应发消息")
 	})
 
@@ -61,6 +62,7 @@ func TestMediaUsecase_UploadMedia(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
 		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
+		assert.Nil(t, resp.GetAsset(), "被拒绝的请求不应返回资产")
 		assert.Zero(t, mqc.Count())
 	})
 
@@ -72,13 +74,21 @@ func TestMediaUsecase_UploadMedia(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.False(t, resp.GetFail())
+		assert.Nil(t, resp.GetErr())
 
 		// 响应：资产 + 含对象键的签名 URL + 过期时间
+		require.NotNil(t, resp.GetAsset())
 		id, err := strconv.ParseInt(resp.GetAsset().GetBase().GetId(), 10, 64)
 		require.NoError(t, err)
 		key := utils.BuildKey(id, mediav1.MediaFileType_MEDIA_FILE_TYPE_ORIGIN, mediav1.MediaFormat_MEDIA_FORMAT_PNG)
 		assert.Contains(t, resp.GetSignedUrl(), key, "签名 URL 应包含对象键")
-		assert.NotZero(t, resp.GetExpireAt())
+		assert.Greater(t, resp.GetExpireAt(), time.Now().UnixMilli(), "过期时间应在未来")
+
+		// 响应：资产字段完整
+		assert.Equal(t, mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_UPLOADING, resp.GetAsset().GetStatus())
+		assert.Equal(t, "3001", resp.GetAsset().GetUploaderId())
+		assert.Zero(t, resp.GetAsset().GetRefCount(), "新建资产引用计数应为 0")
+		assert.NotZero(t, resp.GetAsset().GetBase().GetCreatedAt())
 
 		// DB：资产已落库（UPLOADING）
 		var got models.MediaAsset

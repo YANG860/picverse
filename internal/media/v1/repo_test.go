@@ -187,12 +187,16 @@ func TestSetMediaAssetStatus_CAS(t *testing.T) {
 	repo, db := newRepo(t)
 	ctx := context.Background()
 
-	seedAsset(t, db, assetID1, mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_ACTIVE, 0, time.Now().UnixMilli())
-
 	t.Run("from 匹配时更新成功", func(t *testing.T) {
+		// Arrange：独立资产，与其他子测试零共享
+		seedAsset(t, db, assetID1, mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_ACTIVE, 0, time.Now().UnixMilli())
+
+		// Act
 		info, err := repo.SetMediaAssetStatus(ctx, assetID1,
 			mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_ACTIVE,
 			mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_DELETED)
+
+		// Assert
 		require.NoError(t, err)
 		assert.Equal(t, int64(1), info.RowsAffected)
 
@@ -202,15 +206,21 @@ func TestSetMediaAssetStatus_CAS(t *testing.T) {
 	})
 
 	t.Run("from 不匹配时不更新（CAS 语义）", func(t *testing.T) {
-		info, err := repo.SetMediaAssetStatus(ctx, assetID1,
+		// Arrange：当前状态为 ACTIVE，而 CAS 要求的 from 也是 ACTIVE → 改为构造不同起点
+		seedAsset(t, db, assetID2, mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_PROCESSING, 0, time.Now().UnixMilli())
+
+		// Act：期望从 ACTIVE 转 BANNED，但库中是 PROCESSING
+		info, err := repo.SetMediaAssetStatus(ctx, assetID2,
 			mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_ACTIVE,
 			mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_BANNED)
+
+		// Assert
 		require.NoError(t, err)
 		assert.Equal(t, int64(0), info.RowsAffected)
 
 		var got models.MediaAsset
-		require.NoError(t, db.Where("id = ?", assetID1).First(&got).Error)
-		assert.Equal(t, mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_DELETED, got.Status, "状态不应被改变")
+		require.NoError(t, db.Where("id = ?", assetID2).First(&got).Error)
+		assert.Equal(t, mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_PROCESSING, got.Status, "状态不应被改变")
 	})
 }
 

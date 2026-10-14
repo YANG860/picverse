@@ -421,59 +421,98 @@ func followersOf(t *testing.T, db *gorm.DB, id int64) int64 {
 	return p.Followers
 }
 
+// seedFollowPair 造一对互不相交的用户（fan/following），初始计数 Followers 5 / Followings 7。
+// 每个子测试传入各自的 ID 对并自行 seed，子测试之间零共享可变状态，可单独运行（FIRST-Independent）。
+func seedFollowPair(t *testing.T, db *gorm.DB, fanID, followingID int64) (int64, int64) {
+	t.Helper()
+	seedProfile(t, db, fanID, "fan", "", userv1.UserStatus_USER_STATUS_ACTIVE) // Followers 5, Followings 7
+	seedProfile(t, db, followingID, "following", "", userv1.UserStatus_USER_STATUS_ACTIVE)
+	return fanID, followingID
+}
+
 func TestSetFollow(t *testing.T) {
 	repo, db := newRepo(t)
 	ctx := context.Background()
 
-	seedProfile(t, db, uid1, "fan", "", userv1.UserStatus_USER_STATUS_ACTIVE) // Followers 5, Followings 7
-	seedProfile(t, db, uid2, "following", "", userv1.UserStatus_USER_STATUS_ACTIVE)
-
 	t.Run("新建关注关系并递增双端计数", func(t *testing.T) {
-		ok, err := repo.SetFollow(ctx, uid1, uid2)
+		// Arrange：独立用户对
+		fan, target := seedFollowPair(t, db, 4001, 4002)
+
+		// Act
+		ok, err := repo.SetFollow(ctx, fan, target)
+
+		// Assert
 		require.NoError(t, err)
 		assert.True(t, ok)
 
 		var follow models.UserFollow
-		require.NoError(t, db.Where("fan_id = ? AND following_id = ?", uid1, uid2).First(&follow).Error)
+		require.NoError(t, db.Where("fan_id = ? AND following_id = ?", fan, target).First(&follow).Error)
+		assert.Equal(t, fan, follow.FanID)
+		assert.Equal(t, target, follow.FollowingID)
+		assert.NotZero(t, follow.CreatedAt, "关注行应自动填充 created_at")
 
-		assert.Equal(t, int64(8), followingsOf(t, db, uid1), "fan.followings 应 +1")
-		assert.Equal(t, int64(6), followersOf(t, db, uid2), "following.followers 应 +1")
+		assert.Equal(t, int64(8), followingsOf(t, db, fan), "fan.followings 应 +1")
+		assert.Equal(t, int64(6), followersOf(t, db, target), "following.followers 应 +1")
 	})
 
 	t.Run("重复关注幂等：不重复计数", func(t *testing.T) {
-		ok, err := repo.SetFollow(ctx, uid1, uid2)
+		// Arrange：先建立一次关注（8/6）
+		fan, target := seedFollowPair(t, db, 4003, 4004)
+		ok, err := repo.SetFollow(ctx, fan, target)
+		require.NoError(t, err)
+		require.True(t, ok)
+
+		// Act：对同一目标再次关注
+		ok, err = repo.SetFollow(ctx, fan, target)
+
+		// Assert
 		require.NoError(t, err)
 		assert.True(t, ok, "关系已存在时应幂等成功")
 
 		var cnt int64
 		require.NoError(t, db.Model(&models.UserFollow{}).
-			Where("fan_id = ? AND following_id = ?", uid1, uid2).Count(&cnt).Error)
+			Where("fan_id = ? AND following_id = ?", fan, target).Count(&cnt).Error)
 		assert.Equal(t, int64(1), cnt, "不应产生重复关注行")
-		assert.Equal(t, int64(8), followingsOf(t, db, uid1), "幂等调用不应膨胀计数")
-		assert.Equal(t, int64(6), followersOf(t, db, uid2), "幂等调用不应膨胀计数")
+		assert.Equal(t, int64(8), followingsOf(t, db, fan), "幂等调用不应膨胀计数")
+		assert.Equal(t, int64(6), followersOf(t, db, target), "幂等调用不应膨胀计数")
 	})
 
 	t.Run("目标用户不存在：返回 false 且不落库", func(t *testing.T) {
-		ok, err := repo.SetFollow(ctx, uid1, 999999)
+		// Arrange
+		fan, _ := seedFollowPair(t, db, 4005, 4006)
+		const missing int64 = 999999
+
+		// Act
+		ok, err := repo.SetFollow(ctx, fan, missing)
+
+		// Assert
 		require.NoError(t, err)
 		assert.False(t, ok)
 
 		var cnt int64
 		require.NoError(t, db.Model(&models.UserFollow{}).
-			Where("fan_id = ? AND following_id = ?", uid1, 999999).Count(&cnt).Error)
+			Where("fan_id = ? AND following_id = ?", fan, missing).Count(&cnt).Error)
 		assert.Zero(t, cnt)
-		assert.Equal(t, int64(8), followingsOf(t, db, uid1), "失败不应改计数")
+		assert.Equal(t, int64(7), followingsOf(t, db, fan), "失败不应改计数")
+		assert.Equal(t, int64(5), followersOf(t, db, fan), "失败不应改计数")
 	})
 
 	t.Run("自关注被拒绝", func(t *testing.T) {
-		ok, err := repo.SetFollow(ctx, uid1, uid1)
+		// Arrange
+		fan, _ := seedFollowPair(t, db, 4007, 4008)
+
+		// Act
+		ok, err := repo.SetFollow(ctx, fan, fan)
+
+		// Assert
 		require.NoError(t, err)
 		assert.False(t, ok)
 
 		var cnt int64
 		require.NoError(t, db.Model(&models.UserFollow{}).
-			Where("fan_id = ? AND following_id = ?", uid1, uid1).Count(&cnt).Error)
+			Where("fan_id = ? AND following_id = ?", fan, fan).Count(&cnt).Error)
 		assert.Zero(t, cnt)
+		assert.Equal(t, int64(7), followingsOf(t, db, fan), "自关注不应改计数")
 	})
 }
 
@@ -483,29 +522,37 @@ func TestSetUnFollow(t *testing.T) {
 	repo, db := newRepo(t)
 	ctx := context.Background()
 
-	seedProfile(t, db, uid1, "fan", "", userv1.UserStatus_USER_STATUS_ACTIVE)
-	seedProfile(t, db, uid2, "following", "", userv1.UserStatus_USER_STATUS_ACTIVE)
-
 	t.Run("取关成功并递减双端计数", func(t *testing.T) {
-		ok, err := repo.SetFollow(ctx, uid1, uid2)
+		// Arrange：先建立关注（8/6）
+		fan, target := seedFollowPair(t, db, 4101, 4102)
+		ok, err := repo.SetFollow(ctx, fan, target)
 		require.NoError(t, err)
 		require.True(t, ok)
+		require.Equal(t, int64(8), followingsOf(t, db, fan))
+		require.Equal(t, int64(6), followersOf(t, db, target))
 
-		require.NoError(t, repo.SetUnFollow(ctx, uid1, uid2))
+		// Act
+		require.NoError(t, repo.SetUnFollow(ctx, fan, target))
 
+		// Assert
 		var cnt int64
 		require.NoError(t, db.Model(&models.UserFollow{}).
-			Where("fan_id = ? AND following_id = ?", uid1, uid2).Count(&cnt).Error)
+			Where("fan_id = ? AND following_id = ?", fan, target).Count(&cnt).Error)
 		assert.Zero(t, cnt, "关注关系应被删除")
-		assert.Equal(t, int64(7), followingsOf(t, db, uid1), "fan.followings 应 -1")
-		assert.Equal(t, int64(5), followersOf(t, db, uid2), "following.followers 应 -1")
+		assert.Equal(t, int64(7), followingsOf(t, db, fan), "fan.followings 应 -1")
+		assert.Equal(t, int64(5), followersOf(t, db, target), "following.followers 应 -1")
 	})
 
 	t.Run("未关注时幂等成功且不递减计数", func(t *testing.T) {
-		require.NoError(t, repo.SetUnFollow(ctx, uid1, uid2))
+		// Arrange：从未建立关注，初始计数即 7/5
+		fan, target := seedFollowPair(t, db, 4103, 4104)
 
-		assert.Equal(t, int64(7), followingsOf(t, db, uid1), "关系不存在不应递减")
-		assert.Equal(t, int64(5), followersOf(t, db, uid2), "关系不存在不应递减")
+		// Act
+		require.NoError(t, repo.SetUnFollow(ctx, fan, target))
+
+		// Assert
+		assert.Equal(t, int64(7), followingsOf(t, db, fan), "关系不存在不应递减")
+		assert.Equal(t, int64(5), followersOf(t, db, target), "关系不存在不应递减")
 	})
 }
 
@@ -537,8 +584,17 @@ func TestGetFollowings(t *testing.T) {
 		require.Len(t, follows, 2)
 		assert.Equal(t, uid3, follows[0].FollowingID, "较新的关注应在前")
 		assert.Equal(t, uid2, follows[1].FollowingID)
+		assert.Equal(t, uid1, follows[0].FanID, "关注行应携带 fan_id")
+		assert.Equal(t, base-1000, follows[0].CreatedAt, "created_at 应为造数时设置的值")
+		assert.Equal(t, base-2000, follows[1].CreatedAt)
 		require.NotNil(t, follows[0].Following, "Preload 应带出被关注用户资料")
 		assert.Equal(t, "target-2", follows[0].Following.Name)
+	})
+
+	t.Run("limit 为 0 返回空集", func(t *testing.T) {
+		follows, err := repo.GetFollowings(ctx, uid1, base, 0)
+		require.NoError(t, err)
+		assert.Empty(t, follows)
 	})
 
 	t.Run("游标 before 严格小于", func(t *testing.T) {
@@ -546,6 +602,7 @@ func TestGetFollowings(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, follows, 1)
 		assert.Equal(t, uid2, follows[0].FollowingID)
+		assert.Equal(t, base-2000, follows[0].CreatedAt)
 	})
 
 	t.Run("limit 生效", func(t *testing.T) {
@@ -568,33 +625,49 @@ func TestGetFollowingRelation(t *testing.T) {
 	repo, db := newRepo(t)
 	ctx := context.Background()
 
-	seedProfile(t, db, uid1, "fan", "", userv1.UserStatus_USER_STATUS_ACTIVE)
-	seedProfile(t, db, uid2, "following", "", userv1.UserStatus_USER_STATUS_ACTIVE)
-
 	t.Run("无关系时双向 false", func(t *testing.T) {
-		isFollowing, isFollower, err := repo.GetFollowingRelation(ctx, uid1, uid2)
+		// Arrange
+		fan, target := seedFollowPair(t, db, 4201, 4202)
+
+		// Act
+		isFollowing, isFollower, err := repo.GetFollowingRelation(ctx, fan, target)
+
+		// Assert
 		require.NoError(t, err)
 		assert.False(t, isFollowing)
 		assert.False(t, isFollower)
 	})
 
 	t.Run("单向关注", func(t *testing.T) {
-		ok, err := repo.SetFollow(ctx, uid1, uid2)
+		// Arrange：fan → target
+		fan, target := seedFollowPair(t, db, 4203, 4204)
+		ok, err := repo.SetFollow(ctx, fan, target)
 		require.NoError(t, err)
 		require.True(t, ok)
 
-		isFollowing, isFollower, err := repo.GetFollowingRelation(ctx, uid1, uid2)
+		// Act
+		isFollowing, isFollower, err := repo.GetFollowingRelation(ctx, fan, target)
+
+		// Assert
 		require.NoError(t, err)
-		assert.True(t, isFollowing, "uid1 关注了 uid2")
-		assert.False(t, isFollower, "uid2 未关注 uid1")
+		assert.True(t, isFollowing, "fan 关注了 target")
+		assert.False(t, isFollower, "target 未关注 fan")
 	})
 
 	t.Run("互相关注", func(t *testing.T) {
-		ok, err := repo.SetFollow(ctx, uid2, uid1)
+		// Arrange：双向关注
+		fan, target := seedFollowPair(t, db, 4205, 4206)
+		ok, err := repo.SetFollow(ctx, fan, target)
+		require.NoError(t, err)
+		require.True(t, ok)
+		ok, err = repo.SetFollow(ctx, target, fan)
 		require.NoError(t, err)
 		require.True(t, ok)
 
-		isFollowing, isFollower, err := repo.GetFollowingRelation(ctx, uid1, uid2)
+		// Act
+		isFollowing, isFollower, err := repo.GetFollowingRelation(ctx, fan, target)
+
+		// Assert
 		require.NoError(t, err)
 		assert.True(t, isFollowing)
 		assert.True(t, isFollower)
