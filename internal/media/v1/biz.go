@@ -140,6 +140,8 @@ func (u *MediaUsecaseImpl) GetMediaAssets(ctx context.Context, req *mediav1.GetM
 			results = append(results, &mediav1.MediaAssetResult{
 				Fail: true,
 				Err:  errmsg.InvalidID,
+				// 非法串无法规范化，原样回填，保证调用方能定位失败项
+				Id: v,
 			})
 		} else {
 			ids = append(ids, id.Int64())
@@ -156,8 +158,9 @@ func (u *MediaUsecaseImpl) GetMediaAssets(ctx context.Context, req *mediav1.GetM
 		found := false
 		for _, asset := range assets {
 			if asset.ID == id {
-				// 正确返回
+				// 正确返回：回填请求 id，与结果一一对应
 				results = append(results, &mediav1.MediaAssetResult{
+					Id:    snowflake.ParseInt64(id).String(),
 					Asset: asset.ToProto(),
 				})
 				found = true
@@ -165,8 +168,9 @@ func (u *MediaUsecaseImpl) GetMediaAssets(ctx context.Context, req *mediav1.GetM
 			}
 		}
 		if !found {
-			// 无结果
+			// 无结果：失败项同样必须回填请求 id
 			results = append(results, &mediav1.MediaAssetResult{
+				Id:   snowflake.ParseInt64(id).String(),
 				Fail: true,
 				Err:  errmsg.NotFound,
 			})

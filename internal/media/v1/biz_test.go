@@ -162,11 +162,41 @@ func TestMediaUsecase_GetMediaAssets(t *testing.T) {
 		// 非法 ID 结果先返回，其后按有效 ID 顺序
 		assert.True(t, resp.GetResults()[0].GetFail())
 		assert.Equal(t, errmsg.InvalidID, resp.GetResults()[0].GetErr())
+		assert.Equal(t, "bad", resp.GetResults()[0].GetId(), "失败项应回填请求串")
+		assert.Nil(t, resp.GetResults()[0].GetAsset())
 
 		assert.False(t, resp.GetResults()[1].GetFail())
+		assert.Equal(t, strconv.FormatInt(assetID1, 10), resp.GetResults()[1].GetId(), "成功项应回填 id")
 		assert.Equal(t, assetID1, mustParseID(t, resp.GetResults()[1].GetAsset().GetBase().GetId()))
 
 		assert.True(t, resp.GetResults()[2].GetFail())
+		assert.Equal(t, errmsg.NotFound, resp.GetResults()[2].GetErr())
+		assert.Equal(t, "999999", resp.GetResults()[2].GetId(), "NotFound 项必须回填 id（回归）")
+		assert.Nil(t, resp.GetResults()[2].GetAsset())
+	})
+
+	// 回归：NotFound / 非法 ID 结果曾漏回填 id，调用方无法定位失败项
+	t.Run("全部未命中时每项都回填请求 id（回归）", func(t *testing.T) {
+		// Arrange
+		uc, _, _, _ := newUsecase(t)
+
+		// Act
+		resp, err := uc.GetMediaAssets(ctx, &mediav1.GetMediaAssetsRequest{
+			Ids: []string{"111111", "bad-id", "222222"},
+		})
+
+		// Assert：非法 ID 项先返回，其余按有效 ID 顺序，每项都携带对应请求 id
+		require.NoError(t, err)
+		require.Len(t, resp.GetResults(), 3)
+
+		for i, wantID := range []string{"bad-id", "111111", "222222"} {
+			got := resp.GetResults()[i]
+			assert.True(t, got.GetFail())
+			assert.Equal(t, wantID, got.GetId(), "每个结果都必须回填对应请求 id")
+			assert.Nil(t, got.GetAsset())
+		}
+		assert.Equal(t, errmsg.InvalidID, resp.GetResults()[0].GetErr())
+		assert.Equal(t, errmsg.NotFound, resp.GetResults()[1].GetErr())
 		assert.Equal(t, errmsg.NotFound, resp.GetResults()[2].GetErr())
 	})
 
@@ -200,15 +230,22 @@ func TestMediaUsecase_GetMediaAssetFiles(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, resp.GetFiles(), 3)
 
-		// 非法 query 结果先返回，其后按有效 query 顺序
+		// 非法 query 结果先返回，其后按有效 query 顺序；每项都携带原 query
 		assert.True(t, resp.GetFiles()[0].GetFail())
 		assert.Equal(t, errmsg.InvalidID, resp.GetFiles()[0].GetErr())
+		assert.Equal(t, "bad", resp.GetFiles()[0].GetQuery().GetId())
+		assert.Equal(t, mediav1.MediaFileType_MEDIA_FILE_TYPE_ORIGIN, resp.GetFiles()[0].GetQuery().GetType())
 
 		assert.False(t, resp.GetFiles()[1].GetFail())
 		assert.Equal(t, int64(4001), mustParseID(t, resp.GetFiles()[1].GetFile().GetBase().GetId()))
+		assert.Equal(t, strconv.FormatInt(assetID1, 10), resp.GetFiles()[1].GetQuery().GetId())
+		assert.Equal(t, mediav1.MediaFileType_MEDIA_FILE_TYPE_ORIGIN, resp.GetFiles()[1].GetQuery().GetType())
 
 		assert.True(t, resp.GetFiles()[2].GetFail())
 		assert.Equal(t, errmsg.NotFound, resp.GetFiles()[2].GetErr())
+		assert.Equal(t, strconv.FormatInt(assetID1, 10), resp.GetFiles()[2].GetQuery().GetId())
+		assert.Equal(t, mediav1.MediaFileType_MEDIA_FILE_TYPE_1080, resp.GetFiles()[2].GetQuery().GetType())
+		assert.Nil(t, resp.GetFiles()[2].GetFile())
 	})
 }
 

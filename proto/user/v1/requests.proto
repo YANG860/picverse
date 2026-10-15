@@ -68,6 +68,9 @@ message UserBriefResult {
   common.v1.Error err = 2;
 
   UserBrief brief = 3;
+
+  // 回填请求的 uid，便于调用方定位失败项（与 media.v1.MediaAssetResult.id 语义一致）
+  string uid = 4 [(buf.validate.field).string.min_len = 1];
 }
 
 message GetUserProfileRequest {

@@ -31,6 +31,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -50,6 +51,76 @@ const TemplateDBName = "test_template"
 
 // scratchPrefix 每用例克隆库的命名前缀，用于区分模板库与业务库。
 const scratchPrefix = "test_"
+
+// 连接瞬时错误（如 connection reset by peer）的重试参数。
+const (
+	connectAttempts     = 5
+	connectRetryBackoff = 200 * time.Millisecond
+)
+
+// ---------- 效率/连接质量追踪（TEST_DB_TRACE=1 时输出各阶段耗时） ----------
+
+// traceEnabled 控制测试库阶段耗时输出，用于排查效率问题。
+var traceEnabled = os.Getenv("TEST_DB_TRACE") != ""
+
+// connRetryTotal 连接重试累计次数（连接质量指标，含所有建连入口）。
+var connRetryTotal atomic.Int64
+
+// tracef 输出测试库阶段耗时，仅 TEST_DB_TRACE=1 时可见。
+func tracef(t *testing.T, format string, args ...any) {
+	if !traceEnabled {
+		return
+	}
+	t.Logf("testdb: "+format, args...)
+}
+
+// ---------- 维护连接与模板检查：进程级复用 ----------
+//
+// 远程测试库单次握手约 300ms，而建库/删库/模板检查本身只需几十毫秒。
+// 逐用例重复建立维护连接是纯浪费（实测占基础设施耗时 1/3 以上），
+// 故进程内共用一条维护连接，模板库存在性也只检查一次。
+
+var (
+	maintOnce    sync.Once
+	maintDB      *gorm.DB
+	maintOpenErr error
+
+	templateOnce sync.Once
+	templateOK   bool
+	templateErr  error
+)
+
+// maintConn 返回进程级共享的维护库连接（仅用于建库 / 删库 / 查模板）。
+func maintConn() (*gorm.DB, error) {
+	maintOnce.Do(func() {
+		dsn, err := maintDSN()
+		if err != nil {
+			maintOpenErr = err
+			return
+		}
+		maintDB, maintOpenErr = openGorm(dsn)
+	})
+	return maintDB, maintOpenErr
+}
+
+// ensureTemplate 进程内只检查一次模板库是否存在，缺失时给出初始化指引。
+func ensureTemplate() error {
+	templateOnce.Do(func() {
+		maint, err := maintConn()
+		if err != nil {
+			templateErr = fmt.Errorf("连接维护库失败: %w", err)
+			return
+		}
+		templateOK, templateErr = databaseExists(maint, TemplateDBName)
+	})
+	if templateErr != nil {
+		return templateErr
+	}
+	if !templateOK {
+		return fmt.Errorf("模板库 %s 不存在，请先运行: go run ./scripts/dbinit", TemplateDBName)
+	}
+	return nil
+}
 
 // dbNameRe 限制数据库名，避免拼接到 CREATE/DROP DATABASE 时出现注入。
 var dbNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -100,7 +171,26 @@ func maintDSN() (string, error) {
 }
 
 // openGorm 建立一个 gorm 连接（配置与生产一致，保证错误翻译行为相同）。
+// 连接远程测试库偶发 connection reset by peer（多包并发克隆 / 网络抖动），
+// 做有限重试消除瞬时失败；属于错误后的退避重试，不是用 sleep 等待结果。
 func openGorm(dsn string) (*gorm.DB, error) {
+	var err error
+	for attempt := 0; attempt < connectAttempts; attempt++ {
+		if attempt > 0 {
+			connRetryTotal.Add(1)
+			time.Sleep(time.Duration(attempt) * connectRetryBackoff)
+		}
+		var db *gorm.DB
+		db, err = openGormOnce(dsn)
+		if err == nil {
+			return db, nil
+		}
+	}
+	return nil, err
+}
+
+// openGormOnce 单次建连尝试。
+func openGormOnce(dsn string) (*gorm.DB, error) {
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
 		Logger:         logger.Default.LogMode(logger.Silent),
 		TranslateError: true,
@@ -241,34 +331,30 @@ func Setup(t *testing.T) *gorm.DB {
 
 	name := scratchName()
 
-	// 模板库必须由 scripts/dbinit 预先建好，这里只做检查并给出明确指引
-	exists, err := templateExists()
-	if err != nil {
+	// 模板库必须由 scripts/dbinit 预先建好，这里只做检查并给出明确指引（进程内缓存）
+	start := time.Now()
+	if err := ensureTemplate(); err != nil {
 		t.Fatalf("testdb: %v", err)
 	}
-	if !exists {
-		t.Fatalf("testdb: 模板库 %s 不存在，请先运行: go run ./scripts/dbinit", TemplateDBName)
-	}
+	tracef(t, "%s 模板检查 %v（累计连接重试 %d）", name, time.Since(start).Round(time.Millisecond), connRetryTotal.Load())
 
+	start = time.Now()
 	db := createAndConnect(t, name)
+	tracef(t, "%s 克隆库就绪总耗时 %v", name, time.Since(start).Round(time.Millisecond))
 
 	t.Cleanup(func() {
+		cleanupStart := time.Now()
 		defer func() {
-			dsn, err := maintDSN()
-			if err != nil {
-				t.Logf("testdb: 解析连接串失败，无法清理测试库 %s: %v", name, err)
-				return
-			}
-			maint, err := openGorm(dsn)
+			tracef(t, "%s 清理库 %v（累计连接重试 %d）", name, time.Since(cleanupStart).Round(time.Millisecond), connRetryTotal.Load())
+		}()
+		defer func() {
+			maint, err := maintConn()
 			if err != nil {
 				t.Logf("testdb: 连接维护库失败，无法清理测试库 %s: %v", name, err)
 				return
 			}
 			if err := dropDB(maint, name); err != nil {
 				t.Logf("testdb: 清理测试库失败: %v（可手动 DROP DATABASE %s）", err, name)
-			}
-			if sqlDB, err := maint.DB(); err == nil {
-				_ = sqlDB.Close()
 			}
 		}()
 		if sqlDB, err := db.DB(); err == nil {
@@ -279,51 +365,32 @@ func Setup(t *testing.T) *gorm.DB {
 	return db
 }
 
-// templateExists 检查模板库是否已由 scripts/dbinit 建好。
-func templateExists() (bool, error) {
-	dsn, err := maintDSN()
-	if err != nil {
-		return false, err
-	}
-	maint, err := openGorm(dsn)
-	if err != nil {
-		return false, fmt.Errorf("连接维护库失败: %w", err)
-	}
-	defer func() {
-		if sqlDB, err := maint.DB(); err == nil {
-			_ = sqlDB.Close()
-		}
-	}()
-	return databaseExists(maint, TemplateDBName)
-}
-
 // createAndConnect 克隆测试库并建立连接；任一步失败直接终止测试，
 // 已克隆的库会被回收，避免残留垃圾库。
 func createAndConnect(t *testing.T, name string) *gorm.DB {
 	t.Helper()
 
-	dsn, err := maintDSN()
-	if err != nil {
-		t.Fatalf("testdb: %v", err)
-	}
-	maint, err := openGorm(dsn)
+	// 建立维护连接（进程级复用，仅首次握手）
+	connStart := time.Now()
+	maint, err := maintConn()
 	if err != nil {
 		t.Fatalf("testdb: 连接维护库失败: %v", err)
 	}
-	defer func() {
-		if sqlDB, err := maint.DB(); err == nil {
-			_ = sqlDB.Close()
-		}
-	}()
+	tracef(t, "%s 维护连接 %v", name, time.Since(connStart).Round(time.Millisecond))
 
+	cloneStart := time.Now()
 	if err := execOn(maint, "CREATE DATABASE "+name+" TEMPLATE "+TemplateDBName); err != nil {
 		t.Fatalf("testdb: 从模板克隆数据库 %s 失败: %v", name, err)
 	}
+	tracef(t, "%s CREATE DATABASE TEMPLATE %v", name, time.Since(cloneStart).Round(time.Millisecond))
+
+	openStart := time.Now()
 	db, err := OpenDB(name)
 	if err != nil {
 		_ = dropDB(maint, name)
 		t.Fatalf("testdb: 连接测试库 %s 失败: %v", name, err)
 	}
+	tracef(t, "%s 测试库建连 %v", name, time.Since(openStart).Round(time.Millisecond))
 	return db
 }
 

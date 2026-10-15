@@ -633,6 +633,82 @@ func TestUserUsecase_BanUser(t *testing.T) {
 	})
 }
 
+// TestUserUsecase_GetUserBrief 批量查询用户简要信息：每个结果必须回填请求 uid
+// （回归：NotFound / 非法 uid 结果曾漏回填，调用方无法定位失败项）
+func TestUserUsecase_GetUserBrief(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("空入参返回空结果", func(t *testing.T) {
+		// Arrange
+		uc, _ := newUsecase(t)
+
+		// Act
+		resp, err := uc.GetUserBrief(ctx, &userv1.GetUserBriefRequest{})
+
+		// Assert
+		require.NoError(t, err)
+		assert.Empty(t, resp.GetResults())
+	})
+
+	t.Run("混合结果：命中 / 非法uid / 未找到", func(t *testing.T) {
+		// Arrange
+		uc, db := newUsecase(t)
+		seedProfile(t, db, uid1, "user-1", "bio-1", userv1.UserStatus_USER_STATUS_ACTIVE)
+
+		// Act
+		resp, err := uc.GetUserBrief(ctx, &userv1.GetUserBriefRequest{
+			Uids: []string{"3001", "bad", "999999"},
+		})
+
+		// Assert：非法 uid 结果先返回，其后按有效 uid 顺序
+		require.NoError(t, err)
+		require.Len(t, resp.GetResults(), 3)
+
+		assert.True(t, resp.GetResults()[0].GetFail())
+		assert.Equal(t, errmsg.InvalidID, resp.GetResults()[0].GetErr())
+		assert.Equal(t, "bad", resp.GetResults()[0].GetUid(), "失败项应回填请求串")
+		assert.Nil(t, resp.GetResults()[0].GetBrief())
+
+		assert.False(t, resp.GetResults()[1].GetFail())
+		assert.Nil(t, resp.GetResults()[1].GetErr())
+		assert.Equal(t, "3001", resp.GetResults()[1].GetUid(), "成功项应回填 uid")
+		require.NotNil(t, resp.GetResults()[1].GetBrief())
+		assert.Equal(t, "3001", resp.GetResults()[1].GetBrief().GetUid())
+		assert.Equal(t, "user-1", resp.GetResults()[1].GetBrief().GetName())
+		require.NotNil(t, resp.GetResults()[1].GetBrief().GetAvatar(), "seed 用户带头像")
+		assert.Equal(t, "avatar/obj", resp.GetResults()[1].GetBrief().GetAvatar().GetObjKey())
+
+		assert.True(t, resp.GetResults()[2].GetFail())
+		assert.Equal(t, errmsg.NotFound, resp.GetResults()[2].GetErr())
+		assert.Equal(t, "999999", resp.GetResults()[2].GetUid(), "NotFound 项必须回填 uid（回归）")
+		assert.Nil(t, resp.GetResults()[2].GetBrief())
+	})
+
+	t.Run("全部未命中时每项都回填请求 uid（回归）", func(t *testing.T) {
+		// Arrange
+		uc, _ := newUsecase(t)
+
+		// Act
+		resp, err := uc.GetUserBrief(ctx, &userv1.GetUserBriefRequest{
+			Uids: []string{"111111", "bad-uid", "222222"},
+		})
+
+		// Assert
+		require.NoError(t, err)
+		require.Len(t, resp.GetResults(), 3)
+
+		for i, wantUID := range []string{"bad-uid", "111111", "222222"} {
+			got := resp.GetResults()[i]
+			assert.True(t, got.GetFail())
+			assert.Equal(t, wantUID, got.GetUid(), "每个结果都必须回填对应请求 uid")
+			assert.Nil(t, got.GetBrief())
+		}
+		assert.Equal(t, errmsg.InvalidID, resp.GetResults()[0].GetErr())
+		assert.Equal(t, errmsg.NotFound, resp.GetResults()[1].GetErr())
+		assert.Equal(t, errmsg.NotFound, resp.GetResults()[2].GetErr())
+	})
+}
+
 // ---------- ToBrief 防御 ----------
 
 func TestToBriefNilAvatar(t *testing.T) {

@@ -300,7 +300,12 @@ func (u *UserUsecaseImpl) GetUserBrief(ctx context.Context, req *userv1.GetUserB
 		if parsedID, err := snowflake.ParseString(id); err == nil {
 			uids = append(uids, parsedID.Int64())
 		} else {
-			results = append(results, &userv1.UserBriefResult{Fail: true, Err: errmsg.InvalidID})
+			results = append(results, &userv1.UserBriefResult{
+				Fail: true,
+				Err:  errmsg.InvalidID,
+				// 非法串无法规范化，原样回填，保证调用方能定位失败项
+				Uid: id,
+			})
 		}
 	}
 
@@ -313,13 +318,22 @@ func (u *UserUsecaseImpl) GetUserBrief(ctx context.Context, req *userv1.GetUserB
 		found := false
 		for _, v := range profiles {
 			if v.ID == id {
-				results = append(results, &userv1.UserBriefResult{Brief: v.ToBrief()})
+				// 正确返回：回填请求 uid，与结果一一对应
+				results = append(results, &userv1.UserBriefResult{
+					Uid:  snowflake.ParseInt64(id).String(),
+					Brief: v.ToBrief(),
+				})
 				found = true
 				break
 			}
 		}
 		if !found {
-			results = append(results, &userv1.UserBriefResult{Fail: true, Err: errmsg.NotFound})
+			// 无结果：失败项同样必须回填请求 uid
+			results = append(results, &userv1.UserBriefResult{
+				Uid:  snowflake.ParseInt64(id).String(),
+				Fail: true,
+				Err:  errmsg.NotFound,
+			})
 		}
 	}
 
