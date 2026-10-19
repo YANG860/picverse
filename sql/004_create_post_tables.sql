@@ -22,9 +22,14 @@ CREATE TABLE IF NOT EXISTS posts (
     like_count       BIGINT       NOT NULL DEFAULT 0,                -- 点赞数
     favourite_count  BIGINT       NOT NULL DEFAULT 0,                -- 收藏数
     comment_count    BIGINT       NOT NULL DEFAULT 0,                -- 评论数
+    view_count       BIGINT       NOT NULL DEFAULT 0,                -- 浏览数
 
     meta_data        JSONB        NOT NULL DEFAULT '{}'             -- 元数据
 );
+
+-- 存量库补列（幂等）：CREATE TABLE IF NOT EXISTS 不会修补已存在的表，
+-- 老库同步需单独 ALTER；新库执行为无副作用 no-op
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS view_count BIGINT NOT NULL DEFAULT 0;
 
 -- -----------------------------------------------------------
 -- 2. post_medias — 帖子与媒体关联表
@@ -59,7 +64,7 @@ CREATE TABLE IF NOT EXISTS post_medias (
 -- ============================================================
 
 -- 索引 1: 作者帖子游标分页
--- 对应 repo.GetPostsByAuthor() / repo.GetPublishedPostsByAuthor()
+-- 对应 repo.GetPostBriefsByAuthor() / repo.GetPublishedPostBriefsByAuthor()
 --   WHERE author_id = ? AND created_at < ? [AND status = ?] ORDER BY created_at DESC LIMIT ?
 -- author_id 等值过滤 + created_at 范围过滤/排序，复合索引覆盖最左前缀
 CREATE INDEX IF NOT EXISTS idx_posts_author_created

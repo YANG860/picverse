@@ -46,6 +46,8 @@
 | 1301 | `InvalidTitle` | 标题非法 |
 | 1302 | `InvalidContent` | 正文非法 |
 | 1303 | `InvalidMedia` | 帖子媒体非法 |
+| 1304 | `NotEditable` | 帖子不可编辑（非 DRAFT / 已流转，对外不区分） |
+| 1305 | `Banned` | 帖子已被封禁 |
 
 ### user
 | code | 变量 | 含义 |

@@ -1,0 +1,199 @@
+syntax = "proto3";
+
+package post.v1;
+
+import "buf/validate/validate.proto";
+import "common/v1/common.proto";
+import "google/protobuf/wrappers.proto";
+import "media/v1/media.proto";
+import "post/v1/post.proto";
+
+// ==================== 草稿 ====================
+
+// 创建草稿
+message CreateDraftRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+
+  string title = 2;
+  string full_text = 3;
+  // 媒体列表必填：至少 1 张（所有帖子至少有一个封面图，首张即封面）
+  // 媒体的存在性/归属校验与资产引用计数由 BFF 维护，本服务只存关联不校验（见 UpdateDraftMediasResponse.old_asset_ids）
+  repeated media.v1.MediaFile medias = 4 [(buf.validate.field).repeated.min_items = 1];
+
+  common.v1.JsonStr metadata = 5;
+}
+
+message CreateDraftResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  Post draft = 3;
+}
+
+// UpdateDraftRequest 更新草稿（文本字段部分更新：仅更新传入的字段，nil 字段不修改；仅 DRAFT 状态可更新）
+// 媒体更新拆分至 UpdateDraftMediasRequest
+message UpdateDraftRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  string post_id = 2 [(buf.validate.field).string.min_len = 1];
+
+  google.protobuf.StringValue title = 3;
+  google.protobuf.StringValue full_text = 4;
+  common.v1.JsonStr metadata = 5;
+}
+
+message UpdateDraftResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  Post post = 3;
+}
+
+// UpdateDraftMediasRequest 更新草稿媒体（全量替换：至少 1 张，不支持清空，首张即封面；仅 DRAFT 状态可更新）
+// 媒体的存在性/归属校验与资产引用计数由 BFF 维护，本服务只存关联不校验
+message UpdateDraftMediasRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  string post_id = 2 [(buf.validate.field).string.min_len = 1];
+
+  repeated media.v1.MediaFile medias = 3 [(buf.validate.field).repeated.min_items = 1];
+}
+
+message UpdateDraftMediasResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  Post post = 3;
+  // 被替换的旧媒体所属资产 ID（BFF 据此调整资产引用计数，首次设置媒体时为空）
+  repeated string old_asset_ids = 4;
+}
+
+// 发布草稿（要求草稿内所有图片审核通过——占位：该校验暂未实现，待审核链路完善后补）
+// 成功后状态 DRAFT → AUDITING，异步审核通过后 → POST_STATUS_PUBLISHED
+message PublishDraftRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  string post_id = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message PublishDraftResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+}
+
+// SetPostStatusDraftRequest 将已发布帖子转回草稿（发布后修改场景：转回草稿 → UpdateDraft 修改 → 重新发布；仅 PUBLISHED 可转回）
+message SetPostStatusDraftRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  string post_id = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message SetPostStatusDraftResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+}
+
+// ==================== 帖子查询 ====================
+
+// 按ID批量获取帖子（内部接口，BFF 内网调用；本身就无鉴权/可见性过滤，返回任意状态的帖子）
+message GetPostsByIDsRequest {
+  repeated string post_ids = 1 [(buf.validate.field).repeated.items.string.min_len = 1];
+}
+
+message GetPostsByIDsResponse {
+  repeated PostResult results = 1;
+}
+
+message PostResult {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  string post_id = 3 [(buf.validate.field).string.min_len = 1];
+  Post post = 4;
+}
+
+message GetPostStatusRequest {
+  string post_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message GetPostStatusResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  PostStatus status = 3;
+}
+
+// 按作者游标分页获取帖子列表
+message ViewPostByAuthorRequest {
+  string viewer_id = 1 [(buf.validate.field).string.min_len = 1];
+  string author_id = 3 [(buf.validate.field).string.min_len = 1];
+  common.v1.Cursor cursor = 2;
+}
+
+message ViewPostByAuthorResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 翻页到底/暂无内容：posts 为空且 cursor 为空（不以 NotFound 表达空页），
+  // 调用方按 posts 为空终止翻页
+  repeated PostBrief posts = 3;
+  common.v1.Cursor cursor = 4;
+}
+
+message ViewPostRequest {
+  string viewer_id = 2 [(buf.validate.field).string.min_len = 1];
+  string post_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message ViewPostResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  Post post = 3;
+}
+
+// ==================== 帖子管理 ====================
+
+// 封禁帖子
+message BanPostRequest {
+  string post_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message BanPostResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+}
+
+// DeletePostRequest 删除帖子（用户删除自己的帖子，草稿与已发布均可删，软删）
+message DeletePostRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  string post_id = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message DeletePostResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+}
+
+// DeleteUnusedPostRequest 回收已删除帖子,物理删除 POST_STATUS_DELETED 状态的帖子
+message DeleteUnusedPostRequest {}
+
+message DeleteUnusedPostResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  int64 deleted_count = 3;
+}
+
+// SyncPostStatRequest 同步帖子统计信息（异步链路调用：MQ 消费者 / 定时任务推送统计数据）。
+// 逐字段部分更新（参考 UpdateUserProfileRequest 语义）：字段为 nil 表示不修改，设置则覆盖该统计列（含 0）；
+// 所有字段均未设置 → InvalidArgument；计数必须非负；仅统计字段，不改帖子状态
+message SyncPostStatRequest {
+  string post_id = 1 [(buf.validate.field).string.min_len = 1];
+
+  google.protobuf.Int64Value like_count = 2;
+  google.protobuf.Int64Value favourite_count = 3;
+  google.protobuf.Int64Value comment_count = 4;
+  google.protobuf.Int64Value view_count = 5;
+}
+
+message SyncPostStatResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+}

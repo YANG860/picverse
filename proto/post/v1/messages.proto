@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package post.v1;
+
+message PostMessage {
+  oneof payload {
+    AuditPost audit_post = 1;
+    PublishPost publish_post = 2;
+    BanPost ban_post = 3;
+    DeletePost delete_post = 4;
+  }
+}
+
+message AuditPost {
+  string post_id = 1;
+  string author_id = 2;
+}
+
+message PublishPost {
+  string post_id = 1;
+  string author_id = 2;
+}
+
+message BanPost {
+  string post_id = 1;
+  string author_id = 2;
+}
+
+message DeletePost {
+  string post_id = 1;
+  string author_id = 2;
+}

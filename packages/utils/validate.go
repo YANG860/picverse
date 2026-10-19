@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"image"
+
 	// 注册图片解码器：保证 ValidateImage 不依赖调用方是否恰好引入了对应编解码包
 	_ "image/jpeg"
 	_ "image/png"
@@ -129,7 +130,8 @@ func ValidateContent(content string) bool {
 	return n > 0 && n <= 1000
 }
 func ValidateMedia(media *mediav1.MediaFile) bool {
-	// TODO:检验媒体文件
+	// 仅做对象键非空的基础校验：媒体文件的存在性、归属校验与资产引用计数由 BFF 侧统一维护
+	// （写入口返回 old_asset_ids 供 BFF 调整计数），业务服务只存关联，不在写入路径校验
 	return media != nil && len(media.ObjKey) > 0
 }
 
@@ -160,4 +162,10 @@ func ValidateBio(bio string) bool {
 	return !strings.ContainsFunc(bio, func(r rune) bool {
 		return unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t'
 	})
+}
+
+// ValidatePostStatCount 统计计数校验：单列计数必须非负（0 合法）。
+// 逐字段更新语义下无“未设置”歧义：字段是否修改由调用方的 nil 判断决定，本函数只校验取值
+func ValidatePostStatCount(count int64) bool {
+	return count >= 0
 }

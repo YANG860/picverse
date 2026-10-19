@@ -60,10 +60,10 @@ func webpBytes(t *testing.T, w, h int) []byte {
 func metaFor(format mediav1.MediaFormat, w, h int, data []byte) *mediav1.MediaMetaData {
 	sum := sha256.Sum256(data)
 	return &mediav1.MediaMetaData{
-		Format:    format,
-		Width:     int64(w),
-		Height:    int64(h),
-		SizeBytes: int64(len(data)),
+		Format:     format,
+		Width:      int64(w),
+		Height:     int64(h),
+		SizeBytes:  int64(len(data)),
 		Sha_256Sum: hex.EncodeToString(sum[:]),
 	}
 }
@@ -389,4 +389,24 @@ func TestValidateMedia(t *testing.T) {
 	t.Run("对象键非空合法", func(t *testing.T) {
 		assert.True(t, ValidateMedia(&mediav1.MediaFile{ObjKey: "media/1/origin.png"}))
 	})
+}
+
+// ---------- ValidatePostStatCount ----------
+
+// TestValidatePostStatCount 统计计数校验：非负合法（含 0 边界），负数不合法
+func TestValidatePostStatCount(t *testing.T) {
+	cases := []struct {
+		name string
+		in   int64
+		want bool
+	}{
+		{"0 合法（边界）", 0, true},
+		{"正数合法", 100, true},
+		{"负数不合法", -1, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, ValidatePostStatCount(tc.in))
+		})
+	}
 }

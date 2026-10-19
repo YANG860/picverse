@@ -103,9 +103,16 @@ type PollerConfig struct {
 
 type ConsumerConfig struct {
 	Media MediaConsumerConfig `mapstructure:"media"`
+	Post  PostConsumerConfig  `mapstructure:"post"`
 }
 
 type MediaConsumerConfig struct {
+	Name       string `mapstructure:"name"`
+	MaxRetry   int    `mapstructure:"max_retry"`
+	WorkingDir string `mapstructure:"working_dir"`
+}
+
+type PostConsumerConfig struct {
 	Name       string `mapstructure:"name"`
 	MaxRetry   int    `mapstructure:"max_retry"`
 	WorkingDir string `mapstructure:"working_dir"`

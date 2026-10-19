@@ -26,13 +26,13 @@ func main() {
 	cfg := config.Init(cfgPath)
 
 	svc, cleanup := gen.InitializePostServiceHandler(cfg)
-	path, hander := postv1connect.NewPostServiceHandler(
+	path, handler := postv1connect.NewPostServiceHandler(
 		svc,
 		connect.WithInterceptors(trace.NewServerInterceptor()),
 	)
 
 	mux := http.NewServeMux()
-	mux.Handle(path, hander)
+	mux.Handle(path, handler)
 
 	srv := &http.Server{
 		Addr:    ":8082",

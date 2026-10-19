@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package post.v1;
+
+import "common/v1/common.proto";
+import "media/v1/media.proto";
+
+message PostBrief {
+  string post_id = 6;
+
+  media.v1.MediaFile cover = 2;
+  string title = 1;
+
+  string author_id = 3;
+  PostStat stat = 5;
+
+  string created_at = 4;
+}
+
+message PostStat {
+  int64 like_count = 1;
+  int64 favourite_count = 2;
+  int64 comment_count = 3;
+  int64 view_count = 4;
+}
+
+message Post {
+  string post_id = 6;
+  string created_at = 4;
+  string updated_at = 7;
+
+  repeated media.v1.MediaFile medias = 2;
+  string title = 1;
+  string full_text = 8;
+
+  string author_id = 3;
+  PostStat post_stat = 5;
+  common.v1.JsonStr metadata = 9;
+
+  PostStatus status = 10;
+}
+
+enum PostStatus {
+  POST_STATUS_UNSPECIFIED = 0;
+  POST_STATUS_DRAFT = 1;
+  POST_STATUS_AUDITING = 2;
+  POST_STATUS_PUBLISHED = 3;
+  POST_STATUS_BANNED = 4;
+  POST_STATUS_DELETED = 5;
+}

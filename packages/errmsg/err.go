@@ -36,6 +36,8 @@ var (
 	InvalidTitle   = New(1301, errors.New("invalid title"))
 	InvalidContent = New(1302, errors.New("invalid content"))
 	InvalidMedia   = New(1303, errors.New("invalid media"))
+	NotEditable    = New(1304, errors.New("not editable"))
+	Banned         = New(1305, errors.New("post banned"))
 )
 
 // user

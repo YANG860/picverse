@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package post.v1;
+
+import "post/v1/requests.proto";
+
+service PostService {
+  // 创建草稿
+  rpc CreateDraft(CreateDraftRequest) returns (CreateDraftResponse);
+  // 更新草稿（文本字段部分更新：仅更新传入的字段，仅 DRAFT 状态可更新）
+  rpc UpdateDraft(UpdateDraftRequest) returns (UpdateDraftResponse);
+  // 更新草稿媒体（全量替换，空列表即清空，仅 DRAFT 状态可更新）
+  rpc UpdateDraftMedias(UpdateDraftMediasRequest) returns (UpdateDraftMediasResponse);
+  // 发布草稿
+  rpc PublishDraft(PublishDraftRequest) returns (PublishDraftResponse);
+  // 获取帖子（内部接口，BFF 内网调用；本身就无鉴权/可见性过滤，返回任意状态的帖子）
+  rpc GetPostsByIDs(GetPostsByIDsRequest) returns (GetPostsByIDsResponse);
+  // 获取帖子状态，无鉴权
+  rpc GetPostStatus(GetPostStatusRequest) returns (GetPostStatusResponse);
+  // 根据作者获取帖子，有鉴权，他人只看到已发布的内容
+  rpc ViewPostByAuthor(ViewPostByAuthorRequest) returns (ViewPostByAuthorResponse);
+  // 查看帖子，有鉴权，他人只看到已发布的内容
+  rpc ViewPost(ViewPostRequest) returns (ViewPostResponse);
+  // 删除帖子（用户删除自己的帖子，草稿与已发布均可删，软删）
+  rpc DeletePost(DeletePostRequest) returns (DeletePostResponse);
+  // 封禁帖子（内部管理）
+  rpc BanPost(BanPostRequest) returns (BanPostResponse);
+  // 同步帖子统计信息（内部管理，异步链路调用；逐字段部分更新，nil 不修改，仅统计不改状态）
+  rpc SyncPostStat(SyncPostStatRequest) returns (SyncPostStatResponse);
+}

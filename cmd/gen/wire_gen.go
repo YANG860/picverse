@@ -89,7 +89,7 @@ func InitializePostServiceHandler(cfg *config.Config) (postv1connect.PostService
 	gormDB, cleanup2 := db.NewPG(cfg, loggerFactoryImpl)
 	postRepoImpl := v1_4.NewPostRepo(gormDB)
 	jetStreamClient, cleanup3 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
-	postUsecaseImpl := v1_4.NewPostUsecase(postRepoImpl, jetStreamClient, gormDB)
+	postUsecaseImpl := v1_4.NewPostUsecase(postRepoImpl, jetStreamClient)
 	postServiceHandler := v1_4.NewPostServiceHandler(gormDB, loggerFactoryImpl, postUsecaseImpl, postRepoImpl)
 	return postServiceHandler, func() {
 		cleanup3()
@@ -102,9 +102,11 @@ func InitializeUserServiceHandler(cfg *config.Config) (userv1connect.UserService
 	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
 	gormDB, cleanup2 := db.NewPG(cfg, loggerFactoryImpl)
 	userRepoImpl := v1_5.NewUserRepo(gormDB)
-	userUsecaseImpl := v1_5.NewUserUsecase(userRepoImpl, gormDB)
+	jetStreamClient, cleanup3 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
+	userUsecaseImpl := v1_5.NewUserUsecase(userRepoImpl, gormDB, jetStreamClient)
 	userServiceHandler := v1_5.NewUserServiceHandler(gormDB, loggerFactoryImpl, userUsecaseImpl, userRepoImpl)
 	return userServiceHandler, func() {
+		cleanup3()
 		cleanup2()
 		cleanup()
 	}
