@@ -276,7 +276,7 @@ func (u *AuthUsecaseImpl) Logout(ctx context.Context, req *authv1.LogoutRequest)
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to logout: %w", err)
 	}
 
 	return &authv1.LogoutResponse{}, nil
