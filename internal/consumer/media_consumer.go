@@ -267,16 +267,13 @@ func (c *MediaConsumer) HandleUploadMedia(ctx context.Context, message *mediav1.
 
 func (c *MediaConsumer) SetMediaAssetFailed(ctx context.Context, id int64) (ack bool, err error) {
 
-	info, err := c.Repo.SetMediaAssetStatus(ctx, id,
+	// 写失败态无下游副作用，无需用 RowsAffected 区分（未命中/值不变均幂等成功）
+	_, err = c.Repo.SetMediaAssetStatus(ctx, id,
 		mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_UPLOADING,
 		mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_FAILED,
 	)
 	if err != nil {
 		return RETRY, err
-	}
-
-	if info.RowsAffected == 0 {
-		return ACK, nil
 	}
 
 	return ACK, nil

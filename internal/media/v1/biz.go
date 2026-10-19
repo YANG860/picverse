@@ -281,9 +281,13 @@ func (u *MediaUsecaseImpl) BanMedia(ctx context.Context, req *mediav1.BanMediaRe
 	}
 
 	err = u.DB.Transaction(func(tx *gorm.DB) error {
-		_, err := u.Repo.WithTX(tx).SetMediaAssetBanned(ctx, assetID.Int64())
+		info, err := u.Repo.WithTX(tx).SetMediaAssetBanned(ctx, assetID.Int64())
 		if err != nil {
 			return err
+		}
+		// 已封禁/已删除的资产（RowsAffected=0）幂等成功，不重复投递 BanMedia 消息
+		if info.RowsAffected == 0 {
+			return nil
 		}
 
 		msg, err := mq.NewMQMessage(defaults.MediaMessageStream, nil, banMsg)

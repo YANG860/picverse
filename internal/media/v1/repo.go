@@ -183,9 +183,15 @@ func (r *MediaRepoImpl) DeleteMediaFiles(ctx context.Context, assetID int64) (ge
 	return info, err
 }
 
+// SetMediaAssetBanned 封禁媒体；
+// WHERE 带 status != DELETED 且 != BANNED 条件（对齐 PostRepoImpl.SetPostBanned）：
+// 已封禁/已删除的资产不被修改（RowsAffected 为 0），上层据此跳过重复投递 BanMedia 消息，
+// 且已删除状态不会被覆盖成 BANNED（PG 计匹配行，无守卫时值不变也计 1）
 func (r *MediaRepoImpl) SetMediaAssetBanned(ctx context.Context, id int64) (gen.ResultInfo, error) {
 	info, err := r.q.MediaAsset.WithContext(ctx).Where(
 		r.q.MediaAsset.ID.Eq(id),
+		r.q.MediaAsset.Status.Neq(int32(mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_DELETED)),
+		r.q.MediaAsset.Status.Neq(int32(mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_BANNED)),
 	).Update(r.q.MediaAsset.Status, int32(mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_BANNED))
 	return info, err
 }
