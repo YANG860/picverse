@@ -23,8 +23,12 @@ type MediaUsecase interface {
 	UploadMedia(ctx context.Context, req *mediav1.UploadMediaRequest) (*mediav1.UploadMediaResponse, error)
 	// GetMediaAssets 获取媒体资产列表
 	GetMediaAssets(ctx context.Context, req *mediav1.GetMediaAssetsRequest) (*mediav1.GetMediaAssetsResponse, error)
+	// GetMediaAsset 获取单个媒体资产
+	GetMediaAsset(ctx context.Context, req *mediav1.GetMediaAssetRequest) (*mediav1.GetMediaAssetResponse, error)
 	// GetMediaAssetFiles 获取媒体资产下的文件列表
 	GetMediaAssetFiles(ctx context.Context, req *mediav1.GetMediaAssetFilesRequest) (*mediav1.GetMediaAssetFilesResponse, error)
+	// GetMediaAssetFile 获取单个媒体资产下的文件
+	GetMediaAssetFile(ctx context.Context, req *mediav1.GetMediaAssetFileRequest) (*mediav1.GetMediaAssetFileResponse, error)
 	// ListMediaAssetsBefore 列出指定时间之前的媒体资产（游标分页）
 	ListMediaAssetsBefore(ctx context.Context, req *mediav1.ListMediaAssetsBeforeRequest) (*mediav1.ListMediaAssetsBeforeResponse, error)
 	// BanMedia 封禁媒体
@@ -182,6 +186,23 @@ func (u *MediaUsecaseImpl) GetMediaAssets(ctx context.Context, req *mediav1.GetM
 	}, nil
 }
 
+func (u *MediaUsecaseImpl) GetMediaAsset(ctx context.Context, req *mediav1.GetMediaAssetRequest) (*mediav1.GetMediaAssetResponse, error) {
+	id, err := snowflake.ParseString(req.GetId())
+	if err != nil {
+		return &mediav1.GetMediaAssetResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+
+	assets, err := u.Repo.GetMediaAssets(ctx, []int64{id.Int64()})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get media asset: %w", err)
+	}
+	if len(assets) == 0 {
+		return &mediav1.GetMediaAssetResponse{Fail: true, Err: errmsg.NotFound}, nil
+	}
+
+	return &mediav1.GetMediaAssetResponse{Asset: assets[0].ToProto()}, nil
+}
+
 func (u *MediaUsecaseImpl) GetMediaAssetFiles(ctx context.Context, req *mediav1.GetMediaAssetFilesRequest) (*mediav1.GetMediaAssetFilesResponse, error) {
 	results := make([]*mediav1.MediaAssetFileResult, 0, len(req.Queries))
 	ids := make([]int64, 0, len(req.Queries))
@@ -237,6 +258,23 @@ func (u *MediaUsecaseImpl) GetMediaAssetFiles(ctx context.Context, req *mediav1.
 	return &mediav1.GetMediaAssetFilesResponse{
 		Files: results,
 	}, nil
+}
+
+func (u *MediaUsecaseImpl) GetMediaAssetFile(ctx context.Context, req *mediav1.GetMediaAssetFileRequest) (*mediav1.GetMediaAssetFileResponse, error) {
+	id, err := snowflake.ParseString(req.GetId())
+	if err != nil {
+		return &mediav1.GetMediaAssetFileResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+
+	files, err := u.Repo.GetMediaFiles(ctx, []int64{id.Int64()}, []mediav1.MediaFileType{req.GetType()})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get media asset file: %w", err)
+	}
+	if len(files) == 0 {
+		return &mediav1.GetMediaAssetFileResponse{Fail: true, Err: errmsg.NotFound}, nil
+	}
+
+	return &mediav1.GetMediaAssetFileResponse{File: files[0].ToProto()}, nil
 }
 
 func (u *MediaUsecaseImpl) ListMediaAssetsBefore(ctx context.Context, req *mediav1.ListMediaAssetsBeforeRequest) (*mediav1.ListMediaAssetsBeforeResponse, error) {

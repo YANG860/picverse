@@ -38,6 +38,18 @@ message MediaAssetResult {
   MediaAsset asset = 4;
 }
 
+// 获取单个媒体资产的元数据（GetMediaAssets 的单值版本）
+message GetMediaAssetRequest {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message GetMediaAssetResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  MediaAsset asset = 3;
+}
+
 message GetMediaAssetFilesRequest {
   repeated MediaAssetFileQuery queries = 1;
 }
@@ -58,6 +70,19 @@ message MediaAssetFileResult {
   MediaAssetFileQuery query = 4;
 
   MediaFile file = 5;
+}
+
+// 获取单个媒体资产下的文件（GetMediaAssetFiles 的单值版本）
+message GetMediaAssetFileRequest {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+  MediaFileType type = 2;
+}
+
+message GetMediaAssetFileResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  MediaFile file = 3;
 }
 
 message ListMediaAssetsBeforeRequest {

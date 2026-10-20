@@ -51,7 +51,9 @@ proto 枚举取值（注意取值非连续）：
 | --- | --- |
 | `UploadMedia` | 创建资产 + 返回预签名直传 URL + 写延时上传检测消息 |
 | `GetMediaAssets` | 按 ID 批量获取资产（逐项 `MediaAssetResult`） |
+| `GetMediaAsset` | 按 ID 获取单个资产（单值结果，非法 ID → `InvalidID`，未命中 → `NotFound`） |
 | `GetMediaAssetFiles` | 按 `(id, type)` 批量获取文件（逐项 `MediaAssetFileResult`） |
+| `GetMediaAssetFile` | 按 `(id, type)` 获取单个文件（单值结果，非法 ID → `InvalidID`，未命中 → `NotFound`） |
 | `ListMediaAssetsBefore` | 按时间游标分页列资产 |
 | `BanMedia` | 封禁（置 `BANNED` + 发 MQ 消息删对象） |
 | `ModifyMediaAssetRefCount` | 原子修改引用计数（全成功或全失败） |

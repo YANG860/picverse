@@ -8,11 +8,17 @@ service MediaService {
   // 上传媒体
   rpc UploadMedia(UploadMediaRequest) returns (UploadMediaResponse);
 
-  // 获取媒体资产的元数据
+  // 获取媒体资产的元数据（批量）
   rpc GetMediaAssets(GetMediaAssetsRequest) returns (GetMediaAssetsResponse);
 
-  // 获取媒体资产的文件
+  // 获取单个媒体资产的元数据
+  rpc GetMediaAsset(GetMediaAssetRequest) returns (GetMediaAssetResponse);
+
+  // 获取媒体资产的文件（批量）
   rpc GetMediaAssetFiles(GetMediaAssetFilesRequest) returns (GetMediaAssetFilesResponse);
+
+  // 获取单个媒体资产的文件
+  rpc GetMediaAssetFile(GetMediaAssetFileRequest) returns (GetMediaAssetFileResponse);
 
   // 按时间列举媒体资产
   rpc ListMediaAssetsBefore(ListMediaAssetsBeforeRequest) returns (ListMediaAssetsBeforeResponse);

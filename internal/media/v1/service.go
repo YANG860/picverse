@@ -47,9 +47,21 @@ func (s *MediaServiceHandler) GetMediaAssets(ctx context.Context, req *connect.R
 	return connect.NewResponse(resp), err
 }
 
+// GetMediaAsset 获取单个媒体资产元数据
+func (s *MediaServiceHandler) GetMediaAsset(ctx context.Context, req *connect.Request[mediav1.GetMediaAssetRequest]) (*connect.Response[mediav1.GetMediaAssetResponse], error) {
+	resp, err := s.Biz.GetMediaAsset(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
 // GetMediaAssetFiles 获取媒体资产文件列表
 func (s *MediaServiceHandler) GetMediaAssetFiles(ctx context.Context, req *connect.Request[mediav1.GetMediaAssetFilesRequest]) (*connect.Response[mediav1.GetMediaAssetFilesResponse], error) {
 	resp, err := s.Biz.GetMediaAssetFiles(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+// GetMediaAssetFile 获取单个媒体资产文件
+func (s *MediaServiceHandler) GetMediaAssetFile(ctx context.Context, req *connect.Request[mediav1.GetMediaAssetFileRequest]) (*connect.Response[mediav1.GetMediaAssetFileResponse], error) {
+	resp, err := s.Biz.GetMediaAssetFile(ctx, req.Msg)
 	return connect.NewResponse(resp), err
 }
 

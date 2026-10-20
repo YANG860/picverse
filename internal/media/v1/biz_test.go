@@ -208,6 +208,42 @@ func TestMediaUsecase_GetMediaAssets(t *testing.T) {
 	})
 }
 
+// ---------- GetMediaAsset ----------
+
+func TestMediaUsecase_GetMediaAsset(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("命中返回资产", func(t *testing.T) {
+		uc, db, _, _ := newUsecase(t)
+		seedAsset(t, db, assetID1, mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_ACTIVE, 0, time.Now().UnixMilli())
+
+		resp, err := uc.GetMediaAsset(ctx, &mediav1.GetMediaAssetRequest{Id: strconv.FormatInt(assetID1, 10)})
+		require.NoError(t, err)
+		require.False(t, resp.GetFail())
+		assert.Nil(t, resp.GetErr())
+		assert.Equal(t, assetID1, mustParseID(t, resp.GetAsset().GetBase().GetId()))
+		assert.Equal(t, mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_ACTIVE, resp.GetAsset().GetStatus())
+	})
+
+	t.Run("非法 ID 返回 InvalidID", func(t *testing.T) {
+		uc, _, _, _ := newUsecase(t)
+		resp, err := uc.GetMediaAsset(ctx, &mediav1.GetMediaAssetRequest{Id: "bad"})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
+		assert.Nil(t, resp.GetAsset())
+	})
+
+	t.Run("未找到返回 NotFound", func(t *testing.T) {
+		uc, _, _, _ := newUsecase(t)
+		resp, err := uc.GetMediaAsset(ctx, &mediav1.GetMediaAssetRequest{Id: "999999"})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.NotFound, resp.GetErr())
+		assert.Nil(t, resp.GetAsset())
+	})
+}
+
 // ---------- GetMediaAssetFiles ----------
 
 func TestMediaUsecase_GetMediaAssetFiles(t *testing.T) {
@@ -246,6 +282,55 @@ func TestMediaUsecase_GetMediaAssetFiles(t *testing.T) {
 		assert.Equal(t, strconv.FormatInt(assetID1, 10), resp.GetFiles()[2].GetQuery().GetId())
 		assert.Equal(t, mediav1.MediaFileType_MEDIA_FILE_TYPE_1080, resp.GetFiles()[2].GetQuery().GetType())
 		assert.Nil(t, resp.GetFiles()[2].GetFile())
+	})
+}
+
+// ---------- GetMediaAssetFile ----------
+
+func TestMediaUsecase_GetMediaAssetFile(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("按 (id, type) 命中返回文件", func(t *testing.T) {
+		uc, db, _, _ := newUsecase(t)
+		seedAsset(t, db, assetID1, mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_ACTIVE, 0, time.Now().UnixMilli())
+		seedFile(t, db, 4001, assetID1, mediav1.MediaFileType_MEDIA_FILE_TYPE_ORIGIN)
+
+		resp, err := uc.GetMediaAssetFile(ctx, &mediav1.GetMediaAssetFileRequest{
+			Id:   strconv.FormatInt(assetID1, 10),
+			Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_ORIGIN,
+		})
+		require.NoError(t, err)
+		require.False(t, resp.GetFail())
+		assert.Nil(t, resp.GetErr())
+		assert.Equal(t, int64(4001), mustParseID(t, resp.GetFile().GetBase().GetId()))
+		assert.Equal(t, mediav1.MediaFileType_MEDIA_FILE_TYPE_ORIGIN, resp.GetFile().GetType())
+	})
+
+	t.Run("无此变体返回 NotFound", func(t *testing.T) {
+		uc, db, _, _ := newUsecase(t)
+		seedAsset(t, db, assetID1, mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_ACTIVE, 0, time.Now().UnixMilli())
+		seedFile(t, db, 4001, assetID1, mediav1.MediaFileType_MEDIA_FILE_TYPE_ORIGIN)
+
+		resp, err := uc.GetMediaAssetFile(ctx, &mediav1.GetMediaAssetFileRequest{
+			Id:   strconv.FormatInt(assetID1, 10),
+			Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_216, // 无此变体
+		})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.NotFound, resp.GetErr())
+		assert.Nil(t, resp.GetFile())
+	})
+
+	t.Run("非法 ID 返回 InvalidID", func(t *testing.T) {
+		uc, _, _, _ := newUsecase(t)
+		resp, err := uc.GetMediaAssetFile(ctx, &mediav1.GetMediaAssetFileRequest{
+			Id:   "bad",
+			Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_ORIGIN,
+		})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
+		assert.Nil(t, resp.GetFile())
 	})
 }
 

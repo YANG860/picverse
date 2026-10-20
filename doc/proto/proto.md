@@ -1,6 +1,6 @@
 # proto 消息规范
 
-proto 定义位于 `proto/`，生成代码位于 `gen/go/`。命名空间按 `common.v1` / `auth.v1` / `media.v1` / `post.v1` 划分。
+proto 定义位于 `proto/`，生成代码位于 `gen/go/`。命名空间按 `common.v1` / `auth.v1` / `media.v1` / `post.v1` / `user.v1` / `bff.v1` 划分，其中 `bff.v1` 为面向前端与客户端的聚合网关（见 `doc/internal/bff/bff.md`）。
 
 ## ID 与时间表示
 
@@ -60,7 +60,9 @@ message Result {
 
 ## 单值结果
 
-单值接口直接在响应中携带 `fail` + `err` + 数据字段，如 `LoginResponse{fail, err, refresh_token, access_token}`。
+单值接口直接在响应中携带 `fail` + `err` + 数据字段，如 `LoginResponse{fail, err, refresh_token, access_token}`、
+`media.GetMediaAssetResponse{fail, err, asset}`、`media.GetMediaAssetFileResponse{fail, err, file}`；
+请求侧仅携带查询 Key 字段（如 `GetMediaAssetRequest{id}`、`GetMediaAssetFileRequest{id, type}`）。
 
 ## 校验
 
@@ -69,3 +71,10 @@ message Result {
 - `string` 非空：`string.min_len = 1`
 - `repeated string` 每项非空：`repeated.items.string.min_len = 1`
 - `Cursor.limit` 上限：`int64.lt = 1000`
+
+### 执行方式与错误形态分层
+
+- **结构约束由传输层强制**：各服务 handler 可选挂 `connectrpc.com/validate` 拦截器（见 `cmd/*/main.go`），
+  违反注解的请求在到达 biz 前被拒绝，返回连接层 `connect.CodeInvalidArgument`（不入 fail/err 响应体）
+- **业务规则由 biz 层负责**：标题长度/正文长度/媒体合法性等语义校验（`packages/errmsg`），
+  走既定的 `fail` + `common.v1.Error` 响应体约定，与注解校验互补不重叠
