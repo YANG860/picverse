@@ -3,6 +3,7 @@ syntax = "proto3";
 package auth.v1;
 
 import "auth/v1/auth.proto";
+import "buf/validate/validate.proto";
 import "common/v1/common.proto";
 
 message RegisterRequest {
@@ -29,7 +30,11 @@ message LoginResponse {
   AccessToken access_token = 4;
 }
 
-message GetRefreshTokenRequest {}
+// 换发 refresh token：会话凭据（refresh token 串）由内部 RPC 请求体直传，
+// auth 自行验签后取 uid/jti 做轮换校验，不再经 ctx/header 透传 claims
+message GetRefreshTokenRequest {
+  string refresh_token = 1 [(buf.validate.field).string.min_len = 1];
+}
 
 message GetRefreshTokenResponse {
   bool fail = 2;
@@ -38,7 +43,10 @@ message GetRefreshTokenResponse {
   RefreshToken token = 1;
 }
 
-message GetAccessTokenRequest {}
+// 换发 access token：会话凭据（refresh token 串）由请求体直传，auth 验签后校验 jti 有效性
+message GetAccessTokenRequest {
+  string refresh_token = 1 [(buf.validate.field).string.min_len = 1];
+}
 
 message GetAccessTokenResponse {
   bool fail = 1;
@@ -48,7 +56,8 @@ message GetAccessTokenResponse {
 }
 
 message LogoutRequest {
-  string uid = 2;
+  // 会话 uid，由 BFF 从会话解析后注入（内部 RPC 直传，内网互信）
+  string uid = 2 [(buf.validate.field).string.min_len = 1];
   Platform platform = 1;
 }
 

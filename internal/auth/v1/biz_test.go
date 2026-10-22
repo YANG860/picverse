@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"rednote/config"
 	authv1 "rednote/gen/go/auth/v1"
 	auth "rednote/internal/auth/models"
-	"rednote/config"
 	"rednote/packages/defaults"
 	"rednote/packages/errmsg"
 	"rednote/packages/jwt"
@@ -54,9 +54,12 @@ func seedUser(t *testing.T, db *gorm.DB, id int64, email, password string, role 
 	return seedCredential(t, db, id, email, string(hashed), role)
 }
 
-// claimCtx 构造携带指定 claims 的 ctx（模拟认证拦截器注入后的上下文）
-func claimCtx(claim *jwt.Claims) context.Context {
-	return jwt.WithClaims(context.Background(), claim)
+// mustToken 用指定 claims 签发会话凭据串（模拟任意来源的 refresh token）
+func mustToken(t *testing.T, mgr jwt.Manager, claim *jwt.Claims) string {
+	t.Helper()
+	token, err := mgr.Generate(claim)
+	require.NoError(t, err)
+	return token
 }
 
 // jwtClaimID 构造只带 jti 的 RegisteredClaims（模拟任意来源的 token 载荷）
@@ -346,12 +349,10 @@ func TestAuthUsecase_Login(t *testing.T) {
 // ---------- GetRefreshToken ----------
 
 func TestAuthUsecase_GetRefreshToken(t *testing.T) {
-	req := &authv1.GetRefreshTokenRequest{}
-
-	t.Run("未认证返回 Unauthorized", func(t *testing.T) {
+	t.Run("凭证缺失或伪造返回 Unauthorized", func(t *testing.T) {
 		uc, _, _ := newUsecase(t)
 
-		resp, err := uc.GetRefreshToken(context.Background(), req)
+		resp, err := uc.GetRefreshToken(context.Background(), &authv1.GetRefreshTokenRequest{RefreshToken: "forged-token"})
 
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
@@ -364,11 +365,7 @@ func TestAuthUsecase_GetRefreshToken(t *testing.T) {
 		seedUser(t, db, bizUID1, emailOf(bizUID1), testPassword, authv1.Role_ROLE_USER)
 		access, _, _ := mustLogin(t, uc, bizUID1, authv1.Platform_PLATFORM_WEB)
 
-		mgr := uc.Manager
-		claims, err := mgr.Parse(access)
-		require.NoError(t, err)
-
-		resp, err := uc.GetRefreshToken(claimCtx(claims), req)
+		resp, err := uc.GetRefreshToken(context.Background(), &authv1.GetRefreshTokenRequest{RefreshToken: access})
 
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
@@ -376,11 +373,12 @@ func TestAuthUsecase_GetRefreshToken(t *testing.T) {
 	})
 
 	t.Run("UID 非法返回 InvalidArgument", func(t *testing.T) {
-		uc, _, _ := newUsecase(t)
+		uc, _, mgr := newUsecase(t)
 
-		resp, err := uc.GetRefreshToken(claimCtx(&jwt.Claims{
+		token := mustToken(t, mgr, &jwt.Claims{
 			Type: defaults.JwtRefreshToken, UID: "not-a-number", Role: authv1.Role_ROLE_USER.String(),
-		}), req)
+		})
+		resp, err := uc.GetRefreshToken(context.Background(), &authv1.GetRefreshTokenRequest{RefreshToken: token})
 
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
@@ -388,11 +386,12 @@ func TestAuthUsecase_GetRefreshToken(t *testing.T) {
 	})
 
 	t.Run("用户不存在返回 Unauthorized", func(t *testing.T) {
-		uc, _, _ := newUsecase(t)
+		uc, _, mgr := newUsecase(t)
 
-		resp, err := uc.GetRefreshToken(claimCtx(&jwt.Claims{
+		token := mustToken(t, mgr, &jwt.Claims{
 			Type: defaults.JwtRefreshToken, UID: "999999", Role: authv1.Role_ROLE_USER.String(),
-		}), req)
+		})
+		resp, err := uc.GetRefreshToken(context.Background(), &authv1.GetRefreshTokenRequest{RefreshToken: token})
 
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
@@ -400,15 +399,16 @@ func TestAuthUsecase_GetRefreshToken(t *testing.T) {
 	})
 
 	t.Run("jti 与登录态不符返回 Unauthorized", func(t *testing.T) {
-		uc, db, _ := newUsecase(t)
+		uc, db, mgr := newUsecase(t)
 		seedUser(t, db, bizUID1, emailOf(bizUID1), testPassword, authv1.Role_ROLE_USER)
 
-		resp, err := uc.GetRefreshToken(claimCtx(&jwt.Claims{
+		token := mustToken(t, mgr, &jwt.Claims{
 			RegisteredClaims: jwtClaimID("never-issued"),
 			Type:             defaults.JwtRefreshToken,
 			UID:              strconv.FormatInt(bizUID1, 10),
 			Role:             authv1.Role_ROLE_USER.String(),
-		}), req)
+		})
+		resp, err := uc.GetRefreshToken(context.Background(), &authv1.GetRefreshTokenRequest{RefreshToken: token})
 
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
@@ -419,10 +419,10 @@ func TestAuthUsecase_GetRefreshToken(t *testing.T) {
 		// Arrange：登录建立 web 登录态
 		uc, db, mgr := newUsecase(t)
 		seedUser(t, db, bizUID1, emailOf(bizUID1), testPassword, authv1.Role_ROLE_USER)
-		_, _, oldClaims := mustLogin(t, uc, bizUID1, authv1.Platform_PLATFORM_WEB)
+		_, oldToken, oldClaims := mustLogin(t, uc, bizUID1, authv1.Platform_PLATFORM_WEB)
 
-		// Act：用旧 refresh claims 刷新
-		resp, err := uc.GetRefreshToken(claimCtx(oldClaims), req)
+		// Act：用旧 refresh token 刷新
+		resp, err := uc.GetRefreshToken(context.Background(), &authv1.GetRefreshTokenRequest{RefreshToken: oldToken})
 
 		// Assert
 		require.NoError(t, err)
@@ -441,7 +441,7 @@ func TestAuthUsecase_GetRefreshToken(t *testing.T) {
 		assert.Equal(t, newClaims.ID, got.RefreshTokenIDWeb, "登录态应指向新的 jti")
 
 		// 旧 jti 已被轮换，重放旧 token 必须被拒绝（防令牌重放）
-		replay, err := uc.GetRefreshToken(claimCtx(oldClaims), req)
+		replay, err := uc.GetRefreshToken(context.Background(), &authv1.GetRefreshTokenRequest{RefreshToken: oldToken})
 		require.NoError(t, err)
 		assert.True(t, replay.GetFail())
 		assert.Equal(t, errmsg.Unauthorized, replay.GetErr())
@@ -451,12 +451,10 @@ func TestAuthUsecase_GetRefreshToken(t *testing.T) {
 // ---------- GetAccessToken ----------
 
 func TestAuthUsecase_GetAccessToken(t *testing.T) {
-	req := &authv1.GetAccessTokenRequest{}
-
-	t.Run("未认证返回 Unauthorized", func(t *testing.T) {
+	t.Run("凭证缺失或伪造返回 Unauthorized", func(t *testing.T) {
 		uc, _, _ := newUsecase(t)
 
-		resp, err := uc.GetAccessToken(context.Background(), req)
+		resp, err := uc.GetAccessToken(context.Background(), &authv1.GetAccessTokenRequest{RefreshToken: "forged-token"})
 
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
@@ -469,10 +467,7 @@ func TestAuthUsecase_GetAccessToken(t *testing.T) {
 		seedUser(t, db, bizUID1, emailOf(bizUID1), testPassword, authv1.Role_ROLE_USER)
 		access, _, _ := mustLogin(t, uc, bizUID1, authv1.Platform_PLATFORM_WEB)
 
-		claims, err := uc.Manager.Parse(access)
-		require.NoError(t, err)
-
-		resp, err := uc.GetAccessToken(claimCtx(claims), req)
+		resp, err := uc.GetAccessToken(context.Background(), &authv1.GetAccessTokenRequest{RefreshToken: access})
 
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
@@ -480,11 +475,12 @@ func TestAuthUsecase_GetAccessToken(t *testing.T) {
 	})
 
 	t.Run("UID 非法返回 InvalidArgument", func(t *testing.T) {
-		uc, _, _ := newUsecase(t)
+		uc, _, mgr := newUsecase(t)
 
-		resp, err := uc.GetAccessToken(claimCtx(&jwt.Claims{
+		token := mustToken(t, mgr, &jwt.Claims{
 			Type: defaults.JwtRefreshToken, UID: "not-a-number",
-		}), req)
+		})
+		resp, err := uc.GetAccessToken(context.Background(), &authv1.GetAccessTokenRequest{RefreshToken: token})
 
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
@@ -492,11 +488,12 @@ func TestAuthUsecase_GetAccessToken(t *testing.T) {
 	})
 
 	t.Run("用户不存在返回 Unauthorized", func(t *testing.T) {
-		uc, _, _ := newUsecase(t)
+		uc, _, mgr := newUsecase(t)
 
-		resp, err := uc.GetAccessToken(claimCtx(&jwt.Claims{
+		token := mustToken(t, mgr, &jwt.Claims{
 			Type: defaults.JwtRefreshToken, UID: "999999",
-		}), req)
+		})
+		resp, err := uc.GetAccessToken(context.Background(), &authv1.GetAccessTokenRequest{RefreshToken: token})
 
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
@@ -504,14 +501,15 @@ func TestAuthUsecase_GetAccessToken(t *testing.T) {
 	})
 
 	t.Run("jti 与登录态不符返回 Unauthorized", func(t *testing.T) {
-		uc, db, _ := newUsecase(t)
+		uc, db, mgr := newUsecase(t)
 		seedUser(t, db, bizUID1, emailOf(bizUID1), testPassword, authv1.Role_ROLE_USER)
 
-		resp, err := uc.GetAccessToken(claimCtx(&jwt.Claims{
+		token := mustToken(t, mgr, &jwt.Claims{
 			RegisteredClaims: jwtClaimID("never-issued"),
 			Type:             defaults.JwtRefreshToken,
 			UID:              strconv.FormatInt(bizUID1, 10),
-		}), req)
+		})
+		resp, err := uc.GetAccessToken(context.Background(), &authv1.GetAccessTokenRequest{RefreshToken: token})
 
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
@@ -525,7 +523,7 @@ func TestAuthUsecase_GetAccessToken(t *testing.T) {
 		_, refresh, refreshClaims := mustLogin(t, uc, bizUID2, authv1.Platform_PLATFORM_WEB)
 
 		// Act
-		resp, err := uc.GetAccessToken(claimCtx(refreshClaims), req)
+		resp, err := uc.GetAccessToken(context.Background(), &authv1.GetAccessTokenRequest{RefreshToken: refresh})
 
 		// Assert
 		require.NoError(t, err)
@@ -551,22 +549,20 @@ func TestAuthUsecase_GetAccessToken(t *testing.T) {
 // ---------- Logout ----------
 
 func TestAuthUsecase_Logout(t *testing.T) {
-	req := &authv1.LogoutRequest{}
-
-	t.Run("未认证返回 Unauthorized", func(t *testing.T) {
+	t.Run("UID 为空返回 InvalidID", func(t *testing.T) {
 		uc, _, _ := newUsecase(t)
 
-		resp, err := uc.Logout(context.Background(), req)
+		resp, err := uc.Logout(context.Background(), &authv1.LogoutRequest{})
 
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
-		assert.Equal(t, errmsg.Unauthorized, resp.GetErr())
+		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
 	})
 
 	t.Run("UID 非法返回 InvalidID", func(t *testing.T) {
 		uc, _, _ := newUsecase(t)
 
-		resp, err := uc.Logout(claimCtx(&jwt.Claims{UID: "not-a-number"}), req)
+		resp, err := uc.Logout(context.Background(), &authv1.LogoutRequest{Uid: "not-a-number"})
 
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
@@ -577,11 +573,11 @@ func TestAuthUsecase_Logout(t *testing.T) {
 		// Arrange：web 与 mobile 各登录一次
 		uc, db, _ := newUsecase(t)
 		seedUser(t, db, bizUID1, emailOf(bizUID1), testPassword, authv1.Role_ROLE_USER)
-		_, _, webClaims := mustLogin(t, uc, bizUID1, authv1.Platform_PLATFORM_WEB)
-		_, _, mobileClaims := mustLogin(t, uc, bizUID1, authv1.Platform_PLATFORM_MOBILE)
+		_, webToken, webClaims := mustLogin(t, uc, bizUID1, authv1.Platform_PLATFORM_WEB)
+		_, mobileToken, mobileClaims := mustLogin(t, uc, bizUID1, authv1.Platform_PLATFORM_MOBILE)
 
-		// Act
-		resp, err := uc.Logout(claimCtx(webClaims), req)
+		// Act：身份由请求体直传会话 uid
+		resp, err := uc.Logout(context.Background(), &authv1.LogoutRequest{Uid: strconv.FormatInt(bizUID1, 10)})
 
 		// Assert
 		require.NoError(t, err)
@@ -594,12 +590,12 @@ func TestAuthUsecase_Logout(t *testing.T) {
 		assert.NotEqual(t, mobileClaims.ID, got.RefreshTokenIDMobile, "mobile 登录态应被置为占位值")
 
 		// 双端旧 refresh token 均无法再刷新
-		webResp, err := uc.GetRefreshToken(claimCtx(webClaims), &authv1.GetRefreshTokenRequest{})
+		webResp, err := uc.GetRefreshToken(context.Background(), &authv1.GetRefreshTokenRequest{RefreshToken: webToken})
 		require.NoError(t, err)
 		assert.True(t, webResp.GetFail())
 		assert.Equal(t, errmsg.Unauthorized, webResp.GetErr())
 
-		mobileResp, err := uc.GetRefreshToken(claimCtx(mobileClaims), &authv1.GetRefreshTokenRequest{})
+		mobileResp, err := uc.GetRefreshToken(context.Background(), &authv1.GetRefreshTokenRequest{RefreshToken: mobileToken})
 		require.NoError(t, err)
 		assert.True(t, mobileResp.GetFail())
 		assert.Equal(t, errmsg.Unauthorized, mobileResp.GetErr())
@@ -608,13 +604,14 @@ func TestAuthUsecase_Logout(t *testing.T) {
 	t.Run("重复登出幂等成功", func(t *testing.T) {
 		uc, db, _ := newUsecase(t)
 		seedUser(t, db, bizUID2, emailOf(bizUID2), testPassword, authv1.Role_ROLE_USER)
-		_, _, webClaims := mustLogin(t, uc, bizUID2, authv1.Platform_PLATFORM_WEB)
+		mustLogin(t, uc, bizUID2, authv1.Platform_PLATFORM_WEB)
 
-		first, err := uc.Logout(claimCtx(webClaims), req)
+		logoutReq := &authv1.LogoutRequest{Uid: strconv.FormatInt(bizUID2, 10)}
+		first, err := uc.Logout(context.Background(), logoutReq)
 		require.NoError(t, err)
 		require.False(t, first.GetFail())
 
-		second, err := uc.Logout(claimCtx(webClaims), req)
+		second, err := uc.Logout(context.Background(), logoutReq)
 		require.NoError(t, err)
 		assert.False(t, second.GetFail(), "重复登出应幂等成功")
 		assert.Nil(t, second.GetErr())

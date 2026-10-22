@@ -142,9 +142,12 @@ func (u *AuthUsecaseImpl) Login(ctx context.Context, req *authv1.LoginRequest) (
 	}, nil
 }
 
+// GetRefreshToken 换发 refresh token：会话凭据由请求体直传（refresh token 串），
+// auth 自行验签后取 uid/jti 做轮换校验，不再依赖 ctx 透传的 claims
 func (u *AuthUsecaseImpl) GetRefreshToken(ctx context.Context, req *authv1.GetRefreshTokenRequest) (*authv1.GetRefreshTokenResponse, error) {
-	claim := jwt.ClaimsFromContext(ctx)
-	if claim == nil {
+	claim, err := u.Manager.Parse(req.GetRefreshToken())
+	if err != nil {
+		// 验签失败（伪造/过期/空串）一律按未认证处理，不泄露具体原因
 		return &authv1.GetRefreshTokenResponse{Fail: true, Err: errmsg.Unauthorized}, nil
 	}
 
@@ -199,9 +202,12 @@ func (u *AuthUsecaseImpl) GetRefreshToken(ctx context.Context, req *authv1.GetRe
 	}, nil
 }
 
+// GetAccessToken 换发 access token：会话凭据由请求体直传（refresh token 串），
+// auth 验签后比对 jti 确认登录态仍有效（不轮换 refresh 登录态）
 func (u *AuthUsecaseImpl) GetAccessToken(ctx context.Context, req *authv1.GetAccessTokenRequest) (*authv1.GetAccessTokenResponse, error) {
-	claim := jwt.ClaimsFromContext(ctx)
-	if claim == nil {
+	claim, err := u.Manager.Parse(req.GetRefreshToken())
+	if err != nil {
+		// 验签失败（伪造/过期/空串）一律按未认证处理，不泄露具体原因
 		return &authv1.GetAccessTokenResponse{Fail: true, Err: errmsg.Unauthorized}, nil
 	}
 
@@ -251,12 +257,9 @@ func matchPlatform(credential *auth.UserCredential, claim *jwt.Claims) authv1.Pl
 }
 
 func (u *AuthUsecaseImpl) Logout(ctx context.Context, req *authv1.LogoutRequest) (*authv1.LogoutResponse, error) {
-	// 身份以 ctx 中已认证的 claims 为准，不信任客户端自报的 UID，防止越权踢他人下线
-	claim := jwt.ClaimsFromContext(ctx)
-	if claim == nil {
-		return &authv1.LogoutResponse{Fail: true, Err: errmsg.Unauthorized}, nil
-	}
-	uid, err := snowflake.ParseString(claim.UID)
+	// 身份由内部 RPC 请求体直传（BFF 从会话解析 uid 后注入，内网互信），
+	// 不接收面客自报的 UID——越权防护由 BFF 会话鉴权保证
+	uid, err := snowflake.ParseString(req.GetUid())
 	if err != nil {
 		return &authv1.LogoutResponse{Fail: true, Err: errmsg.InvalidID}, nil
 	}

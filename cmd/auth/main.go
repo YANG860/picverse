@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"connectrpc.com/validate"
 	authv1connect "rednote/gen/go/auth/v1/authv1connect"
 	"rednote/packages/trace"
 )
@@ -26,19 +27,18 @@ func main() {
 	cfg := config.Init(cfgPath)
 
 	svc, cleanup := gen.InitializeAuthServiceHandler(cfg)
-	// jwt 拦截器：解析 Authorization 头中的 Bearer token，
-	// 把原始 token 与 claims 注入 ctx，供 GetRefreshToken/Logout 等业务读取
-	authInterceptor := gen.InitializeAuthInterceptor(cfg)
+	// 会话凭据由内部 RPC 请求体直传（refresh_token / uid），auth 不再从
+	// 请求头解析 claims 注入 ctx，故这里只挂 trace 与参数校验拦截器
 	path, hander := authv1connect.NewAuthServiceHandler(
 		svc,
-		connect.WithInterceptors(trace.NewServerInterceptor(), authInterceptor),
+		connect.WithInterceptors(trace.NewServerInterceptor(), validate.NewInterceptor()),
 	)
 
 	mux := http.NewServeMux()
 	mux.Handle(path, hander)
 
 	srv := &http.Server{
-		Addr:    ":8081",
+		Addr:    cfg.Server.Auth,
 		Handler: mux,
 	}
 

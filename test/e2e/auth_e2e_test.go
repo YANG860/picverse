@@ -1,7 +1,7 @@
 // Package e2e 对外部署的 auth 服务做黑盒端到端测试：
 // 注册 → 登录 → 换发 access/refresh token → 轮换失效 → 登出。
 //
-// 前置条件：auth 服务已部署（须已接入 jwt 服务端拦截器，见 cmd/auth/main.go），PostgreSQL 可用。
+// 前置条件：auth 服务已部署（会话凭据由请求体直传，不依赖请求头拦截器），PostgreSQL 可用。
 // 运行：
 //
 //	go test ./test/e2e/... -count=1          # 默认 http://localhost:8081
@@ -57,14 +57,6 @@ func newAuthClient(t *testing.T) authv1connect.AuthServiceClient {
 	return authv1connect.NewAuthServiceClient(http.DefaultClient, authAddr())
 }
 
-// setBearer 把 Bearer token 写入请求头（token 为空表示匿名请求）。
-// 必须在发送 RPC 之前调用。
-func setBearer(req connect.AnyRequest, token string) {
-	if token != "" {
-		req.Header().Set("Authorization", "Bearer "+token)
-	}
-}
-
 // assertBizErr 断言业务失败及错误码
 func assertBizErr(t *testing.T, fail bool, err *commonv1.Error, want *commonv1.Error, msg string) {
 	t.Helper()
@@ -78,7 +70,7 @@ func assertBizErr(t *testing.T, fail bool, err *commonv1.Error, want *commonv1.E
 // 步骤之间有依赖（同一账号的 token 轮换链），因此在一个测试内按序执行：
 //
 //	注册 → 重复注册 → 登录失败路径 → 登录 → 换 access → 轮换 refresh
-//	→ 旧 token 失效 → 轮换后仍可用 → 类型不符/伪造/无 token 拒绝 → 登出 → 登出后失效
+//	→ 旧 token 失效 → 轮换后仍可用 → 类型不符/伪造/空凭据拒绝 → 登出 → 登出后失效
 func TestAuthServiceE2E(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e: -short 模式跳过依赖外部部署服务的测试")
@@ -138,16 +130,14 @@ func TestAuthServiceE2E(t *testing.T) {
 	require.NotEmpty(t, accessToken, "登录应返回 access token")
 
 	// ---- 5. 用 refresh token 换发 access token ----
-	atReq := connect.NewRequest(&authv1.GetAccessTokenRequest{})
-	setBearer(atReq, refreshA)
+	atReq := connect.NewRequest(&authv1.GetAccessTokenRequest{RefreshToken: refreshA})
 	atResp, err := client.GetAccessToken(context.Background(), atReq)
 	require.NoError(t, err, "GetAccessToken RPC")
 	require.False(t, atResp.Msg.GetFail(), "换发 access token 业务失败: %v", atResp.Msg.GetErr())
 	require.NotEmpty(t, atResp.Msg.GetToken().GetValue(), "应返回新的 access token")
 
 	// ---- 6. 轮换 refresh token：A → B ----
-	rtReq := connect.NewRequest(&authv1.GetRefreshTokenRequest{})
-	setBearer(rtReq, refreshA)
+	rtReq := connect.NewRequest(&authv1.GetRefreshTokenRequest{RefreshToken: refreshA})
 	rtResp, err := client.GetRefreshToken(context.Background(), rtReq)
 	require.NoError(t, err, "GetRefreshToken RPC")
 	require.False(t, rtResp.Msg.GetFail(), "轮换 refresh token 业务失败: %v", rtResp.Msg.GetErr())
@@ -156,21 +146,18 @@ func TestAuthServiceE2E(t *testing.T) {
 	assert.NotEqual(t, refreshA, refreshB, "轮换出的 token 应与旧 token 不同")
 
 	// ---- 7. 旧 refresh token 轮换后立即失效 ----
-	staleReq := connect.NewRequest(&authv1.GetRefreshTokenRequest{})
-	setBearer(staleReq, refreshA)
+	staleReq := connect.NewRequest(&authv1.GetRefreshTokenRequest{RefreshToken: refreshA})
 	stale, err := client.GetRefreshToken(context.Background(), staleReq)
 	require.NoError(t, err, "旧 token 轮换 RPC")
 	assertBizErr(t, stale.Msg.GetFail(), stale.Msg.GetErr(), errmsg.Unauthorized, "旧 refresh token 应失效")
 
 	// ---- 8. 轮换后的新 token 仍可正常使用 ----
-	at2Req := connect.NewRequest(&authv1.GetAccessTokenRequest{})
-	setBearer(at2Req, refreshB)
+	at2Req := connect.NewRequest(&authv1.GetAccessTokenRequest{RefreshToken: refreshB})
 	at2, err := client.GetAccessToken(context.Background(), at2Req)
 	require.NoError(t, err, "新 token 换发 access RPC")
 	require.False(t, at2.Msg.GetFail(), "轮换后换发 access 应成功: %v", at2.Msg.GetErr())
 
-	rt2Req := connect.NewRequest(&authv1.GetRefreshTokenRequest{})
-	setBearer(rt2Req, refreshB)
+	rt2Req := connect.NewRequest(&authv1.GetRefreshTokenRequest{RefreshToken: refreshB})
 	rt2, err := client.GetRefreshToken(context.Background(), rt2Req)
 	require.NoError(t, err, "新 token 再轮换 RPC")
 	require.False(t, rt2.Msg.GetFail(), "轮换后再轮换应成功: %v", rt2.Msg.GetErr())
@@ -178,36 +165,32 @@ func TestAuthServiceE2E(t *testing.T) {
 	require.NotEmpty(t, refreshC, "再次轮换应返回新 refresh token")
 
 	// ---- 9. token 类型不符：拿 access token 调 refresh 接口 → InvalidArgument ----
-	wrongTypeReq := connect.NewRequest(&authv1.GetRefreshTokenRequest{})
-	setBearer(wrongTypeReq, accessToken)
+	wrongTypeReq := connect.NewRequest(&authv1.GetRefreshTokenRequest{RefreshToken: accessToken})
 	wrongType, err := client.GetRefreshToken(context.Background(), wrongTypeReq)
 	require.NoError(t, err, "类型不符 RPC")
 	assertBizErr(t, wrongType.Msg.GetFail(), wrongType.Msg.GetErr(), errmsg.InvalidArgument,
 		"access token 不应用于轮换 refresh token")
 
-	// ---- 10. 伪造 token → Unauthorized（claims 为空）----
-	forgedReq := connect.NewRequest(&authv1.GetRefreshTokenRequest{})
-	setBearer(forgedReq, refreshA[:len(refreshA)/2]+"forged")
+	// ---- 10. 伪造 token → Unauthorized ----
+	forgedReq := connect.NewRequest(&authv1.GetRefreshTokenRequest{RefreshToken: refreshA[:len(refreshA)/2] + "forged"})
 	forged, err := client.GetRefreshToken(context.Background(), forgedReq)
 	require.NoError(t, err, "伪造 token RPC")
 	assertBizErr(t, forged.Msg.GetFail(), forged.Msg.GetErr(), errmsg.Unauthorized, "伪造 token 应被拒绝")
 
-	// ---- 11. 无 token → Unauthorized ----
-	anon, err := client.GetRefreshToken(context.Background(),
+	// ---- 11. 空会话凭据 → 传输层拒绝（protovalidate min_len）----
+	_, err = client.GetRefreshToken(context.Background(),
 		connect.NewRequest(&authv1.GetRefreshTokenRequest{}))
-	require.NoError(t, err, "无 token RPC")
-	assertBizErr(t, anon.Msg.GetFail(), anon.Msg.GetErr(), errmsg.Unauthorized, "无 token 应被拒绝")
+	require.Error(t, err, "空凭据应被传输层拒绝")
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err), "空凭据应返回 InvalidArgument")
 
-	// ---- 12. 登出 ----
-	outReq := connect.NewRequest(&authv1.LogoutRequest{})
-	setBearer(outReq, refreshC)
+	// ---- 12. 登出（身份由请求体直传会话 uid）----
+	outReq := connect.NewRequest(&authv1.LogoutRequest{Uid: reg.Msg.GetAssignedId()})
 	out, err := client.Logout(context.Background(), outReq)
 	require.NoError(t, err, "Logout RPC")
 	require.False(t, out.Msg.GetFail(), "登出业务失败: %v", out.Msg.GetErr())
 
 	// ---- 13. 登出后 refresh token 全平台失效 ----
-	afterOutReq := connect.NewRequest(&authv1.GetRefreshTokenRequest{})
-	setBearer(afterOutReq, refreshC)
+	afterOutReq := connect.NewRequest(&authv1.GetRefreshTokenRequest{RefreshToken: refreshC})
 	afterOut, err := client.GetRefreshToken(context.Background(), afterOutReq)
 	require.NoError(t, err, "登出后轮换 RPC")
 	assertBizErr(t, afterOut.Msg.GetFail(), afterOut.Msg.GetErr(), errmsg.Unauthorized,

@@ -2,7 +2,7 @@
 
 代码：`internal/auth/`（`models/`、`v1/{biz,repo,service}.go`），proto：`proto/auth/v1/`，进程：`cmd/auth`（端口 `:8081`）。
 
-负责注册、密码登录、JWT 换发与登出。身份以 context 中已认证的 Claims 为准，不信任客户端自报 UID。
+负责注册、密码登录、JWT 换发与登出。会话凭据由**内部 RPC 请求体直传**（`GetRefreshToken` / `GetAccessToken` 传 `refresh_token` 串，auth 自行验签；`Logout` 传 `uid`，由 BFF 从会话解析后注入），不再经 ctx/header 透传 claims。
 
 ## 数据模型
 
@@ -22,9 +22,9 @@
 | --- | --- |
 | `Register` | 注册，返回 `assigned_id`（雪花 ID 字符串） |
 | `Login` | 密码登录，签发 access + refresh token |
-| `GetRefreshToken` | 无条件换发新 refresh token（需登录态） |
-| `GetAccessToken` | 无条件换发新 access token（需登录态） |
-| `Logout` | 强制登出（失效两个平台的 refresh token） |
+| `GetRefreshToken` | 无条件换发新 refresh token（请求体直传 refresh token 串，验签 + jti 轮换校验） |
+| `GetAccessToken` | 无条件换发新 access token（同上，不轮换 refresh 登录态） |
+| `Logout` | 强制登出（`uid` 由 BFF 从会话注入；失效两个平台的 refresh token） |
 
 ## 关键逻辑
 
@@ -41,20 +41,22 @@
 4. 按 `Platform`（MOBILE / WEB）把新 refresh token 的 `jti` 写入对应字段，作为该平台的"当前有效 token"。
 
 ### GetRefreshToken / GetAccessToken
-- 要求 ctx 中有 **refresh token**（`claim.Type == "refresh"`）。
+- 会话凭据由请求体直传：`Manager.Parse(refresh_token)` 验签（伪造/过期/空串一律 `Unauthorized`），
+  要求 token 类型为 **refresh**（`claim.Type == "refresh"`，否则 `InvalidArgument`）。
 - `matchPlatform` 通过比对 `credential.RefreshTokenID*` 与 `claim.ID` 判断 token 是否仍有效（是否被轮换/登出）。
 - `GetRefreshToken` 会轮换：生成新 `jti` 并覆盖对应平台字段（旧 refresh token 立即失效）。
 - 未命中任何平台 = token 已失效，返回 `Unauthorized`。
 
 ### Logout
-- 以 ctx 中已认证 claims 为身份，防止越权踢他人下线。
+- 身份由请求体 `uid` 直传（BFF 从会话解析后注入，内网互信）；面客侧的越权防护由 BFF 会话鉴权保证。
 - 在**同一事务**内把两个平台的 `RefreshTokenID*` 置为占位值（新生成的雪花 ID），立即失效。
 
 ## 依赖
 
 - `jwt.Manager` — 签发/校验 token（见 [packages/jwt/jwt.md](../../packages/jwt/jwt.md)）
 - `AuthRepository` — 数据访问，支持 `WithTX`
-- ConnectRPC 拦截器：`trace.NewServerInterceptor()` + `jwt.NewServerInterceptor()`（`cmd/auth/main.go` 组装）
+- ConnectRPC 拦截器：`trace.NewServerInterceptor()` + `validate.NewInterceptor()`（`cmd/auth/main.go` 组装）；
+  不再挂 jwt 服务端拦截器——会话凭据由请求体直传，业务不读 ctx claims
 
 ## 状态
 

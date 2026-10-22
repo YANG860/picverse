@@ -42,4 +42,6 @@
 ### ClientInterceptor（`NewClientInterceptor()`）
 - 发送请求时若 ctx 有原始 token，以 `Bearer` 方案写入 `Authorization` 头。
 
-token 传输约定：标准 `Authorization` 头 + `Bearer` 认证方案。auth 服务在 `cmd/auth/main.go` 组装服务端拦截器。
+token 传输约定：标准 `Authorization` 头 + `Bearer` 认证方案（面客链路：客户端 → BFF，由 `ServerInterceptor` 解析注入 ctx）。
+内部 RPC（BFF → auth）改为**请求体直传**：会话凭据（refresh token 串）/ uid 直接写入请求消息，
+auth 自行 `Manager.Parse` 验签，不再经 ctx/header 透传 claims（`cmd/auth/main.go` 不再组装 jwt 服务端拦截器）。
