@@ -3,12 +3,14 @@ package v1
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	authv1 "rednote/gen/go/auth/v1"
 	bffv1 "rednote/gen/go/bff/v1"
 	commonv1 "rednote/gen/go/common/v1"
 	mediav1 "rednote/gen/go/media/v1"
 	userv1 "rednote/gen/go/user/v1"
+	"rednote/packages/defaults"
 	"rednote/packages/errmsg"
 	"rednote/packages/jwt"
 	"rednote/packages/logger"
@@ -23,10 +25,12 @@ type BFFUsecase interface {
 	// ==================== 认证 ====================
 	Register(ctx context.Context, req *bffv1.RegisterRequest) (*bffv1.RegisterResponse, error)
 	Login(ctx context.Context, req *bffv1.LoginRequest) (*bffv1.LoginResponse, error)
-
+	RefreshTokens(ctx context.Context, req *bffv1.RefreshTokensRequest) (*bffv1.RefreshTokensResponse, error)
+	Logout(ctx context.Context, req *bffv1.LogoutRequest) (*bffv1.LogoutResponse, error)
 	// ==================== 用户 ====================
 
 	// ==================== 媒体 ====================
+	UploadMedia(ctx context.Context, req *bffv1.UploadMediaRequest) (*bffv1.UploadMediaResponse, error)
 
 	// ==================== 帖子 ====================
 
@@ -129,11 +133,42 @@ func (u *BFFUsecaseImpl) DeRefMediaFile(ctx context.Context, assetID string) *co
 	return nil
 }
 
+// ==================== 媒体 ====================
+
+// UploadMedia 上传媒体：uploader 即会话用户（BFF 解析后注入下游，内网直传），
+// 下游创建资产并返回预签名直传 URL，客户端持 URL 直传对象存储（不经服务端）。
+// 新建资产引用计数为 0，挂载到帖子/头像时才由挂载点维护计数；
+// 未挂载的闲置资产由下游 DeleteUnusedMedia 定期回收。
+func (u *BFFUsecaseImpl) UploadMedia(ctx context.Context, req *bffv1.UploadMediaRequest) (*bffv1.UploadMediaResponse, error) {
+	claims := jwt.ClaimsFromContext(ctx)
+	if claims == nil {
+		return &bffv1.UploadMediaResponse{Fail: true, Err: errmsg.Unauthorized}, nil
+	}
+
+	resp, err := u.Repo.Media.UploadMedia(ctx, connect.NewRequest(&mediav1.UploadMediaRequest{
+		UploaderId: claims.UID,
+		MediaMeta:  req.GetMeta(),
+	}))
+	if err != nil {
+		u.log.Error("media.UploadMedia failed", "uid", claims.UID, "error", err)
+		return nil, err
+	}
+	if resp.Msg.Fail {
+		return &bffv1.UploadMediaResponse{Fail: resp.Msg.Fail, Err: resp.Msg.Err}, nil
+	}
+
+	return &bffv1.UploadMediaResponse{
+		Asset:     resp.Msg.GetAsset(),
+		SignedUrl: resp.Msg.GetSignedUrl(),
+		ExpireAt:  resp.Msg.GetExpireAt(),
+	}, nil
+}
+
 // ==================== 认证 ====================
 
 // Register 注册账户并自动登录签发双令牌（auth.Register 只返回 assigned_id，不签发令牌）。
 // 流程：注册账户 → 检查头像资源（缺省用默认头像）→ 维护媒体引用（+1）→ 创建用户 → 登录账号。
-// 注意：auth 注册成功后无回滚接口，后续步骤失败仅返回错误（账户已创建，头像计数可能已 +1）。
+// TODO：auth 注册成功后无回滚接口，后续步骤失败仅返回错误（账户已创建，头像计数可能已 +1）。
 func (u *BFFUsecaseImpl) Register(ctx context.Context, req *bffv1.RegisterRequest) (*bffv1.RegisterResponse, error) {
 	// 1. 注册账户：角色由 BFF 固定 ROLE_USER，不暴露给客户端
 	resp, err := u.Repo.Auth.Register(ctx, connect.NewRequest(&authv1.RegisterRequest{
@@ -200,16 +235,22 @@ func (u *BFFUsecaseImpl) Login(ctx context.Context, req *bffv1.LoginRequest) (*b
 	return &bffv1.LoginResponse{AccessToken: loginResp.Msg.AccessToken, RefreshToken: loginResp.Msg.RefreshToken}, nil
 }
 
-// RefreshTokens 刷新双令牌：会话凭据（refresh token 串）由请求体直传内部 RPC，
-// auth 验签 + jti 轮换校验，不再经 ClientInterceptor 透传请求头。
+// RefreshTokens 刷新令牌：始终换发 access token，refresh token 仅在临近过期时才轮换
+// （滑动续期，减少轮换频率与客户端存储失效）；会话凭据（refresh token 串）由请求体
+// 直传内部 RPC，不再经 ClientInterceptor 透传请求头。
+// 临近过期判定：剩余寿命不足令牌总寿命（exp - iat）的一半。
+// 响应的 refresh_token 总是回填当前有效值（未轮换=旧值），客户端可无脑覆盖存储。
 // 顺序固定：先换 access（不轮换 jti），再轮换 refresh——GetRefreshToken 成功即轮换 jti、
 // 旧 token 立即失效，反过来会让第二次调用拿旧 token 被拒。
 func (u *BFFUsecaseImpl) RefreshTokens(ctx context.Context, req *bffv1.RefreshTokensRequest) (*bffv1.RefreshTokensResponse, error) {
+	// token需要是refresh
 	token := jwt.TokenFromContext(ctx)
-	if token == "" {
+	claims := jwt.ClaimsFromContext(ctx)
+	if token == "" || claims == nil || claims.Type != defaults.JwtRefreshToken {
 		return &bffv1.RefreshTokensResponse{Fail: true, Err: errmsg.Unauthorized}, nil
 	}
 
+	// 1. 换发 access token（auth 侧不轮换 refresh 登录态）
 	access, err := u.Repo.Auth.GetAccessToken(ctx, connect.NewRequest(&authv1.GetAccessTokenRequest{RefreshToken: token}))
 	if err != nil {
 		u.log.Error("auth.GetAccessToken failed", "error", err)
@@ -217,6 +258,17 @@ func (u *BFFUsecaseImpl) RefreshTokens(ctx context.Context, req *bffv1.RefreshTo
 	}
 	if access.Msg.Fail {
 		return &bffv1.RefreshTokensResponse{Fail: access.Msg.Fail, Err: access.Msg.Err}, nil
+	}
+
+	resp := &bffv1.RefreshTokensResponse{
+		AccessToken: access.Msg.Token,
+		// 未轮换时回填旧值，客户端统一覆盖存储
+		RefreshToken: &authv1.RefreshToken{Value: token},
+	}
+
+	// 2. 临近过期才轮换 refresh token，否则沿用旧值
+	if !expiringSoon(claims) {
+		return resp, nil
 	}
 
 	refresh, err := u.Repo.Auth.GetRefreshToken(ctx, connect.NewRequest(&authv1.GetRefreshTokenRequest{RefreshToken: token}))
@@ -227,11 +279,37 @@ func (u *BFFUsecaseImpl) RefreshTokens(ctx context.Context, req *bffv1.RefreshTo
 	if refresh.Msg.Fail {
 		return &bffv1.RefreshTokensResponse{Fail: refresh.Msg.Fail, Err: refresh.Msg.Err}, nil
 	}
+	resp.RefreshToken = refresh.Msg.Token
+	return resp, nil
+}
 
-	return &bffv1.RefreshTokensResponse{
-		Fail:         refresh.Msg.Fail,
-		Err:          refresh.Msg.Err,
-		AccessToken:  access.Msg.Token,
-		RefreshToken: refresh.Msg.Token,
-	}, nil
+// Logout 登出当前会话用户：uid 由会话解析后注入下游（内网直传），
+// 失效该账号全部平台的 refresh 登录态（auth 侧同事务置占位 jti，幂等）。
+// 会话缺失返回 Unauthorized；下游连接层错误走原始 gRPC 错误。
+func (u *BFFUsecaseImpl) Logout(ctx context.Context, req *bffv1.LogoutRequest) (*bffv1.LogoutResponse, error) {
+	claims := jwt.ClaimsFromContext(ctx)
+	if claims == nil {
+		return &bffv1.LogoutResponse{Fail: true, Err: errmsg.Unauthorized}, nil
+	}
+
+	resp, err := u.Repo.Auth.Logout(ctx, connect.NewRequest(&authv1.LogoutRequest{Uid: claims.UID}))
+	if err != nil {
+		u.log.Error("auth.Logout failed", "uid", claims.UID, "error", err)
+		return nil, err
+	}
+	if resp.Msg.Fail {
+		return &bffv1.LogoutResponse{Fail: resp.Msg.Fail, Err: resp.Msg.Err}, nil
+	}
+
+	return &bffv1.LogoutResponse{}, nil
+}
+
+// expiringSoon 判断会话令牌是否临近过期：剩余寿命不足总寿命（exp - iat）的一半。
+// 载荷缺 exp/iat 属异常签发，按临近过期保守轮换。
+func expiringSoon(claims *jwt.Claims) bool {
+	if claims.ExpiresAt == nil || claims.IssuedAt == nil {
+		return true
+	}
+	lifetime := claims.ExpiresAt.Time.Sub(claims.IssuedAt.Time)
+	return time.Until(claims.ExpiresAt.Time) < lifetime/2
 }

@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package bff.v1;
+
+import "auth/v1/auth.proto";
+import "buf/validate/validate.proto";
+import "common/v1/common.proto";
+import "media/v1/media.proto";
+
+// RegisterRequest 注册（成功即登录，直接签发令牌）。
+// 与内部 auth 服务的差异：角色由 BFF 固定为 ROLE_USER，不暴露给客户端。
+message RegisterRequest {
+  string email = 1 [(buf.validate.field).string.email = true];
+  string password = 2 [(buf.validate.field).string.min_len = 1];
+  // 昵称（必填，1~64 字符，与 user.CreateUser 的 name 校验对齐）
+  string name = 3 [(buf.validate.field).string.min_len = 1];
+  // 头像（可选）：提供时 BFF 校验资产存在且状态可用，挂载时引用计数 +1；
+  // 未提供时使用默认头像（packages/defaults.DefaultAvatar，同样计数 +1）。
+  optional string avatar_asset_id = 4 [(buf.validate.field).string.min_len = 1];
+}
+
+message RegisterResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+}
+
+// LoginRequest 登录（uid 由签发的令牌承载，不在请求体内）。
+message LoginRequest {
+  string email = 1 [(buf.validate.field).string.email = true];
+  string password = 2 [(buf.validate.field).string.min_len = 1];
+  auth.v1.Platform platform = 3;
+}
+
+message LoginResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  auth.v1.AccessToken access_token = 3;
+  auth.v1.RefreshToken refresh_token = 4;
+}
+
+// RefreshTokensRequest 刷新令牌。
+// 请求体为空：refresh token 由 BFF 从请求凭据中解析并透传给下游。
+// refresh token 仅在临近过期（剩余寿命 < 1/2 总寿命）时才轮换，其余时候只换发 access token。
+message RefreshTokensRequest {}
+
+message RefreshTokensResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  auth.v1.AccessToken access_token = 3;
+  // 当前有效的 refresh token：轮换后为新值，未轮换时回填旧值，客户端可直接覆盖存储
+  auth.v1.RefreshToken refresh_token = 4;
+}
+
+// LogoutRequest 登出当前会话用户（uid 来自会话）：失效全部平台的 refresh 登录态。
+message LogoutRequest {
+}
+
+message LogoutResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+}

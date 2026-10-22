@@ -17,8 +17,8 @@
 | --- | --- | --- | --- |
 | 认证 | Register | auth.Register（角色固定 ROLE_USER） | 成功即登录，签发双令牌 |
 | 认证 | Login | auth.Login | 透传 platform |
-| 认证 | RefreshTokens | auth.GetAccessToken + auth.GetRefreshToken | refresh token 请求体直传；先换 access 再轮换 refresh（轮换即失效旧 token） |
-| 认证 | Logout | auth.Logout | uid 来自会话 |
+| 认证 | RefreshTokens | auth.GetAccessToken（+ 临近过期时 auth.GetRefreshToken） | refresh token 请求体直传；始终换 access，仅剩余寿命 < 1/2 总寿命时才轮换 refresh（响应总是回填当前有效值） |
+| 认证 | Logout | auth.Logout | uid 来自会话；全平台登出（web/mobile 的 refresh 登录态同事务失效） |
 | 用户 | GetMyProfile | user.GetUserProfile | 透传 |
 | 用户 | GetUserProfile | user.GetUserProfile + user.GetFollowingRelation | 组装 `ProfileView`（含关注关系） |
 | 用户 | UpdateMyProfile | user.UpdateUserProfile | 部分更新透传 |
@@ -26,7 +26,7 @@
 | 用户 | Follow / Unfollow | user.SetFollow / SetUnFollow | uid 来自会话 |
 | 用户 | GetFollowingList | user.GetFollowings | 透传游标 |
 | 用户 | GetFollowRelation | user.GetFollowingRelation | uid 来自会话 |
-| 媒体 | CreateMediaUpload | media.UploadMedia | uploader 即会话用户；客户端持签名 URL 直传对象存储 |
+| 媒体 | UploadMedia | media.UploadMedia | uploader 即会话用户（会话解析后注入）；客户端持签名 URL 直传对象存储 |
 | 媒体 | GetMyMediaAssets | media.ListMediaAssetsBefore | 素材库（见待定项 2） |
 | 帖子 | CreateDraft | media.GetMediaAssets（归属校验）+ post.CreateDraft + media.ModifyMediaAssetRefCount | 资产须属于会话用户；引用计数 +1 |
 | 帖子 | UpdateDraft | post.UpdateDraft | 部分更新透传 |
@@ -72,7 +72,7 @@
 - `service.go`：BFFServiceHandler 实现 23 rpc 接口，全部委托 biz 层
 - `biz.go`：`BFFUsecase` 接口 + `BFFUsecaseImpl`；单下游调用的透传接口已实现
   （Login/RefreshTokens/Logout/GetMyProfile/UpdateMyProfile/Follow/Unfollow/
-  GetFollowingList/GetFollowRelation/CreateMediaUpload/UpdateDraft/PublishDraft/DeletePost），
+  GetFollowingList/GetFollowRelation/UploadMedia/UpdateDraft/PublishDraft/DeletePost），
   身份经 `sessionUID`（jwt claims）注入；聚合接口为 TODO 桩（返回 Unimplemented）：
   Register（注册后补签发令牌）、GetUserProfile、UpdateMyAvatar、GetMyMediaAssets、
   CreateDraft、UpdateDraftMedias、GetPost、GetMyPosts、GetUserPosts、GetFollowingFeed
