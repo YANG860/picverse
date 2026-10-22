@@ -10,21 +10,24 @@ import (
 	"github.com/google/wire"
 	"rednote/config"
 	"rednote/gen/go/auth/v1/authv1connect"
+	"rednote/gen/go/bff/v1/bffv1connect"
 	"rednote/gen/go/media/v1/mediav1connect"
 	"rednote/gen/go/post/v1/postv1connect"
 	"rednote/gen/go/user/v1/userv1connect"
-	v1_3 "rednote/internal/auth/v1"
-	v1_2 "rednote/internal/common/v1"
+	v1_4 "rednote/internal/auth/v1"
+	v1_5 "rednote/internal/bff/v1"
+	v1_3 "rednote/internal/common/v1"
 	"rednote/internal/consumer"
 	"rednote/internal/media/v1"
 	"rednote/internal/poller"
-	v1_4 "rednote/internal/post/v1"
-	v1_5 "rednote/internal/user/v1"
+	v1_2 "rednote/internal/post/v1"
+	v1_6 "rednote/internal/user/v1"
 	"rednote/packages/db"
 	"rednote/packages/jwt"
 	"rednote/packages/logger"
 	"rednote/packages/mq"
 	"rednote/packages/oss"
+	"rednote/packages/rpc"
 )
 
 // Injectors from wire.go:
@@ -43,11 +46,27 @@ func InitializeConsumer(cfg *config.Config) (*consumer.MediaConsumer, func()) {
 	}
 }
 
+func InitializePostConsumer(cfg *config.Config) (*consumer.PostConsumer, func()) {
+	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
+	jetStreamClient, cleanup2 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
+	minioClient := oss.NewClient(cfg, loggerFactoryImpl)
+	staticProvider := rpc.NewStaticProvider(cfg)
+	mediaServiceClient := rpc.NewMediaClient(staticProvider)
+	gormDB, cleanup3 := db.NewPG(cfg, loggerFactoryImpl)
+	postRepoImpl := v1_2.NewPostRepo(gormDB)
+	postConsumer := consumer.NewPostConsumer(jetStreamClient, minioClient, loggerFactoryImpl, cfg, mediaServiceClient, postRepoImpl)
+	return postConsumer, func() {
+		cleanup3()
+		cleanup2()
+		cleanup()
+	}
+}
+
 func InitializePoller(cfg *config.Config) (*poller.OutBoxPoller, func()) {
 	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
 	gormDB, cleanup2 := db.NewPG(cfg, loggerFactoryImpl)
 	jetStreamClient, cleanup3 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
-	outBoxRepoImpl := v1_2.NewOutBoxRepo(gormDB)
+	outBoxRepoImpl := v1_3.NewOutBoxRepo(gormDB)
 	outBoxPoller := poller.NewPoller(cfg, gormDB, jetStreamClient, loggerFactoryImpl, outBoxRepoImpl)
 	return outBoxPoller, func() {
 		cleanup3()
@@ -74,10 +93,10 @@ func InitializeMediaServiceHandler(cfg *config.Config) (mediav1connect.MediaServ
 func InitializeAuthServiceHandler(cfg *config.Config) (authv1connect.AuthServiceHandler, func()) {
 	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
 	gormDB, cleanup2 := db.NewPG(cfg, loggerFactoryImpl)
-	authRepoImpl := v1_3.NewAuthRepoImpl(gormDB)
+	authRepoImpl := v1_4.NewAuthRepoImpl(gormDB)
 	managerImpl := jwt.NewManager(cfg)
-	authUsecaseImpl := v1_3.NewAuthUsecaseImpl(authRepoImpl, managerImpl, gormDB)
-	authServiceHandler := v1_3.NewAuthServiceHandler(authUsecaseImpl, loggerFactoryImpl)
+	authUsecaseImpl := v1_4.NewAuthUsecaseImpl(authRepoImpl, managerImpl, gormDB)
+	authServiceHandler := v1_4.NewAuthServiceHandler(authUsecaseImpl, loggerFactoryImpl)
 	return authServiceHandler, func() {
 		cleanup2()
 		cleanup()
@@ -87,10 +106,10 @@ func InitializeAuthServiceHandler(cfg *config.Config) (authv1connect.AuthService
 func InitializePostServiceHandler(cfg *config.Config) (postv1connect.PostServiceHandler, func()) {
 	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
 	gormDB, cleanup2 := db.NewPG(cfg, loggerFactoryImpl)
-	postRepoImpl := v1_4.NewPostRepo(gormDB)
+	postRepoImpl := v1_2.NewPostRepo(gormDB)
 	jetStreamClient, cleanup3 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
-	postUsecaseImpl := v1_4.NewPostUsecase(postRepoImpl, jetStreamClient)
-	postServiceHandler := v1_4.NewPostServiceHandler(gormDB, loggerFactoryImpl, postUsecaseImpl, postRepoImpl)
+	postUsecaseImpl := v1_2.NewPostUsecase(postRepoImpl, jetStreamClient)
+	postServiceHandler := v1_2.NewPostServiceHandler(gormDB, loggerFactoryImpl, postUsecaseImpl, postRepoImpl)
 	return postServiceHandler, func() {
 		cleanup3()
 		cleanup2()
@@ -98,13 +117,28 @@ func InitializePostServiceHandler(cfg *config.Config) (postv1connect.PostService
 	}
 }
 
+func InitializeBFFServiceHandler(cfg *config.Config) (bffv1connect.BFFServiceHandler, func()) {
+	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
+	staticProvider := rpc.NewStaticProvider(cfg)
+	authServiceClient := rpc.NewAuthClient(staticProvider)
+	userServiceClient := rpc.NewUserClient(staticProvider)
+	mediaServiceClient := rpc.NewMediaClient(staticProvider)
+	postServiceClient := rpc.NewPostClient(staticProvider)
+	downstreamRepo := v1_5.NewDownstreamRepo(authServiceClient, userServiceClient, mediaServiceClient, postServiceClient)
+	bffUsecaseImpl := v1_5.NewBFFUsecase(downstreamRepo, loggerFactoryImpl)
+	bffServiceHandler := v1_5.NewBFFServiceHandler(loggerFactoryImpl, bffUsecaseImpl)
+	return bffServiceHandler, func() {
+		cleanup()
+	}
+}
+
 func InitializeUserServiceHandler(cfg *config.Config) (userv1connect.UserServiceHandler, func()) {
 	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
 	gormDB, cleanup2 := db.NewPG(cfg, loggerFactoryImpl)
-	userRepoImpl := v1_5.NewUserRepo(gormDB)
+	userRepoImpl := v1_6.NewUserRepo(gormDB)
 	jetStreamClient, cleanup3 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
-	userUsecaseImpl := v1_5.NewUserUsecase(userRepoImpl, gormDB, jetStreamClient)
-	userServiceHandler := v1_5.NewUserServiceHandler(gormDB, loggerFactoryImpl, userUsecaseImpl, userRepoImpl)
+	userUsecaseImpl := v1_6.NewUserUsecase(userRepoImpl, gormDB, jetStreamClient)
+	userServiceHandler := v1_6.NewUserServiceHandler(gormDB, loggerFactoryImpl, userUsecaseImpl, userRepoImpl)
 	return userServiceHandler, func() {
 		cleanup3()
 		cleanup2()
@@ -120,12 +154,18 @@ func InitializeAuthInterceptor(cfg *config.Config) *jwt.ServerInterceptor {
 
 // wire.go:
 
-var Repos = wire.NewSet(v1.NewMediaRepo, wire.Bind(new(v1.MediaRepository), new(*v1.MediaRepoImpl)), v1_3.NewAuthRepoImpl, wire.Bind(new(v1_3.AuthRepository), new(*v1_3.AuthRepoImpl)), v1_4.NewPostRepo, wire.Bind(new(v1_4.PostRepository), new(*v1_4.PostRepoImpl)), v1_5.NewUserRepo, wire.Bind(new(v1_5.UserRepository), new(*v1_5.UserRepoImpl)), v1_2.NewOutBoxRepo, wire.Bind(new(v1_2.OutBoxRepository), new(*v1_2.OutBoxRepoImpl)))
+var Repos = wire.NewSet(v1.NewMediaRepo, wire.Bind(new(v1.MediaRepository), new(*v1.MediaRepoImpl)), v1_4.NewAuthRepoImpl, wire.Bind(new(v1_4.AuthRepository), new(*v1_4.AuthRepoImpl)), v1_2.NewPostRepo, wire.Bind(new(v1_2.PostRepository), new(*v1_2.PostRepoImpl)), v1_6.NewUserRepo, wire.Bind(new(v1_6.UserRepository), new(*v1_6.UserRepoImpl)), v1_3.NewOutBoxRepo, wire.Bind(new(v1_3.OutBoxRepository), new(*v1_3.OutBoxRepoImpl)))
 
-var Services = wire.NewSet(v1.NewMediaServiceHandler, wire.Bind(new(mediav1connect.MediaServiceHandler), new(*v1.MediaServiceHandler)), v1_3.NewAuthServiceHandler, wire.Bind(new(authv1connect.AuthServiceHandler), new(*v1_3.AuthServiceHandler)), v1_4.NewPostServiceHandler, wire.Bind(new(postv1connect.PostServiceHandler), new(*v1_4.PostServiceHandler)), v1_5.NewUserServiceHandler, wire.Bind(new(userv1connect.UserServiceHandler), new(*v1_5.UserServiceHandler)))
+var Services = wire.NewSet(v1.NewMediaServiceHandler, wire.Bind(new(mediav1connect.MediaServiceHandler), new(*v1.MediaServiceHandler)), v1_4.NewAuthServiceHandler, wire.Bind(new(authv1connect.AuthServiceHandler), new(*v1_4.AuthServiceHandler)), v1_2.NewPostServiceHandler, wire.Bind(new(postv1connect.PostServiceHandler), new(*v1_2.PostServiceHandler)), v1_6.NewUserServiceHandler, wire.Bind(new(userv1connect.UserServiceHandler), new(*v1_6.UserServiceHandler)))
 
-var Usecases = wire.NewSet(v1.NewMediaUsecase, wire.Bind(new(v1.MediaUsecase), new(*v1.MediaUsecaseImpl)), v1_3.NewAuthUsecaseImpl, wire.Bind(new(v1_3.AuthUsecase), new(*v1_3.AuthUsecaseImpl)), v1_4.NewPostUsecase, wire.Bind(new(v1_4.PostUsecase), new(*v1_4.PostUsecaseImpl)), v1_5.NewUserUsecase, wire.Bind(new(v1_5.UserUsecase), new(*v1_5.UserUsecaseImpl)))
+var Usecases = wire.NewSet(v1.NewMediaUsecase, wire.Bind(new(v1.MediaUsecase), new(*v1.MediaUsecaseImpl)), v1_4.NewAuthUsecaseImpl, wire.Bind(new(v1_4.AuthUsecase), new(*v1_4.AuthUsecaseImpl)), v1_2.NewPostUsecase, wire.Bind(new(v1_2.PostUsecase), new(*v1_2.PostUsecaseImpl)), v1_6.NewUserUsecase, wire.Bind(new(v1_6.UserUsecase), new(*v1_6.UserUsecaseImpl)))
 
 var Middlewares = wire.NewSet(db.NewPG, mq.NewJetStreamClient, wire.Bind(new(mq.MQClient), new(*mq.JetStreamClient)), logger.NewLoggerFactory, wire.Bind(new(logger.LoggerFactory), new(*logger.LoggerFactoryImpl)), oss.NewClient, wire.Bind(new(oss.S3Repo), new(*oss.MinioClient)))
 
 var Utils = wire.NewSet(jwt.NewManager, wire.Bind(new(jwt.Manager), new(*jwt.ManagerImpl)), jwt.NewServerInterceptor)
+
+// Clients 下游服务客户端：服务发现（静态实现）+ 统一拦截器的 connect 客户端
+var Clients = wire.NewSet(rpc.NewStaticProvider, wire.Bind(new(rpc.EndpointProvider), new(*rpc.StaticProvider)), rpc.NewAuthClient, rpc.NewUserClient, rpc.NewMediaClient, rpc.NewPostClient, v1_5.NewDownstreamRepo)
+
+// BFF bff 服务装配
+var BFF = wire.NewSet(v1_5.NewBFFUsecase, wire.Bind(new(v1_5.BFFUsecase), new(*v1_5.BFFUsecaseImpl)), v1_5.NewBFFServiceHandler, wire.Bind(new(bffv1connect.BFFServiceHandler), new(*v1_5.BFFServiceHandler)))

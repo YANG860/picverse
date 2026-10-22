@@ -178,7 +178,7 @@ func (c *PostConsumer) handleAuditPost(ctx context.Context, msg *postv1.AuditPos
 
 	// TODO: audit post
 
-	// TODO: all media active
+	// TODO: check all media active
 	pulishMsg := &postv1.PublishPost{
 		PostId:   msg.PostId,
 		AuthorId: msg.AuthorId,

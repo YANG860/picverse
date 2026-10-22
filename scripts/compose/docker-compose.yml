@@ -70,6 +70,8 @@ services:
       - |
         nats -s nats://nats:4222 stream info media >/dev/null 2>&1 ||
           nats -s nats://nats:4222 stream add media --subjects="media,media.>" --defaults
+        nats -s nats://nats:4222 stream info post >/dev/null 2>&1 ||
+          nats -s nats://nats:4222 stream add post --subjects="post,post.>" --defaults
         nats -s nats://nats:4222 stream ls
 
   # 一次性初始化：创建 MinIO bucket（幂等），完成后退出

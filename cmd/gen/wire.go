@@ -5,6 +5,7 @@ package gen
 
 import (
 	"rednote/config"
+	"rednote/gen/go/bff/v1/bffv1connect"
 	"rednote/gen/go/media/v1/mediav1connect"
 
 	authv1connect "rednote/gen/go/auth/v1/authv1connect"
@@ -14,15 +15,17 @@ import (
 	"rednote/internal/consumer"
 
 	authv1 "rednote/internal/auth/v1"
+	bffv1 "rednote/internal/bff/v1"
 	mediav1 "rednote/internal/media/v1"
+	"rednote/internal/poller"
 	postv1 "rednote/internal/post/v1"
 	userv1 "rednote/internal/user/v1"
-	"rednote/internal/poller"
 	"rednote/packages/db"
 	"rednote/packages/jwt"
 	"rednote/packages/logger"
 	"rednote/packages/mq"
 	"rednote/packages/oss"
+	"rednote/packages/rpc"
 
 	"github.com/google/wire"
 )
@@ -90,9 +93,41 @@ var Utils = wire.NewSet(
 	jwt.NewServerInterceptor,
 )
 
+// Clients 下游服务客户端：服务发现（静态实现）+ 统一拦截器的 connect 客户端
+var Clients = wire.NewSet(
+	rpc.NewStaticProvider,
+	wire.Bind(new(rpc.EndpointProvider), new(*rpc.StaticProvider)),
+
+	rpc.NewAuthClient,
+	rpc.NewUserClient,
+	rpc.NewMediaClient,
+	rpc.NewPostClient,
+
+	bffv1.NewDownstreamRepo,
+)
+
+// BFF bff 服务装配
+var BFF = wire.NewSet(
+	bffv1.NewBFFUsecase,
+	wire.Bind(new(bffv1.BFFUsecase), new(*bffv1.BFFUsecaseImpl)),
+
+	bffv1.NewBFFServiceHandler,
+	wire.Bind(new(bffv1connect.BFFServiceHandler), new(*bffv1.BFFServiceHandler)),
+)
+
 func InitializeConsumer(cfg *config.Config) (*consumer.MediaConsumer, func()) {
 	wire.Build(
 		consumer.NewMediaConsumer,
+		Repos,
+		Middlewares,
+	)
+	return nil, func() {}
+}
+
+func InitializePostConsumer(cfg *config.Config) (*consumer.PostConsumer, func()) {
+	wire.Build(
+		consumer.NewPostConsumer,
+		Clients,
 		Repos,
 		Middlewares,
 	)
@@ -135,6 +170,15 @@ func InitializePostServiceHandler(cfg *config.Config) (postv1connect.PostService
 		Middlewares,
 		Repos,
 		Usecases,
+	)
+	return nil, func() {}
+}
+
+func InitializeBFFServiceHandler(cfg *config.Config) (bffv1connect.BFFServiceHandler, func()) {
+	wire.Build(
+		BFF,
+		Clients,
+		Middlewares,
 	)
 	return nil, func() {}
 }

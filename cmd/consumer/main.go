@@ -16,12 +16,16 @@ func main() {
 	flag.Parse()
 	cfg := config.Init(cfgPath)
 
-	consumer, cleanup := gen.InitializeConsumer(cfg)
-	consumer.Start()
+	mediaConsumer, cleanupMedia := gen.InitializeConsumer(cfg)
+	postConsumer, cleanupPost := gen.InitializePostConsumer(cfg)
+	mediaConsumer.Start()
+	postConsumer.Start()
 
 	term := make(chan os.Signal, 1)
 	signal.Notify(term, syscall.SIGINT, syscall.SIGTERM)
 	<-term
-	consumer.Close()
-	cleanup()
+	postConsumer.Close()
+	mediaConsumer.Close()
+	cleanupPost()
+	cleanupMedia()
 }

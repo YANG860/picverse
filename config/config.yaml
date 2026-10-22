@@ -12,7 +12,20 @@ database:
     # PostgreSQL 连接串（容器 rednote-pg，库 prod）
     url: "postgres://postgres:wV5r46Z3yyumNjIRjzeaXqLGSMVYEjkd@106.53.172.186:5432/prod?sslmode=disable"
 
-server: {}
+server:
+  # 各服务监听地址（多进程共用同一配置文件，各服务取自己的条目）
+  auth: ":8081"
+  user: ":8083"
+  media: ":8080"
+  post: ":8082"
+
+services:
+  # 下游服务地址（packages/discovery 静态实现）。
+  # 服务与本进程同机部署时用 127.0.0.1；跨机改为部署机地址；上 k8s 改为 Service DNS 名
+  auth: "127.0.0.1:8081"
+  user: "127.0.0.1:8083"
+  media: "127.0.0.1:8080"
+  post: "127.0.0.1:8082"
 
 s3:
   endpoint: "106.53.172.186:9000"
@@ -49,6 +62,10 @@ consumer:
     name: "media_consumer"
     max_retry: 5
     working_dir: "./tmp/media_work"
+  post:
+    name: "post_consumer"
+    max_retry: 5
+    working_dir: "./tmp/post_work"
 
 logger:
   level: "info"

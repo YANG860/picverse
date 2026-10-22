@@ -1,8 +1,8 @@
-# consumer — 媒体消费者
+# consumer — 消息消费者
 
-代码：`internal/consumer/`（`consumer.go`、`media_consumer.go`、`utils.go`），进程：`cmd/consumer`。
+代码：`internal/consumer/`（`consumer.go`、`media_consumer.go`、`post_consumer.go`、`utils.go`），进程：`cmd/consumer`（同进程拉起两个消费者）。
 
-消费 JetStream `media` 流中的 `MediaMessage`，驱动图片处理状态机。采用 **ACK/NAK** 确认机制：处理成功 `Ack`，可重试错误 `Nak`（交回队列重投），不可恢复错误 `Term`。
+消费 JetStream 中的两类消息：`media` 流的 `MediaMessage`（驱动图片处理状态机）与 `post` 流的 `PostMessage`（驱动帖子状态机）。采用 **ACK/NAK** 确认机制：处理成功 `Ack`，可重试错误 `Nak`（交回队列重投），不可恢复错误 `Term`。
 
 ## MediaConsumer
 
@@ -50,6 +50,18 @@
 
 ### HandleDeleteMedia
 按四种类型查出所有 `MediaFile`，逐个删除 S3 对象，再在事务内删除 `media_files` 与 `media_assets` 记录。
+
+## PostConsumer
+
+由 `NewPostConsumer` 创建（依赖 media 服务客户端与 `PostRepository`），消费 `post` 流中的 `PostMessage`，
+durable 名取 `config.Consumer.Post.Name`，ACK/NAK 策略与 MediaConsumer 一致。`cmd/consumer` 同进程拉起两个消费者。
+
+| 消息 | 处理器 | 职责 |
+| --- | --- | --- |
+| `audit_post` | `handleAuditPost` | 审核（当前占位直通），同事务 `AUDITING→PUBLISHED` + 发 `publish_post` |
+| `publish_post` | `handlePublishPost` | 发布后下游处理（占位：仅记录日志，不阻塞 ACK） |
+| `delete_post` | `handleDeletePost` | 同事务物理删除软删帖子（仅 `DELETED` 行）及其媒体关联，重复投递幂等 |
+| `ban_post` | `handleBanPost` | 封禁后的下游处理 |
 
 ## ValidateImage
 
