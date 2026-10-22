@@ -21,16 +21,43 @@
 
 | 维度 | 说明 |
 | --- | --- |
-| 类型 | 黑盒端到端：仅通过 ConnectRPC 调用已部署服务，不依赖内部实现；现有用例 `TestMediaServiceE2E`（上传→处理→分页→封禁）、`TestAuthServiceE2E`（注册→登录→换发→登出） |
+| 类型 | 黑盒端到端：仅通过 ConnectRPC 调用已部署服务，不依赖内部实现；现有用例 `TestMediaServiceE2E`（上传→处理→分页→封禁）、`TestAuthServiceE2E`（注册→登录→换发→登出）、`TestPostServiceE2E`（建草稿→改文本/媒体→发布→可见性→统计→删除/封禁） |
 | 目的 | 验证部署后的真实链路：服务装配、鉴权拦截器、DB / MinIO / NATS 全链路协作 |
-| 依赖 | 已部署的服务进程、真实 PostgreSQL / MinIO / NATS；地址用 `AUTH_E2E_ADDR`、`MEDIA_E2E_ADDR`、`MEDIA_E2E_S3_*` 配置，服务不可达时自动跳过 |
+| 依赖 | 已部署的服务进程、真实 PostgreSQL / MinIO / NATS；地址用 `AUTH_E2E_ADDR`、`MEDIA_E2E_ADDR`、`MEDIA_E2E_S3_*`、`POST_E2E_ADDR` 配置，服务不可达时自动跳过 |
 
 代码：`test/e2e/`。对已部署的服务做黑盒测试，不依赖内部实现，仅通过 ConnectRPC 访问；
 服务不可达时自动跳过，便于本地/CI 按需运行。
+共享工具集中在 `test/e2e/common_test.go`：地址解析（`e2eAddr`，各服务 `*_E2E_ADDR` 环境变量覆盖）、
+可达性探测（`mustReachable`）、业务错误断言（`assertBizErr`）与测试数据构造（`e2eID` / `e2eMediaFile`）；
+各服务用例文件只保留自身链路步骤与专属 helper。
 
 
 前置：对应服务已部署；auth e2e 需 PostgreSQL 中
 `jwt.secret` 等加密配置与服务端一致。
+
+### post 服务远程部署（测试环境）
+
+post e2e 的测试环境部署在测试服务器 `tencent2`（106.53.172.186，ssh 别名见 `~/.ssh/config`）：
+
+```bash
+# 1. 本地构建 linux 二进制并上传（依赖容器 rednote-pg/nats/minio 已在服务器上运行）
+go build -o /tmp/post-build ./cmd/post
+ssh tencent2 'mkdir -p ~/rednote/config ~/rednote/logs'
+scp /tmp/post-build tencent2:~/rednote/post
+scp config/config.yaml tencent2:~/rednote/config/config.yaml
+
+# 2. sql/*.sql 变更后同步目标库（幂等，含存量库补列）
+go run ./scripts/dbsync -db prod
+
+# 3. 启动（监听 :8082）
+ssh tencent2 'cd ~/rednote && chmod +x post && nohup ./post -config ./config/ > post.log 2>&1 &'
+
+# 4. 跑 e2e：安全组未放行 8082，本地经 SSH 隧道访问
+ssh -f -N -L 8082:127.0.0.1:8082 tencent2
+go test ./test/e2e/ -run TestPostServiceE2E -count=1 -v
+```
+
+注：e2e 产生的数据（帖子草稿/软删记录、outbox 消息、auth 测试账号、media 资产）留在服务端数据库中不清理。
 
 
 注：e2e 产生的数据（media 资产、auth 测试账号）留在服务端数据库中不清理。

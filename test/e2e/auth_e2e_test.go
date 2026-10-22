@@ -1,11 +1,10 @@
-// Package e2e 对外部署的 auth 服务做黑盒端到端测试：
-// 注册 → 登录 → 换发 access/refresh token → 轮换失效 → 登出。
+// auth 服务黑盒端到端测试：注册 → 登录 → 换发 access/refresh token → 轮换失效 → 登出。
 //
 // 前置条件：auth 服务已部署（会话凭据由请求体直传，不依赖请求头拦截器），PostgreSQL 可用。
 // 运行：
 //
-//	go test ./test/e2e/... -count=1          # 默认 http://localhost:8081
-//	AUTH_E2E_ADDR=http://host:8081 go test ./test/e2e/...
+//	go test ./test/e2e/... -run TestAuthServiceE2E -count=1   # 默认 http://localhost:8081
+//	AUTH_E2E_ADDR=http://host:8081 go test ./test/e2e/... -run TestAuthServiceE2E
 //	go test -short ./...                     # -short 跳过
 package e2e
 
@@ -13,7 +12,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"testing"
 	"time"
 
@@ -23,7 +21,6 @@ import (
 
 	authv1 "rednote/gen/go/auth/v1"
 	"rednote/gen/go/auth/v1/authv1connect"
-	commonv1 "rednote/gen/go/common/v1"
 	"rednote/packages/errmsg"
 )
 
@@ -32,12 +29,7 @@ const defaultAuthAddr = "http://localhost:8081"
 // 测试账号密码：满足服务端校验（8-32 位，含大小写字母与数字）
 const e2ePassword = "E2ePassw0rd!2026"
 
-func authAddr() string {
-	if v := os.Getenv("AUTH_E2E_ADDR"); v != "" {
-		return v
-	}
-	return defaultAuthAddr
-}
+func authAddr() string { return e2eAddr("AUTH_E2E_ADDR", defaultAuthAddr) }
 
 // e2eEmail 生成唯一的测试邮箱（时间戳保证不重复，账号留在测试库中不清理）
 func e2eEmail() string {
@@ -48,22 +40,9 @@ func e2eEmail() string {
 func newAuthClient(t *testing.T) authv1connect.AuthServiceClient {
 	t.Helper()
 
-	resp, err := http.Get(authAddr() + "/auth.v1.AuthService/")
-	if err != nil {
-		t.Skipf("e2e: auth 服务不可达 (%s)，跳过: %v", authAddr(), err)
-	}
-	_ = resp.Body.Close()
-
-	return authv1connect.NewAuthServiceClient(http.DefaultClient, authAddr())
-}
-
-// assertBizErr 断言业务失败及错误码
-func assertBizErr(t *testing.T, fail bool, err *commonv1.Error, want *commonv1.Error, msg string) {
-	t.Helper()
-	require.True(t, fail, "%s 应业务失败", msg)
-	require.NotNil(t, err, "%s 应返回错误信息", msg)
-	assert.Equal(t, want.GetCode(), err.GetCode(), "%s 错误码不符: want=%s got=%s",
-		msg, want.GetMsg(), err.GetMsg())
+	addr := authAddr()
+	mustReachable(t, addr, "/auth.v1.AuthService/")
+	return authv1connect.NewAuthServiceClient(http.DefaultClient, addr)
 }
 
 // TestAuthServiceE2E auth 全生命周期黑盒测试。
@@ -87,6 +66,7 @@ func TestAuthServiceE2E(t *testing.T) {
 		}))
 	require.NoError(t, err, "Register RPC")
 	require.False(t, reg.Msg.GetFail(), "注册业务失败: %v", reg.Msg.GetErr())
+	assert.Nil(t, reg.Msg.GetErr(), "成功响应不应携带错误码")
 	require.NotEmpty(t, reg.Msg.GetAssignedId(), "注册应返回分配的用户ID")
 	t.Logf("注册成功 uid=%s email=%s", reg.Msg.GetAssignedId(), email)
 
@@ -124,6 +104,7 @@ func TestAuthServiceE2E(t *testing.T) {
 		}))
 	require.NoError(t, err, "登录 RPC")
 	require.False(t, login.Msg.GetFail(), "登录业务失败: %v", login.Msg.GetErr())
+	assert.Nil(t, login.Msg.GetErr(), "成功响应不应携带错误码")
 	refreshA := login.Msg.GetRefreshToken().GetValue()
 	accessToken := login.Msg.GetAccessToken().GetValue()
 	require.NotEmpty(t, refreshA, "登录应返回 refresh token")
@@ -134,6 +115,7 @@ func TestAuthServiceE2E(t *testing.T) {
 	atResp, err := client.GetAccessToken(context.Background(), atReq)
 	require.NoError(t, err, "GetAccessToken RPC")
 	require.False(t, atResp.Msg.GetFail(), "换发 access token 业务失败: %v", atResp.Msg.GetErr())
+	assert.Nil(t, atResp.Msg.GetErr(), "成功响应不应携带错误码")
 	require.NotEmpty(t, atResp.Msg.GetToken().GetValue(), "应返回新的 access token")
 
 	// ---- 6. 轮换 refresh token：A → B ----
@@ -141,6 +123,7 @@ func TestAuthServiceE2E(t *testing.T) {
 	rtResp, err := client.GetRefreshToken(context.Background(), rtReq)
 	require.NoError(t, err, "GetRefreshToken RPC")
 	require.False(t, rtResp.Msg.GetFail(), "轮换 refresh token 业务失败: %v", rtResp.Msg.GetErr())
+	assert.Nil(t, rtResp.Msg.GetErr(), "成功响应不应携带错误码")
 	refreshB := rtResp.Msg.GetToken().GetValue()
 	require.NotEmpty(t, refreshB, "轮换应返回新 refresh token")
 	assert.NotEqual(t, refreshA, refreshB, "轮换出的 token 应与旧 token 不同")
@@ -188,6 +171,7 @@ func TestAuthServiceE2E(t *testing.T) {
 	out, err := client.Logout(context.Background(), outReq)
 	require.NoError(t, err, "Logout RPC")
 	require.False(t, out.Msg.GetFail(), "登出业务失败: %v", out.Msg.GetErr())
+	assert.Nil(t, out.Msg.GetErr(), "成功响应不应携带错误码")
 
 	// ---- 13. 登出后 refresh token 全平台失效 ----
 	afterOutReq := connect.NewRequest(&authv1.GetRefreshTokenRequest{RefreshToken: refreshC})

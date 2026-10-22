@@ -1,5 +1,4 @@
-// Package e2e 对外部署的 media 服务做黑盒端到端测试：
-// UploadMedia → 预签名直传 MinIO → 异步处理 → 查询变体 → 分页 → 封禁。
+// media 服务黑盒端到端测试：UploadMedia → 预签名直传 MinIO → 异步处理 → 查询变体 → 分页 → 封禁。
 //
 // 前置条件：media/consumer/poller 三个服务已部署，NATS/MinIO/PostgreSQL 可用。
 // 运行：
@@ -39,7 +38,7 @@ import (
 )
 
 const (
-	defaultAddr = "http://localhost:8080"
+	defaultMediaAddr = "http://localhost:8080"
 
 	defaultS3Endpoint = "106.53.172.186:9000"
 	defaultS3Key      = "rednote-3e2533eb" // 须与测试服务器容器 rednote-minio 的 MINIO_ROOT_USER 一致
@@ -51,28 +50,15 @@ const (
 	presignPutTimeout = 30 * time.Second
 )
 
-// s3Env 用环境变量覆盖 S3 直连配置
-func s3Env(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-func serviceAddr() string {
-	if v := os.Getenv("MEDIA_E2E_ADDR"); v != "" {
-		return v
-	}
-	return defaultAddr
-}
+func mediaAddr() string { return e2eAddr("MEDIA_E2E_ADDR", defaultMediaAddr) }
 
 // newS3Client 直连 MinIO 的客户端，用于验证对象真实存在且内容正确（仅测试用）
 func newS3Client(t *testing.T) *minio.Client {
 	t.Helper()
-	mc, err := minio.New(s3Env("MEDIA_E2E_S3_ENDPOINT", defaultS3Endpoint), &minio.Options{
+	mc, err := minio.New(e2eAddr("MEDIA_E2E_S3_ENDPOINT", defaultS3Endpoint), &minio.Options{
 		Creds: credentials.NewStaticV4(
-			s3Env("MEDIA_E2E_S3_ACCESS_KEY", defaultS3Key),
-			s3Env("MEDIA_E2E_S3_SECRET_KEY", defaultS3Secret), ""),
+			e2eAddr("MEDIA_E2E_S3_ACCESS_KEY", defaultS3Key),
+			e2eAddr("MEDIA_E2E_S3_SECRET_KEY", defaultS3Secret), ""),
 		Secure: false,
 	})
 	require.NoError(t, err, "创建 S3 客户端")
@@ -137,14 +123,10 @@ func TestMediaServiceE2E(t *testing.T) {
 	}
 
 	// 服务未部署时跳过而不是失败，便于本地/CI 环境按需运行
-	resp, err := http.Get(serviceAddr() + "/media.v1.MediaService/")
-	if err != nil {
-		t.Skipf("e2e: media 服务不可达 (%s)，跳过: %v", serviceAddr(), err)
-	}
-	_ = resp.Body.Close()
+	mustReachable(t, mediaAddr(), "/media.v1.MediaService/")
 
 	testsnowflake.InitTestSnoflake(1)
-	client := mediav1connect.NewMediaServiceClient(http.DefaultClient, serviceAddr())
+	client := mediav1connect.NewMediaServiceClient(http.DefaultClient, mediaAddr())
 	img := loadAssetImage(t)
 
 	// ---- 1. UploadMedia：创建资产 + 预签名 URL ----
@@ -243,7 +225,7 @@ func TestMediaServiceE2E(t *testing.T) {
 
 	// ---- 4.5 从 S3 实际下载对象，验证内容与元数据一致 ----
 	mc := newS3Client(t)
-	bucket := s3Env("MEDIA_E2E_S3_BUCKET", defaultS3Bucket)
+	bucket := e2eAddr("MEDIA_E2E_S3_BUCKET", defaultS3Bucket)
 
 	for _, ft := range types {
 		f := byType[ft]
