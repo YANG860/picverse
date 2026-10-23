@@ -125,9 +125,11 @@ func InitializeBFFServiceHandler(cfg *config.Config) (bffv1connect.BFFServiceHan
 	mediaServiceClient := rpc.NewMediaClient(staticProvider)
 	postServiceClient := rpc.NewPostClient(staticProvider)
 	downstreamRepo := v1_5.NewDownstreamRepo(authServiceClient, userServiceClient, mediaServiceClient, postServiceClient)
-	bffUsecaseImpl := v1_5.NewBFFUsecase(downstreamRepo, loggerFactoryImpl)
+	jetStreamClient, cleanup2 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
+	bffUsecaseImpl := v1_5.NewBFFUsecase(downstreamRepo, jetStreamClient, loggerFactoryImpl)
 	bffServiceHandler := v1_5.NewBFFServiceHandler(loggerFactoryImpl, bffUsecaseImpl)
 	return bffServiceHandler, func() {
+		cleanup2()
 		cleanup()
 	}
 }
