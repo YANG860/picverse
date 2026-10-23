@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"connectrpc.com/validate"
 	"rednote/gen/go/user/v1/userv1connect"
 	"rednote/packages/trace"
 )
@@ -28,14 +29,14 @@ func main() {
 	svc, cleanup := gen.InitializeUserServiceHandler(cfg)
 	path, hander := userv1connect.NewUserServiceHandler(
 		svc,
-		connect.WithInterceptors(trace.NewServerInterceptor()),
+		connect.WithInterceptors(trace.NewServerInterceptor(), validate.NewInterceptor()),
 	)
 
 	mux := http.NewServeMux()
 	mux.Handle(path, hander)
 
 	srv := &http.Server{
-		Addr:    ":8083",
+		Addr:    cfg.Server.User,
 		Handler: mux,
 	}
 

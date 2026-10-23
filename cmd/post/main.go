@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"connectrpc.com/validate"
 	"rednote/gen/go/post/v1/postv1connect"
 	"rednote/packages/trace"
 )
@@ -28,14 +29,14 @@ func main() {
 	svc, cleanup := gen.InitializePostServiceHandler(cfg)
 	path, handler := postv1connect.NewPostServiceHandler(
 		svc,
-		connect.WithInterceptors(trace.NewServerInterceptor()),
+		connect.WithInterceptors(trace.NewServerInterceptor(), validate.NewInterceptor()),
 	)
 
 	mux := http.NewServeMux()
 	mux.Handle(path, handler)
 
 	srv := &http.Server{
-		Addr:    ":8082",
+		Addr:    cfg.Server.Post,
 		Handler: mux,
 	}
 

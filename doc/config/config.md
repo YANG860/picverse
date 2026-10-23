@@ -14,6 +14,8 @@ redis:       # Redis
 jetstream:   # NATS JetStream
 poller:      # Outbox Poller
 consumer:    # 消费者
+server:      # 各服务监听地址
+services:    # 下游服务地址（服务发现）
 ```
 
 ## 各节详解
@@ -27,6 +29,22 @@ consumer:    # 消费者
 | 键 | 类型 | 说明 |
 | --- | --- | --- |
 | `database.pg.url` | string | PostgreSQL 连接串，如 `postgres://user:pass@host:5432/db?sslmode=disable` |
+
+### server — 各服务监听地址
+
+多进程共用同一配置文件，各服务取自己的条目；缺失时该服务无法启动。
+
+| 键 | 类型 | 说明 |
+| --- | --- | --- |
+| `auth` / `user` / `media` / `post` | string | 各服务监听地址，如 `:8081` |
+
+### services — 下游服务地址（服务发现）
+
+`packages/rpc` 静态实现的地址源，BFF 等下游调用方经此解析地址（详见 [rpc](../packages/rpc/rpc.md)）。
+
+| 键 | 类型 | 说明 |
+| --- | --- | --- |
+| `auth` / `user` / `media` / `post` | string | 下游服务地址，`host:port` 或 `scheme://host:port`；同机 `127.0.0.1:端口`，k8s 填 Service DNS 名 |
 
 ### logger — 日志
 见 [log.md](../log.md)。关键项：`level`、`file`、`out`、`rotate`、`maxsize`、`maxbackups`、`maxage`、`compress`、`buffersize`、`std`。

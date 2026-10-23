@@ -12,6 +12,7 @@ import (
 	"rednote/config"
 
 	"connectrpc.com/connect"
+	"connectrpc.com/validate"
 	"rednote/gen/go/media/v1/mediav1connect"
 	"rednote/packages/trace"
 	"syscall"
@@ -28,14 +29,14 @@ func main() {
 	svc, cleanup := gen.InitializeMediaServiceHandler(cfg)
 	path, hander := mediav1connect.NewMediaServiceHandler(
 		svc,
-		connect.WithInterceptors(trace.NewServerInterceptor()),
+		connect.WithInterceptors(trace.NewServerInterceptor(), validate.NewInterceptor()),
 	)
 
 	mux := http.NewServeMux()
 	mux.Handle(path, hander)
 
 	srv := &http.Server{
-		Addr:    ":8080",
+		Addr:    cfg.Server.Media,
 		Handler: mux,
 	}
 

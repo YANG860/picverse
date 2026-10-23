@@ -15,6 +15,17 @@ type Config struct {
 	Logger    LoggerConfig    `mapstructure:"logger"`
 	JWT       JWTConfig       `mapstructure:"jwt"`
 	Redis     RedisConfig     `mapstructure:"redis"`
+	Services  ServicesConfig  `mapstructure:"services"`
+}
+
+// ServicesConfig 下游服务地址（packages/discovery 静态实现的地址源）。
+// 上 k8s 后改为 Service DNS 名（如 "post:8082"），接口与调用方零改动
+type ServicesConfig struct {
+	// 服务发现：各下游服务地址，host:port 或 scheme://host:port
+	Auth  string `mapstructure:"auth"`
+	User  string `mapstructure:"user"`
+	Media string `mapstructure:"media"`
+	Post  string `mapstructure:"post"`
 }
 
 // RedisConfig Redis 连接配置
@@ -50,7 +61,12 @@ type SnowFlakeConfig struct {
 	ID int64 `mapstructure:"id"`
 }
 
+// ServerConfig 各服务监听地址：多进程共用同一配置文件，各服务取自己的条目
 type ServerConfig struct {
+	Auth  string `mapstructure:"auth"`
+	User  string `mapstructure:"user"`
+	Media string `mapstructure:"media"`
+	Post  string `mapstructure:"post"`
 }
 
 // S3Config S3/Minio 对象存储配置
