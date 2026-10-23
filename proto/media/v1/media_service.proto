@@ -20,6 +20,9 @@ service MediaService {
   // 获取单个媒体资产的文件
   rpc GetMediaAssetFile(GetMediaAssetFileRequest) returns (GetMediaAssetFileResponse);
 
+  // 批量签发展示 GET URL
+  rpc SignMediaFileURLs(SignMediaFileURLsRequest) returns (SignMediaFileURLsResponse);
+
   // 按时间列举媒体资产
   rpc ListMediaAssetsBefore(ListMediaAssetsBeforeRequest) returns (ListMediaAssetsBeforeResponse);
 

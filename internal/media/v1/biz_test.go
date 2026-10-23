@@ -496,3 +496,104 @@ func mustParseID(t *testing.T, id string) int64 {
 	require.NoError(t, err)
 	return parsed
 }
+
+// ---------- SignMediaFileURLs ----------
+
+// TestMediaUsecase_SignMediaFileURLs 批量签发展示 GET URL：逐项结果 + TTL 1 小时 + 纯读
+func TestMediaUsecase_SignMediaFileURLs(t *testing.T) {
+	newReq := func(refs ...*mediav1.MediaAssetFileQuery) *mediav1.SignMediaFileURLsRequest {
+		return &mediav1.SignMediaFileURLsRequest{Refs: refs}
+	}
+
+	t.Run("成功：签发 URL 且 TTL 约 1 小时", func(t *testing.T) {
+		u, db, _, _ := newUsecase(t)
+		asset := seedAsset(t, db, 9100, mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_ACTIVE, 0, oldTS())
+		seedFile(t, db, 9101, asset.ID, mediav1.MediaFileType_MEDIA_FILE_TYPE_216)
+
+		before := time.Now()
+		resp, err := u.SignMediaFileURLs(context.Background(), newReq(
+			&mediav1.MediaAssetFileQuery{Id: strconv.FormatInt(asset.ID, 10), Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_216},
+		))
+		require.NoError(t, err)
+		require.False(t, resp.Fail)
+		require.Len(t, resp.Urls, 1)
+
+		got := resp.Urls[0]
+		assert.False(t, got.GetFail())
+		assert.Empty(t, got.GetErr().GetCode(), "成功项不得携带错误")
+		assert.Equal(t, strconv.FormatInt(asset.ID, 10), got.GetAssetId(), "Key 回显")
+		assert.Equal(t, mediav1.MediaFileType_MEDIA_FILE_TYPE_216, got.GetType(), "变体回显")
+		assert.NotEmpty(t, got.GetSignedUrl())
+
+		expire := time.UnixMilli(got.GetExpireAt())
+		assert.WithinDuration(t, before.Add(time.Hour), expire, 2*time.Minute, "展示 URL TTL 1 小时")
+	})
+
+	t.Run("非法 ID 逐项 InvalidID", func(t *testing.T) {
+		u, _, _, _ := newUsecase(t)
+		resp, err := u.SignMediaFileURLs(context.Background(), newReq(
+			&mediav1.MediaAssetFileQuery{Id: "not-a-snowflake", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_216},
+		))
+		require.NoError(t, err)
+		require.Len(t, resp.Urls, 1)
+		assert.True(t, resp.Urls[0].GetFail())
+		assert.Equal(t, errmsg.InvalidID.Code, resp.Urls[0].GetErr().GetCode())
+		assert.Equal(t, "not-a-snowflake", resp.Urls[0].GetAssetId(), "非法 ID 也回显 Key 供对齐")
+	})
+
+	t.Run("查无文件逐项 NotFound", func(t *testing.T) {
+		u, db, _, _ := newUsecase(t)
+		asset := seedAsset(t, db, 9200, mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_ACTIVE, 0, oldTS())
+		_ = asset
+		resp, err := u.SignMediaFileURLs(context.Background(), newReq(
+			&mediav1.MediaAssetFileQuery{Id: "9200", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_1080},
+		))
+		require.NoError(t, err)
+		require.Len(t, resp.Urls, 1)
+		assert.True(t, resp.Urls[0].GetFail())
+		assert.Equal(t, errmsg.NotFound.Code, resp.Urls[0].GetErr().GetCode())
+	})
+
+	t.Run("混合批量逐项对齐", func(t *testing.T) {
+		u, db, _, _ := newUsecase(t)
+		asset := seedAsset(t, db, 9300, mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_ACTIVE, 0, oldTS())
+		seedFile(t, db, 9301, asset.ID, mediav1.MediaFileType_MEDIA_FILE_TYPE_540)
+
+		resp, err := u.SignMediaFileURLs(context.Background(), newReq(
+			&mediav1.MediaAssetFileQuery{Id: strconv.FormatInt(asset.ID, 10), Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_540},
+			&mediav1.MediaAssetFileQuery{Id: "bad-id", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_540},
+			&mediav1.MediaAssetFileQuery{Id: "9300", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_ORIGIN},
+		))
+		require.NoError(t, err)
+		require.Len(t, resp.Urls, 3, "结果与请求逐项对应")
+
+		// 契约：不保证顺序，按 Key（asset_id + type）定位断言
+		byKey := map[string]*mediav1.MediaFileURL{}
+		for _, u := range resp.Urls {
+			byKey[u.GetAssetId()+"/"+u.GetType().String()] = u
+		}
+
+		ok := byKey[strconv.FormatInt(asset.ID, 10)+"/"+mediav1.MediaFileType_MEDIA_FILE_TYPE_540.String()]
+		require.NotNil(t, ok)
+		assert.False(t, ok.GetFail())
+		assert.NotEmpty(t, ok.GetSignedUrl())
+
+		bad := byKey["bad-id/"+mediav1.MediaFileType_MEDIA_FILE_TYPE_540.String()]
+		require.NotNil(t, bad)
+		assert.True(t, bad.GetFail())
+		assert.Equal(t, errmsg.InvalidID.Code, bad.GetErr().GetCode())
+
+		nf := byKey["9300/"+mediav1.MediaFileType_MEDIA_FILE_TYPE_ORIGIN.String()]
+		require.NotNil(t, nf)
+		assert.True(t, nf.GetFail())
+		assert.Equal(t, errmsg.NotFound.Code, nf.GetErr().GetCode())
+	})
+
+	t.Run("空 refs 返回空结果不 panic", func(t *testing.T) {
+		u, _, _, _ := newUsecase(t)
+		resp, err := u.SignMediaFileURLs(context.Background(), &mediav1.SignMediaFileURLsRequest{})
+		require.NoError(t, err)
+		require.False(t, resp.Fail)
+		assert.Empty(t, resp.Urls, "空集合边界")
+	})
+}

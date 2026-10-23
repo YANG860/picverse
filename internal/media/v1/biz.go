@@ -29,6 +29,8 @@ type MediaUsecase interface {
 	GetMediaAssetFiles(ctx context.Context, req *mediav1.GetMediaAssetFilesRequest) (*mediav1.GetMediaAssetFilesResponse, error)
 	// GetMediaAssetFile 获取单个媒体资产下的文件
 	GetMediaAssetFile(ctx context.Context, req *mediav1.GetMediaAssetFileRequest) (*mediav1.GetMediaAssetFileResponse, error)
+	// SignMediaFileURLs 批量签发展示 GET URL（纯读，不改引用计数）
+	SignMediaFileURLs(ctx context.Context, req *mediav1.SignMediaFileURLsRequest) (*mediav1.SignMediaFileURLsResponse, error)
 	// ListMediaAssetsBefore 列出指定时间之前的媒体资产（游标分页）
 	ListMediaAssetsBefore(ctx context.Context, req *mediav1.ListMediaAssetsBeforeRequest) (*mediav1.ListMediaAssetsBeforeResponse, error)
 	// BanMedia 封禁媒体
@@ -275,6 +277,56 @@ func (u *MediaUsecaseImpl) GetMediaAssetFile(ctx context.Context, req *mediav1.G
 	}
 
 	return &mediav1.GetMediaAssetFileResponse{File: files[0].ToProto()}, nil
+}
+
+// SignMediaFileURLs 批量签发展示 GET URL
+func (u *MediaUsecaseImpl) SignMediaFileURLs(ctx context.Context, req *mediav1.SignMediaFileURLsRequest) (*mediav1.SignMediaFileURLsResponse, error) {
+	urlTTL := defaults.MediaUrlTTL
+
+	urls := make([]*mediav1.MediaFileURL, 0, len(req.GetRefs()))
+	ids := make([]int64, 0, len(req.GetRefs()))
+	types := make([]mediav1.MediaFileType, 0, len(req.GetRefs()))
+
+	for _, ref := range req.GetRefs() {
+		id, err := snowflake.ParseString(ref.Id)
+		if err != nil {
+			urls = append(urls, &mediav1.MediaFileURL{Fail: true, Err: errmsg.InvalidID, AssetId: ref.Id, Type: ref.Type})
+		} else {
+			ids = append(ids, id.Int64())
+			types = append(types, ref.Type)
+		}
+	}
+
+	files, err := u.Repo.GetMediaFiles(ctx, ids, types)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get media files: %w", err)
+	}
+
+	for i := 0; i < len(ids); i++ {
+		assetID := snowflake.ParseInt64(ids[i]).String()
+		found := false
+		for _, file := range files {
+			if ids[i] == file.AssetID && types[i] == file.Type {
+				signed, signErr := u.S3.PresignedGetURL(ctx, file.ObjKey, urlTTL)
+				if signErr != nil {
+					return nil, fmt.Errorf("failed to sign get url for %s: %w", file.ObjKey, signErr)
+				}
+				urls = append(urls, &mediav1.MediaFileURL{
+					AssetId:   assetID,
+					Type:      types[i],
+					SignedUrl: signed.URL,
+					ExpireAt:  signed.ExpiresAt.UnixMilli(),
+				})
+				found = true
+				break
+			}
+		}
+		if !found {
+			urls = append(urls, &mediav1.MediaFileURL{Fail: true, Err: errmsg.NotFound, AssetId: assetID, Type: types[i]})
+		}
+	}
+
+	return &mediav1.SignMediaFileURLsResponse{Urls: urls}, nil
 }
 
 func (u *MediaUsecaseImpl) ListMediaAssetsBefore(ctx context.Context, req *mediav1.ListMediaAssetsBeforeRequest) (*mediav1.ListMediaAssetsBeforeResponse, error) {

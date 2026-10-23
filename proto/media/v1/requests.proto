@@ -85,6 +85,31 @@ message GetMediaAssetFileResponse {
   MediaFile file = 3;
 }
 
+// MediaFileURL 单条展示 URL 签名结果（逐项 fail 标识该项失败）
+message MediaFileURL {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  string asset_id = 3 [(buf.validate.field).string.min_len = 1];
+  MediaFileType type = 4;
+
+  string signed_url = 5;
+  // 签名 URL 过期时间：unix 毫秒时间戳
+  int64 expire_at = 6;
+}
+
+// 批量签发展示 GET URL（纯读，不改引用计数；URL 供前端直接展示媒体）
+message SignMediaFileURLsRequest {
+  repeated MediaAssetFileQuery refs = 1 [(buf.validate.field).repeated.min_items = 1];
+}
+
+message SignMediaFileURLsResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  repeated MediaFileURL urls = 3;
+}
+
 message ListMediaAssetsBeforeRequest {
   common.v1.Cursor cursor = 1;
 }

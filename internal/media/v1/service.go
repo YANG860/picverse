@@ -65,6 +65,12 @@ func (s *MediaServiceHandler) GetMediaAssetFile(ctx context.Context, req *connec
 	return connect.NewResponse(resp), err
 }
 
+// SignMediaFileURLs 批量签发展示 GET URL
+func (s *MediaServiceHandler) SignMediaFileURLs(ctx context.Context, req *connect.Request[mediav1.SignMediaFileURLsRequest]) (*connect.Response[mediav1.SignMediaFileURLsResponse], error) {
+	resp, err := s.Biz.SignMediaFileURLs(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
 // ListMediaAssetsBefore 列出指定时间之前的媒体资产（游标分页）
 func (s *MediaServiceHandler) ListMediaAssetsBefore(ctx context.Context, req *connect.Request[mediav1.ListMediaAssetsBeforeRequest]) (*connect.Response[mediav1.ListMediaAssetsBeforeResponse], error) {
 	resp, err := s.Biz.ListMediaAssetsBefore(ctx, req.Msg)
