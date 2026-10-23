@@ -25,6 +25,8 @@ service UserService {
   rpc SetUnFollow(SetUnFollowRequest) returns (SetUnFollowResponse);
   // 获取关注列表
   rpc GetFollowings(GetFollowingsRequest) returns (GetFollowingsResponse);
+  // 获取粉丝列表
+  rpc GetFollowers(GetFollowersRequest) returns (GetFollowersResponse);
   // 获取关注关系
   rpc GetFollowingRelation(GetFollowingRelationRequest) returns (GetFollowingRelationResponse);
 }

@@ -254,6 +254,23 @@ func TestUserServiceE2E(t *testing.T) {
 	assert.Equal(t, "e2e user b", followings.Msg.GetUserBriefs()[0].GetName())
 	assert.Equal(t, "e2e/avatar-c.jpg", followings.Msg.GetUserBriefs()[0].GetAvatar().GetObjKey(), "关注列表应携带头像")
 
+	// 粉丝列表（关注关系反向）：B 的粉丝应含 A
+	followers, err := client.GetFollowers(ctx, connect.NewRequest(&userv1.GetFollowersRequest{Uid: uidB}))
+	require.NoError(t, err, "GetFollowers RPC")
+	require.False(t, followers.Msg.GetFail(), "GetFollowers 业务失败: %v", followers.Msg.GetErr())
+	assert.Nil(t, followers.Msg.GetErr(), "成功响应不应携带错误码")
+	require.Len(t, followers.Msg.GetUserBriefs(), 1, "B 的粉丝列表应含 A")
+	assert.Equal(t, uidA, followers.Msg.GetUserBriefs()[0].GetUid())
+	assert.Equal(t, "e2e user a v2", followers.Msg.GetUserBriefs()[0].GetName())
+	assert.Equal(t, "e2e/avatar-b.jpg", followers.Msg.GetUserBriefs()[0].GetAvatar().GetObjKey(), "粉丝列表应携带头像")
+
+	// A 尚无粉丝：空列表 + 空游标（空集合边界）
+	followersA, err := client.GetFollowers(ctx, connect.NewRequest(&userv1.GetFollowersRequest{Uid: uidA}))
+	require.NoError(t, err)
+	assert.False(t, followersA.Msg.GetFail())
+	assert.Empty(t, followersA.Msg.GetUserBriefs(), "A 无粉丝应返回空列表")
+	assert.Nil(t, followersA.Msg.GetCursor(), "空页应返回空游标")
+
 	// ---- 11. 取关 ----
 	unfollow, err := client.SetUnFollow(ctx, connect.NewRequest(&userv1.SetUnFollowRequest{
 		Uid: uidA, TargetUid: uidB,
@@ -265,6 +282,11 @@ func TestUserServiceE2E(t *testing.T) {
 	require.NoError(t, err, "取关后 GetFollowings RPC")
 	assert.Empty(t, followings2.Msg.GetUserBriefs(), "取关后关注列表应为空")
 	assert.Nil(t, followings2.Msg.GetCursor(), "空页应返回空游标")
+
+	followers2, err := client.GetFollowers(ctx, connect.NewRequest(&userv1.GetFollowersRequest{Uid: uidB}))
+	require.NoError(t, err, "取关后 GetFollowers RPC")
+	assert.Empty(t, followers2.Msg.GetUserBriefs(), "取关后 B 的粉丝列表应为空")
+	assert.Nil(t, followers2.Msg.GetCursor(), "空页应返回空游标")
 
 	relAB2, err := client.GetFollowingRelation(ctx, connect.NewRequest(&userv1.GetFollowingRelationRequest{
 		Uid: uidA, TargetUid: uidB,

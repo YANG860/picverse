@@ -137,6 +137,21 @@ message GetFollowingsResponse {
   common.v1.Cursor cursor = 4;
 }
 
+// GetFollowersRequest 获取粉丝列表（游标分页，按关注时间倒序，与 GetFollowings 对称）
+message GetFollowersRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  common.v1.Cursor cursor = 2;
+}
+
+message GetFollowersResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 翻页到底/暂无粉丝：列表为空且 cursor 为空（与 GetFollowingsResponse 一致）
+  repeated UserBrief user_briefs = 3;
+  common.v1.Cursor cursor = 4;
+}
+
 message GetFollowingRelationRequest {
   string uid = 1 [(buf.validate.field).string.min_len = 1];
   string target_uid = 2 [(buf.validate.field).string.min_len = 1];

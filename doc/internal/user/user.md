@@ -28,7 +28,7 @@
 | `UpdateUserAvatar` | 独立头像更新；返回 `old_asset_id` 供 BFF 调整旧资产引用计数 |
 | `GetUserBrief` / `GetUserProfile` / `GetUserStatus` | 批量简要 / 完整资料 / 状态查询 |
 | `SetFollow` / `SetUnFollow` | 关注 / 取关（事务内双端计数维护；自关注拒绝，未关注取关幂等） |
-| `GetFollowings` / `GetFollowingRelation` | 关注列表 / 关注关系查询 |
+| `GetFollowings` / `GetFollowers` / `GetFollowingRelation` | 关注列表 / 粉丝列表 / 关注关系查询（前两者游标分页、互为反向） |
 | `BanUser` | 封禁用户（状态流转） |
 
 ## 关键逻辑

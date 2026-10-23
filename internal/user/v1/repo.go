@@ -35,6 +35,8 @@ type UserRepository interface {
 	GetUserProfiles(ctx context.Context, uids []int64) ([]*models.UserProfile, error)
 	// GetFollowings 根据用户ID获取关注列表
 	GetFollowings(ctx context.Context, uid int64, before int64, limit int64) ([]*models.UserFollow, error)
+	// GetFollowers 根据用户ID获取粉丝列表（关注关系反向）
+	GetFollowers(ctx context.Context, uid int64, before int64, limit int64) ([]*models.UserFollow, error)
 	// GetFollowingRelation 获取关注关系
 	GetFollowingRelation(ctx context.Context, fanID, followingID int64) (isFollowing, isFollower bool, err error)
 	// SetFollow 设置关注关系
@@ -222,6 +224,20 @@ func (r *UserRepoImpl) GetFollowings(ctx context.Context, uid int64, before int6
 			r.q.UserFollow.CreatedAt.Lt(before),
 		).
 		Preload(r.q.UserFollow.Following).
+		Order(r.q.UserFollow.CreatedAt.Desc()).
+		Limit(int(limit)).
+		Find()
+	return follows, err
+}
+
+// GetFollowers 获取粉丝列表：关注关系反向查询（被关注者 = uid，取粉丝用户）
+func (r *UserRepoImpl) GetFollowers(ctx context.Context, uid int64, before int64, limit int64) ([]*models.UserFollow, error) {
+	follows, err := r.q.UserFollow.WithContext(ctx).
+		Where(
+			r.q.UserFollow.FollowingID.Eq(uid),
+			r.q.UserFollow.CreatedAt.Lt(before),
+		).
+		Preload(r.q.UserFollow.Fan).
 		Order(r.q.UserFollow.CreatedAt.Desc()).
 		Limit(int(limit)).
 		Find()

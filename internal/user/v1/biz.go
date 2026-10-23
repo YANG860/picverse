@@ -41,6 +41,8 @@ type UserUsecase interface {
 	SetUnFollow(ctx context.Context, req *userv1.SetUnFollowRequest) (*userv1.SetUnFollowResponse, error)
 	// GetFollowings 获取关注列表
 	GetFollowings(ctx context.Context, req *userv1.GetFollowingsRequest) (*userv1.GetFollowingsResponse, error)
+	// GetFollowers 获取粉丝列表
+	GetFollowers(ctx context.Context, req *userv1.GetFollowersRequest) (*userv1.GetFollowersResponse, error)
 	// GetFollowingRelation 获取关注关系
 	GetFollowingRelation(ctx context.Context, req *userv1.GetFollowingRelationRequest) (*userv1.GetFollowingRelationResponse, error)
 	// BanUser 封禁用户
@@ -320,7 +322,7 @@ func (u *UserUsecaseImpl) GetUserBrief(ctx context.Context, req *userv1.GetUserB
 			if v.ID == id {
 				// 正确返回：回填请求 uid，与结果一一对应
 				results = append(results, &userv1.UserBriefResult{
-					Uid:  snowflake.ParseInt64(id).String(),
+					Uid:   snowflake.ParseInt64(id).String(),
 					Brief: v.ToBrief(),
 				})
 				found = true
@@ -480,6 +482,39 @@ func (u *UserUsecaseImpl) GetFollowings(ctx context.Context, req *userv1.GetFoll
 	}
 
 	return &userv1.GetFollowingsResponse{
+		UserBriefs: proto,
+		Cursor:     cursor,
+	}, nil
+}
+
+// GetFollowers 获取粉丝列表（与 GetFollowings 对称：关注关系反向，取粉丝用户）
+func (u *UserUsecaseImpl) GetFollowers(ctx context.Context, req *userv1.GetFollowersRequest) (*userv1.GetFollowersResponse, error) {
+	uid, err := snowflake.ParseString(req.GetUid())
+	if err != nil {
+		return &userv1.GetFollowersResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+
+	stamp, limit := utils.ParseTimeCursor(req.GetCursor())
+
+	follows, err := u.Repo.GetFollowers(ctx, uid.Int64(), stamp, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get followers: %w", err)
+	}
+
+	var cursor *commonv1.Cursor
+	if len(follows) > 0 {
+		cursor = utils.NewTimeCursor(follows[len(follows)-1].CreatedAt, limit)
+	}
+
+	proto := make([]*userv1.UserBrief, 0, len(follows))
+	for _, follow := range follows {
+		if follow.Fan == nil {
+			continue
+		}
+		proto = append(proto, follow.Fan.ToBrief())
+	}
+
+	return &userv1.GetFollowersResponse{
 		UserBriefs: proto,
 		Cursor:     cursor,
 	}, nil

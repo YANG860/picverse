@@ -75,6 +75,12 @@ func (s *UserServiceHandler) GetFollowings(ctx context.Context, req *connect.Req
 	return connect.NewResponse(resp), err
 }
 
+// GetFollowers 获取粉丝列表
+func (s *UserServiceHandler) GetFollowers(ctx context.Context, req *connect.Request[userv1.GetFollowersRequest]) (*connect.Response[userv1.GetFollowersResponse], error) {
+	resp, err := s.Biz.GetFollowers(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
 func (s *UserServiceHandler) GetFollowingRelation(ctx context.Context, req *connect.Request[userv1.GetFollowingRelationRequest]) (*connect.Response[userv1.GetFollowingRelationResponse], error) {
 	resp, err := s.Biz.GetFollowingRelation(ctx, req.Msg)
 	return connect.NewResponse(resp), err
