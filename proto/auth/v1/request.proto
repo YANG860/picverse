@@ -65,3 +65,15 @@ message LogoutResponse {
   bool fail = 1;
   common.v1.Error err = 2;
 }
+
+// DeleteAccountRequest 删除账户（内部接口：BFF 注册编排回滚用，不经 BFF 面客）。
+// 物理删除注册记录，一并失效其 web/mobile refresh 登录态。
+message DeleteAccountRequest {
+  // 待删除账户的 uid（注册时分配的 assigned_id）
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message DeleteAccountResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+}

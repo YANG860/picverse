@@ -22,6 +22,7 @@ type AuthUsecase interface {
 	GetRefreshToken(context.Context, *authv1.GetRefreshTokenRequest) (*authv1.GetRefreshTokenResponse, error)
 	GetAccessToken(context.Context, *authv1.GetAccessTokenRequest) (*authv1.GetAccessTokenResponse, error)
 	Logout(context.Context, *authv1.LogoutRequest) (*authv1.LogoutResponse, error)
+	DeleteAccount(context.Context, *authv1.DeleteAccountRequest) (*authv1.DeleteAccountResponse, error)
 }
 
 type AuthUsecaseImpl struct {
@@ -283,4 +284,23 @@ func (u *AuthUsecaseImpl) Logout(ctx context.Context, req *authv1.LogoutRequest)
 	}
 
 	return &authv1.LogoutResponse{}, nil
+}
+
+// DeleteAccount 删除账户：物理删除注册记录，一并失效其 web/mobile refresh 登录态（删行即失效）。
+// 内部接口：供 BFF 注册编排回滚（auth.Register 成功后后续步骤失败），不经 BFF 面客。
+func (u *AuthUsecaseImpl) DeleteAccount(ctx context.Context, req *authv1.DeleteAccountRequest) (*authv1.DeleteAccountResponse, error) {
+	uid, err := snowflake.ParseString(req.GetUid())
+	if err != nil {
+		return &authv1.DeleteAccountResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+
+	info, err := u.Repo.DeleteCredential(ctx, uid.Int64())
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete credential: %w", err)
+	}
+	if info.RowsAffected == 0 {
+		return &authv1.DeleteAccountResponse{Fail: true, Err: errmsg.NotFound}, nil
+	}
+
+	return &authv1.DeleteAccountResponse{}, nil
 }

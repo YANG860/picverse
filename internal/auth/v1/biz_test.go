@@ -617,3 +617,57 @@ func TestAuthUsecase_Logout(t *testing.T) {
 		assert.Nil(t, second.GetErr())
 	})
 }
+
+// TestAuthUsecase_DeleteAccount 删除账户（注册回滚内部接口）：删行即失效全部登录态
+func TestAuthUsecase_DeleteAccount(t *testing.T) {
+	t.Run("UID 为空/非法返回 InvalidID", func(t *testing.T) {
+		uc, _, _ := newUsecase(t)
+
+		resp, err := uc.DeleteAccount(context.Background(), &authv1.DeleteAccountRequest{})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
+
+		resp, err = uc.DeleteAccount(context.Background(), &authv1.DeleteAccountRequest{Uid: "not-a-number"})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
+	})
+
+	t.Run("账户不存在返回 NotFound", func(t *testing.T) {
+		uc, _, _ := newUsecase(t)
+
+		resp, err := uc.DeleteAccount(context.Background(), &authv1.DeleteAccountRequest{Uid: strconv.FormatInt(bizUID1, 10)})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.NotFound, resp.GetErr())
+	})
+
+	t.Run("删除账户：行删除且登录态一并失效，重复删除 NotFound", func(t *testing.T) {
+		uc, db, _ := newUsecase(t)
+		seedUser(t, db, bizUID1, emailOf(bizUID1), testPassword, authv1.Role_ROLE_USER)
+		_, webToken, _ := mustLogin(t, uc, bizUID1, authv1.Platform_PLATFORM_WEB)
+		_, mobileToken, _ := mustLogin(t, uc, bizUID1, authv1.Platform_PLATFORM_MOBILE)
+
+		resp, err := uc.DeleteAccount(context.Background(), &authv1.DeleteAccountRequest{Uid: strconv.FormatInt(bizUID1, 10)})
+		require.NoError(t, err)
+		assert.False(t, resp.GetFail())
+
+		var count int64
+		require.NoError(t, db.Model(&auth.UserCredential{}).Where("id = ?", bizUID1).Count(&count).Error)
+		assert.Zero(t, count, "注册记录应被物理删除")
+
+		webResp, err := uc.GetRefreshToken(context.Background(), &authv1.GetRefreshTokenRequest{RefreshToken: webToken})
+		require.NoError(t, err)
+		assert.True(t, webResp.GetFail(), "web 登录态随删行失效")
+
+		mobileResp, err := uc.GetRefreshToken(context.Background(), &authv1.GetRefreshTokenRequest{RefreshToken: mobileToken})
+		require.NoError(t, err)
+		assert.True(t, mobileResp.GetFail(), "mobile 登录态随删行失效")
+
+		again, err := uc.DeleteAccount(context.Background(), &authv1.DeleteAccountRequest{Uid: strconv.FormatInt(bizUID1, 10)})
+		require.NoError(t, err)
+		assert.True(t, again.GetFail())
+		assert.Equal(t, errmsg.NotFound, again.GetErr())
+	})
+}

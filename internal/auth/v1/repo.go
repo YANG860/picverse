@@ -24,6 +24,8 @@ type AuthRepository interface {
 	GetCredentialByEmail(ctx context.Context, email string) (*auth.UserCredential, error)
 	// 根据用户ID获取注册记录
 	GetCredentialByUID(ctx context.Context, userID int64) (*auth.UserCredential, error)
+	// 删除注册记录（物理删除，一并失效其登录态；供注册回滚）
+	DeleteCredential(ctx context.Context, userID int64) (gen.ResultInfo, error)
 }
 
 type AuthRepoImpl struct {
@@ -112,4 +114,10 @@ func (r *AuthRepoImpl) GetCredentialByUID(ctx context.Context, userID int64) (*a
 	}
 
 	return credentials, nil
+}
+
+func (r *AuthRepoImpl) DeleteCredential(ctx context.Context, userID int64) (gen.ResultInfo, error) {
+	return r.q.WithContext(ctx).UserCredential.Where(
+		r.q.UserCredential.ID.Eq(userID),
+	).Delete()
 }

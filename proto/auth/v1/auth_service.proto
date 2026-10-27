@@ -15,4 +15,7 @@ service AuthService {
   rpc GetAccessToken(GetAccessTokenRequest) returns (GetAccessTokenResponse) {}
   // 强制登出
   rpc Logout(LogoutRequest) returns (LogoutResponse) {}
+
+  // 删除账户（内部接口：BFF 注册编排回滚用，不经 BFF 面客）
+  rpc DeleteAccount(DeleteAccountRequest) returns (DeleteAccountResponse) {}
 }

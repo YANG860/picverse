@@ -30,7 +30,6 @@ func (s *AuthServiceHandler) Register(
 	ctx context.Context,
 	req *connect.Request[v1.RegisterRequest],
 ) (*connect.Response[v1.RegisterResponse], error) {
-	// TODO: 实现注册逻辑
 	resp, err := s.Biz.Register(ctx, req.Msg)
 	if err != nil {
 		return nil, err
@@ -79,6 +78,18 @@ func (s *AuthServiceHandler) Logout(
 	req *connect.Request[v1.LogoutRequest],
 ) (*connect.Response[v1.LogoutResponse], error) {
 	resp, err := s.Biz.Logout(ctx, req.Msg)
+	if err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(resp), nil
+}
+
+// DeleteAccount 删除账户（内部接口：BFF 注册编排回滚用）
+func (s *AuthServiceHandler) DeleteAccount(
+	ctx context.Context,
+	req *connect.Request[v1.DeleteAccountRequest],
+) (*connect.Response[v1.DeleteAccountResponse], error) {
+	resp, err := s.Biz.DeleteAccount(ctx, req.Msg)
 	if err != nil {
 		return nil, err
 	}
