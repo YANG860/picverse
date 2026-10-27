@@ -2,7 +2,7 @@
 
 代码：`internal/post/`（`models/`、`v1/{biz,repo,service}.go`），proto：`proto/post/v1/`，进程：`cmd/post`（端口 `:8082`）。
 
-负责草稿创作、发布审核流转、帖子查询与管理。uid 由 auth 服务分配后透传，本服务不管理凭证；帖子媒体来自 media 服务产出的 `MediaFile`。
+负责草稿创作、发布审核流转、帖子查询与管理。uid 由 auth 服务分配后透传，本服务不管理凭证；帖子媒体来自 media 服务产出的 `MediaFile`（响应完整下发供 BFF 管道使用；**面客由 BFF 降维为 `MediaView`**，存储坐标不面客，见 [bff.md](../bff/bff.md)）。
 
 ## 数据模型
 
@@ -32,10 +32,9 @@
 | `GetPostStatus` | ✅ | 帖子状态查询 |
 | `ViewPost` | ✅ | 查看帖子（非发布状态仅作者可见，软删对外隐藏，封禁返回 `Banned`） |
 | `SetPostStatusDraft` | 规划中 | 发布后修改场景：PUBLISHED→DRAFT（仅 proto 消息定义，暂无 rpc） |
-| `ViewPostByAuthor` | ✅ | 按作者游标分页（空页返回空列表 + 空游标，不以 NotFound 表达翻页到底） |
+| `ViewPostByAuthor` | ✅ | 按作者游标分页（空页返回空列表 + 空游标，不以 NotFound 表达翻页到底）；`PostBrief` 携带 `status`，供 BFF 直接组装 `PostCard` 无需二次查询 |
 | `DeletePost` | ✅ | 用户删帖（软删 → DELETED，事务内发 `DeletePost` 消息，consumer 物理回收） |
 | `BanPost` | ✅ | 封禁帖子（管理侧，无 uid 校验；软封禁 → BANNED + outbox 发 `BanPost` 消息） |
-| `DeleteUnusedPost` | 规划中 | 回收软删帖子（物理删除；仅 proto 消息定义，暂无 rpc） |
 | `SyncPostStat` | ✅ | 统计列同步（异步链路；逐字段部分更新，nil 不修改，设置则覆盖该列（含 0），仅统计不改状态） |
 
 ## 关键逻辑
@@ -62,7 +61,7 @@
 当前审核为**占位实现**：`PublishDraft` 不校验“图片审核通过”、consumer `handleAuditPost` 无实质审核逻辑（TODO 保留），审核完直接流转 `PUBLISHED`；待审核链路完善后补。
 
 ### 删帖/封禁消息链路（consumer）
-`DeletePost` 软删（事务内发 `DeletePost` 消息）→ consumer `handleDeletePost` 同事务**物理回收**软删（DELETED 状态）帖子行与其媒体关联，重复投递幂等；`repo.DeletePost` 带 `status=DELETED` 守卫，不会误删未删帖的裸行。`BanPost`（软封禁）与发布后的 `PublishPost` 消息目前由 consumer 占位消费（日志留痕 + ACK，对齐 media 侧 `HandlePublishMedia` 模式），下游逻辑（媒体资产处置/通知等）待需求明确后补。
+`DeletePost` 软删（事务内发 `DeletePost` 消息）→ consumer `handleDeletePost` 同事务**物理回收**软删（DELETED 状态）帖子行与其媒体关联，重复投递幂等；`repo.DeletePost` 带 `status=DELETED` 守卫，不会误删未删帖的裸行。**资产计数回收**在同链路闭环：`DeletePostMedias` 先查后删返回被删关联的资产 ID，按槽位同事务写 outbox `deref_media` 消息（media consumer 递减引用计数），删几槽减几槽，重复投递时 0 行命中即不重复减。`BanPost`（软封禁）与发布后的 `PublishPost` 消息目前由 consumer 占位消费（日志留痕 + ACK，对齐 media 侧 `HandlePublishMedia` 模式），下游逻辑（媒体资产处置/通知等）待需求明确后补。
 
 ## 依赖
 
@@ -73,6 +72,6 @@
 
 ## 状态
 
-`PostService` 的 11 个 rpc **全部已实现**：草稿链路（`CreateDraft` / `UpdateDraft` / `UpdateDraftMedias` / `PublishDraft`）、查询（`GetPostsByIDs` / `GetPostStatus` / `ViewPost` / `ViewPostByAuthor`）、管理（`DeletePost` / `BanPost` / `SyncPostStat`）。`SetPostStatusDraft` / `DeleteUnusedPost` 仅定义 proto 消息、暂无 rpc，为规划中接口。
+`PostService` 的 11 个 rpc **全部已实现**：草稿链路（`CreateDraft` / `UpdateDraft` / `UpdateDraftMedias` / `PublishDraft`）、查询（`GetPostsByIDs` / `GetPostStatus` / `ViewPost` / `ViewPostByAuthor`）、管理（`DeletePost` / `BanPost` / `SyncPostStat`）。`SetPostStatusDraft` 仅定义 proto 消息、暂无 rpc，为规划中接口（物理回收已由 consumer 删帖链路承担，不再设 RPC）。
 
 测试：`internal/post/v1` 含 repo 层与 biz 层集成测试（`repo_test.go` / `biz_test.go`，真实 testdb 模板库克隆 + testmq 内存模拟，覆盖正常/边界/错误路径与状态机），依赖 `test/testdb`。

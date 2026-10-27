@@ -36,7 +36,7 @@ services:    # 下游服务地址（服务发现）
 
 | 键 | 类型 | 说明 |
 | --- | --- | --- |
-| `auth` / `user` / `media` / `post` | string | 各服务监听地址，如 `:8081` |
+| `auth` / `user` / `media` / `post` / `bff` | string | 各服务监听地址，如 `:8081`（bff 为 `:8084`） |
 
 ### services — 下游服务地址（服务发现）
 

@@ -25,6 +25,7 @@
 | `GetRefreshToken` | 无条件换发新 refresh token（请求体直传 refresh token 串，验签 + jti 轮换校验） |
 | `GetAccessToken` | 无条件换发新 access token（同上，不轮换 refresh 登录态） |
 | `Logout` | 强制登出（`uid` 由 BFF 从会话注入；失效两个平台的 refresh token） |
+| `DeleteAccount` | 删除账户（内部接口：BFF 注册编排回滚用，不经 BFF 面客；物理删除注册记录，一并失效两平台登录态） |
 
 ## 关键逻辑
 

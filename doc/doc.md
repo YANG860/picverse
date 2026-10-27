@@ -28,6 +28,7 @@ rednote 是一个仿小红书的图片社交论坛后端，基于 Go + ConnectRP
 | 文档 | 说明 |
 | --- | --- |
 | [packages/db/db.md](packages/db/db.md) | GORM 连接（PG / SQLite）、日志适配、语义化错误 |
+| [packages/rpc/rpc.md](packages/rpc/rpc.md) | 下游 connectrpc 客户端、服务发现传输层（负载均衡 / 故障转移） |
 | [packages/mq/mq.md](packages/mq/mq.md) | NATS JetStream 客户端、事务性消息（Send / SendTX） |
 | [packages/oss/oss.md](packages/oss/oss.md) | S3 / MinIO 对象存储封装、预签名 URL |
 | [packages/jwt/jwt.md](packages/jwt/jwt.md) | JWT 签发 / 校验、Claims、ConnectRPC 拦截器 |
@@ -41,15 +42,14 @@ rednote 是一个仿小红书的图片社交论坛后端，基于 Go + ConnectRP
 | 文档 | 说明 |
 | --- | --- |
 | [test/test.md](test/test.md) | 测试体系总览（模板库克隆、单元/集成、E2E） |
-| [test/testdb/testdb.md](test/testdb/testdb.md) | 模板库克隆独立测试库（templateDB 方案） |
-| [test/testsnowflake/testsnowflake.md](test/testsnowflake/testsnowflake.md) | 测试用雪花节点初始化 |
-| [test/testoss/testoss.md](test/testoss/testoss.md) | `oss.S3Repo` 本地内存模拟 |
-| [test/testmq/testmq.md](test/testmq/testmq.md) | `mq.MQClient` 本地内存模拟 |
-| [test/e2e/e2e.md](test/e2e/e2e.md) | 部署后服务的黑盒端到端测试 |
+| [test/testdb.md](test/testdb.md) | 模板库克隆独立测试库（templateDB 方案） |
+| [test/testsnowflake.md](test/testsnowflake.md) | 测试用雪花节点初始化 |
+| [test/testoss.md](test/testoss.md) | `oss.S3Repo` 本地内存模拟 |
+| [test/testmq.md](test/testmq.md) | `mq.MQClient` 本地内存模拟 |
 
 ## 模块完成度
 
 文档聚焦于**已实现/可用**的模块。以下模块仍在施工中，暂不展开文档：
 
-- **post（帖子）**：接口定义已定稿（12 rpc）；`CreateDraft`/`PublishDraft` 已实现（发布走 outbox 审核消息），查询与管理接口为脚手架，待实现。
+
 - **redis**：仅封装了客户端与健康检查，业务接口待补全。

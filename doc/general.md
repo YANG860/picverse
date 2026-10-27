@@ -51,7 +51,10 @@ rednote 是一个仿小红书的图片社交论坛后端。核心链路围绕**�
 | --- | --- | --- |
 | `cmd/media` | `:8080` | 媒体服务 ConnectRPC 入口 |
 | `cmd/auth` | `:8081` | 认证服务 ConnectRPC 入口（接入 JWT 拦截器） |
-| `cmd/consumer` | — | 媒体消费者，处理 JetStream 中的图片消息 |
+| `cmd/post` | `:8082` | 帖子服务 ConnectRPC 入口 |
+| `cmd/user` | `:8083` | 用户服务 ConnectRPC 入口 |
+| `cmd/bff` | `:8084` | 面客聚合网关 ConnectRPC 入口（trace + JWT + validate 拦截器） |
+| `cmd/consumer` | — | 消费者，处理 JetStream 中的图片/帖子消息 |
 | `cmd/poller` | — | Outbox Poller，把发件箱消息投递到 JetStream |
 | `cmd/gen` | — | Wire 注入器 + gorm/gen 代码生成（不作为服务运行） |
 
@@ -80,7 +83,7 @@ rednote/
 ├── config/         配置结构与加载（Viper）
 ├── proto/          protobuf / ConnectRPC 服务与消息定义
 ├── gen/            生成代码（gen/go 连接与消息、gen/query GORM 查询）
-├── internal/       业务模块（auth / media / common / consumer / poller / post）
+├── internal/       业务模块（auth / user / media / post / bff / common / consumer / poller）
 ├── packages/       基础组件（db / mq / oss / jwt / trace / logger / utils / defaults / errmsg / redis）
 ├── sql/            建表与索引迁移脚本（幂等）
 ├── scripts/        dbinit（重建模板库）/ dbsync（同步表结构）

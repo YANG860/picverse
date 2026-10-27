@@ -35,6 +35,7 @@
 | `publish_media` | `HandlePublishMedia` | 发布（当前仅记录日志） |
 | `delete_media` | `HandleDeleteMedia` | 删除 S3 对象 + 删除 `media_files` / `media_assets` 记录 |
 | `ban_media` | `HandleBanMedia` | 封禁后删除各变体的 S3 对象 |
+| `deref_media` | `HandleDerefMedia` | 异步卸载：引用计数 -1（BFF 挂载点替换 / 删帖回收时发出，见 [bff](../bff/bff.md)）；非法资产 ID ACK 丢弃，其余失败 Nak 重投 |
 
 ### HandleUploadMedia
 1. 检查 S3 原图是否存在，不存在则标记 `FAILED`。
@@ -60,7 +61,7 @@ durable 名取 `config.Consumer.Post.Name`，ACK/NAK 策略与 MediaConsumer 一
 | --- | --- | --- |
 | `audit_post` | `handleAuditPost` | 审核（当前占位直通），同事务 `AUDITING→PUBLISHED` + 发 `publish_post` |
 | `publish_post` | `handlePublishPost` | 发布后下游处理（占位：仅记录日志，不阻塞 ACK） |
-| `delete_post` | `handleDeletePost` | 同事务物理删除软删帖子（仅 `DELETED` 行）及其媒体关联，重复投递幂等 |
+| `delete_post` | `handleDeletePost` | 同事务物理删除软删帖子（仅 `DELETED` 行）及其媒体关联，并按被删关联逐槽位写 outbox `deref_media` 卸载消息（资产引用计数回收，删几槽减几槽，重复投递幂等） |
 | `ban_post` | `handleBanPost` | 封禁后的下游处理 |
 
 ## ValidateImage
