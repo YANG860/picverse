@@ -5,18 +5,17 @@ package bff.v1;
 import "auth/v1/auth.proto";
 import "buf/validate/validate.proto";
 import "common/v1/common.proto";
-import "media/v1/media.proto";
 
-// RegisterRequest 注册（成功即登录，直接签发令牌）。
+// RegisterRequest 注册（成功不签发令牌，注册后需另行 Login）。
 // 与内部 auth 服务的差异：角色由 BFF 固定为 ROLE_USER，不暴露给客户端。
+// 能力范围仅“开户”（email/password/name）：注册前无 uid/无会话无法上传媒体，
+// 头像由 BFF 挂默认头像资产（packages/defaults.AvatarAssetID，引用计数 +1）；
+// 头像个性化由登录后的 UploadMedia → UpdateMyAvatar 完成（归属校验完备）。
 message RegisterRequest {
   string email = 1 [(buf.validate.field).string.email = true];
   string password = 2 [(buf.validate.field).string.min_len = 1];
   // 昵称（必填，1~64 字符，与 user.CreateUser 的 name 校验对齐）
   string name = 3 [(buf.validate.field).string.min_len = 1];
-  // 头像（可选）：提供时 BFF 校验资产存在且状态可用，挂载时引用计数 +1；
-  // 未提供时使用默认头像（packages/defaults.DefaultAvatar，同样计数 +1）。
-  optional string avatar_asset_id = 4 [(buf.validate.field).string.min_len = 1];
 }
 
 message RegisterResponse {

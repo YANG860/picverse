@@ -1,0 +1,120 @@
+syntax = "proto3";
+
+package bff.v1;
+
+import "bff/v1/views.proto";
+import "buf/validate/validate.proto";
+import "common/v1/common.proto";
+import "google/protobuf/wrappers.proto";
+
+// ==================== 草稿（两步发布：保存草稿 → 发布） ====================
+
+// CreateDraftRequest 创建草稿（作者即会话用户）。
+// 媒体须为会话用户素材库中的资产：BFF 校验归属后登记引用计数（+1），
+// 首张即封面，至少 1 张。
+message CreateDraftRequest {
+  string title = 1;
+  string full_text = 2;
+  repeated AssetRef medias = 3 [(buf.validate.field).repeated.min_items = 1];
+  common.v1.JsonStr metadata = 4;
+}
+
+message CreateDraftResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 草稿回显（作者即会话用户，无需再聚合作者视图）
+  PostView post = 3;
+}
+
+// UpdateDraftRequest 更新草稿（文本字段部分更新：仅更新传入的字段，仅 DRAFT 状态可更新）。
+message UpdateDraftRequest {
+  string post_id = 1 [(buf.validate.field).string.min_len = 1];
+  google.protobuf.StringValue title = 2;
+  google.protobuf.StringValue full_text = 3;
+  common.v1.JsonStr metadata = 4;
+}
+
+message UpdateDraftResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  PostView post = 3;
+}
+
+// UpdateDraftMediasRequest 更新草稿媒体（全量替换：至少 1 张，不支持清空，首张即封面）。
+// BFF 根据下游返回的旧资产 ID 卸载引用计数，并为本批资产登记引用计数（中间产物不外泄）。
+message UpdateDraftMediasRequest {
+  string post_id = 1 [(buf.validate.field).string.min_len = 1];
+  repeated AssetRef medias = 2 [(buf.validate.field).repeated.min_items = 1];
+}
+
+message UpdateDraftMediasResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  PostView post = 3;
+}
+
+// PublishDraftRequest 发布草稿（DRAFT → AUDITING，审核通过后对外可见）。
+message PublishDraftRequest {
+  string post_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message PublishDraftResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+}
+
+// DeletePostRequest 删除帖子（草稿与已发布均可删，软删）。
+message DeletePostRequest {
+  string post_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message DeletePostResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+}
+
+// ==================== 帖子查询 ====================
+
+// GetPostRequest 帖子详情（聚合作者信息与关注关系）。
+message GetPostRequest {
+  string post_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message GetPostResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  PostDetail post = 3;
+}
+
+// GetMyPostsRequest 我的帖子列表（含草稿/审核中，作者视角；游标分页）。
+message GetMyPostsRequest {
+  common.v1.Cursor cursor = 1;
+}
+
+message GetMyPostsResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 翻页到底/暂无内容：列表为空且 cursor 为空
+  repeated PostCard posts = 3;
+  common.v1.Cursor cursor = 4;
+}
+
+// GetUserPostsRequest 他人主页的帖子列表（仅已发布；游标分页）。
+message GetUserPostsRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  common.v1.Cursor cursor = 2;
+}
+
+message GetUserPostsResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 翻页到底/暂无内容：列表为空且 cursor 为空
+  repeated PostCard posts = 3;
+  common.v1.Cursor cursor = 4;
+}

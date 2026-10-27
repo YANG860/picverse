@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package bff.v1;
+
+import "bff/v1/auth_requests.proto";
+import "bff/v1/media_requests.proto";
+import "bff/v1/post_requests.proto";
+import "bff/v1/user_requests.proto";
+
+// BFFService 面向前端与客户端的聚合网关。
+// 与内部服务（auth/user/media/post）的关键契约差异：
+// 1. 身份全部来自会话：除 Register/Login 外，请求体一律不携带 uid，
+//    BFF 鉴权后从会话解析身份并注入下游调用，杜绝客户端伪造他人身份；
+// 2. 聚合视图：列表/详情按客户端页面形状组装（见 views.proto），
+//    下游多次调用在 BFF 内收敛为一次请求；
+// 3. 资产引用计数：媒体资产挂载/卸载时的引用计数由 BFF 维护
+//    （下游服务只存关联不校验），旧资产 ID 等中间产物在 BFF 消化，不外泄给客户端。
+service BFFService {
+  // ==================== 认证 ====================
+
+  // 注册（角色固定为普通用户；成功不签发令牌，需另行 Login）
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  // 密码登录并签发令牌
+  rpc Login(LoginRequest) returns (LoginResponse);
+  // 登出
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+  // 刷新
+  rpc RefreshTokens(RefreshTokensRequest) returns (RefreshTokensResponse);
+  // ==================== 用户 ====================
+
+  // 我的主页资料（uid 来自会话）
+  rpc GetMyProfile(GetMyProfileRequest) returns (GetMyProfileResponse);
+  // 他人主页资料（聚合当前会话用户与目标的关注关系 → ProfileView）
+  rpc GetUserProfile(GetUserProfileRequest) returns (GetUserProfileResponse);
+  // 更新我的资料（部分更新：仅更新传入的字段，nil 不修改）
+  rpc UpdateMyProfile(UpdateMyProfileRequest) returns (UpdateMyProfileResponse);
+  // 更新我的头像（BFF 校验资产归属并维护引用计数，旧资产卸载不外泄）
+  rpc UpdateMyAvatar(UpdateMyAvatarRequest) returns (UpdateMyAvatarResponse);
+  // 关注目标用户（关注者即会话用户）
+  rpc Follow(FollowRequest) returns (FollowResponse);
+  // 取消关注目标用户
+  rpc Unfollow(UnfollowRequest) returns (UnfollowResponse);
+  // 我的关注列表（游标分页）
+  rpc GetFollowingList(GetFollowingListRequest) returns (GetFollowingListResponse);
+  // 我的粉丝列表（游标分页）
+  rpc GetFollowerList(GetFollowerListRequest) returns (GetFollowerListResponse);
+  // 我与目标用户的关注关系（is_following / is_follower）
+  rpc GetFollowRelation(GetFollowRelationRequest) returns (GetFollowRelationResponse);
+
+  // ==================== 媒体 ====================
+  rpc UploadMedia(UploadMediaRequest) returns (UploadMediaResponse);
+
+  // 批量查询媒体资产状态：供前端上传后轮询 UPLOADING→ACTIVE（骨架屏/提交时机）
+  rpc GetMediaAssetStatus(GetMediaAssetStatusRequest) returns (GetMediaAssetStatusResponse);
+  // TODO: GetMyMediaAssets（素材库）待下游 media.ListMediaAssetsBefore 补 uploader 过滤后实现（bff.md 待定项 2）
+
+  // ==================== 帖子 ====================
+
+  // 创建草稿（BFF 校验媒体归属并登记引用计数，作者即会话用户）
+  rpc CreateDraft(CreateDraftRequest) returns (CreateDraftResponse);
+  // 更新草稿（文本字段部分更新，仅 DRAFT 可更新）
+  rpc UpdateDraft(UpdateDraftRequest) returns (UpdateDraftResponse);
+  // 更新草稿媒体（全量替换：新媒体挂载 +1，旧资产卸载，中间产物不外泄）
+  rpc UpdateDraftMedias(UpdateDraftMediasRequest) returns (UpdateDraftMediasResponse);
+  // 发布草稿（两步发布的第二步：DRAFT → AUDITING，审核通过后对外可见）
+  rpc PublishDraft(PublishDraftRequest) returns (PublishDraftResponse);
+  // 删除帖子（软删）
+  rpc DeletePost(DeletePostRequest) returns (DeletePostResponse);
+
+  // 帖子详情（聚合作者简视图与关注关系；可见性由下游裁决）
+  rpc GetPost(GetPostRequest) returns (GetPostResponse);
+  // 我的帖子列表（含草稿/审核中，作者视角；游标分页）
+  rpc GetMyPosts(GetMyPostsRequest) returns (GetMyPostsResponse);
+  // 他人主页的帖子列表（仅已发布；游标分页）
+  rpc GetUserPosts(GetUserPostsRequest) returns (GetUserPostsResponse);
+
+  // ==================== 信息流 ====================
+
+  // 关注流：我关注的人的已发布帖子，按发布时间归并（推荐流由后续推荐服务另立接口）
+  // TODO: GetFollowingFeed 待实现（限制关注数全量归并 + 时间游标，设计已定稿）
+}

@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package bff.v1;
+
+import "bff/v1/views.proto";
+import "common/v1/common.proto";
+
+// GetFollowingFeedRequest 关注流：我关注的人的已发布帖子，按发布时间归并（游标分页）。
+// 推荐流由后续推荐服务另立接口，不复用本契约。
+message GetFollowingFeedRequest {
+  common.v1.Cursor cursor = 1;
+}
+
+message GetFollowingFeedResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 翻页到底/暂无内容：列表为空且 cursor 为空
+  repeated PostCard posts = 3;
+  common.v1.Cursor cursor = 4;
+}

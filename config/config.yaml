@@ -18,6 +18,7 @@ server:
   user: ":8083"
   media: ":8080"
   post: ":8082"
+  bff: ":8084"
 
 services:
   # 下游服务地址（packages/discovery 静态实现）。

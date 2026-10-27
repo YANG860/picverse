@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package bff.v1;
+
+import "buf/validate/validate.proto";
+import "common/v1/common.proto";
+import "media/v1/media.proto";
+
+// ==================== 媒体 ====================
+
+// UploadMedia 上传媒体：创建资产 + 返回预签名直传 URL（客户端直传对象存储，不经服务端）
+message UploadMediaRequest {
+  // 媒体元数据（大小/格式/MIME）
+  media.v1.MediaMetaData meta = 1;
+}
+
+message UploadMediaResponse {
+  // 失败标志
+  bool fail = 1;
+  // 可枚举错误
+  common.v1.Error err = 2;
+
+  // 创建的媒体资产
+  media.v1.MediaAsset asset = 3;
+  // 预签名直传 URL
+  string signed_url = 4;
+  // 签名 URL 过期时间：unix 毫秒时间戳
+  int64 expire_at = 5;
+}
+
+// MediaAssetStatus 单个资产的状态查询结果（逐项 fail 标识该项失败）。
+// 供前端上传后轮询 UPLOADING→ACTIVE（驱动骨架屏/进度），决定何时提交写操作。
+message MediaAssetStatus {
+  // 该项是否失败
+  bool fail = 1;
+  // 失败时的可枚举错误
+  common.v1.Error err = 2;
+
+  // 回显查询 Key
+  string asset_id = 3 [(buf.validate.field).string.min_len = 1];
+  // 资产状态（失败时为 UNSPECIFIED）
+  media.v1.MediaAssetStatus status = 4;
+}
+
+message GetMediaAssetStatusRequest {
+  repeated string ids = 1 [(buf.validate.field).repeated.items.string.min_len = 1];
+}
+
+message GetMediaAssetStatusResponse {
+  // 整体失败标志（参数错误 / 下游连接层错误包装为 InternalError）
+  bool fail = 1;
+  // 失败时的可枚举错误
+  common.v1.Error err = 2;
+
+  // 与请求 ids 对齐的结果（任何情况下不保证顺序，按 asset_id 定位）
+  repeated MediaAssetStatus statuses = 3;
+}

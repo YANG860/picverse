@@ -67,6 +67,7 @@ type ServerConfig struct {
 	User  string `mapstructure:"user"`
 	Media string `mapstructure:"media"`
 	Post  string `mapstructure:"post"`
+	Bff   string `mapstructure:"bff"`
 }
 
 // S3Config S3/Minio 对象存储配置

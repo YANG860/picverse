@@ -1,0 +1,119 @@
+syntax = "proto3";
+
+package bff.v1;
+
+import "bff/v1/views.proto";
+import "buf/validate/validate.proto";
+import "common/v1/common.proto";
+import "google/protobuf/wrappers.proto";
+
+// GetMyProfileRequest 我的主页资料（uid 来自会话）。
+message GetMyProfileRequest {}
+
+message GetMyProfileResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  UserProfile profile = 3;
+}
+
+// GetUserProfileRequest 他人主页资料（聚合与当前会话用户的关注关系）。
+message GetUserProfileRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message GetUserProfileResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  ProfileView view = 3;
+}
+
+// UpdateMyProfileRequest 更新我的资料（部分更新：仅更新传入的字段，nil 不修改）。
+message UpdateMyProfileRequest {
+  google.protobuf.StringValue name = 1;
+  google.protobuf.StringValue bio = 2;
+  common.v1.JsonStr metadata = 3;
+}
+
+message UpdateMyProfileResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  UserProfile profile = 3;
+}
+
+// UpdateMyAvatarRequest 更新我的头像。
+// 头像资产须先经 UploadMedia 上传；BFF 校验资产归属后调用下游，
+// 并根据下游返回的旧资产 ID 完成引用计数卸载（中间产物不外泄给客户端）。
+message UpdateMyAvatarRequest {
+  AssetRef avatar = 1 [(buf.validate.field).required = true];
+}
+
+message UpdateMyAvatarResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  UserProfile profile = 3;
+}
+
+// FollowRequest 关注目标用户（关注者即会话用户）。
+message FollowRequest {
+  string target_uid = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message FollowResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+}
+
+// UnfollowRequest 取消关注目标用户。
+message UnfollowRequest {
+  string target_uid = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message UnfollowResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+}
+
+// GetFollowingListRequest 我的关注列表（游标分页）。
+message GetFollowingListRequest {
+  common.v1.Cursor cursor = 1;
+}
+
+message GetFollowingListResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 翻页到底/暂无关注：列表为空且 cursor 为空
+  repeated UserBrief user_briefs = 3;
+  common.v1.Cursor cursor = 4;
+}
+
+// GetFollowerListRequest 我的粉丝列表（游标分页）。
+message GetFollowerListRequest {
+  common.v1.Cursor cursor = 1;
+}
+
+message GetFollowerListResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 翻页到底/暂无粉丝：列表为空且 cursor 为空
+  repeated UserBrief user_briefs = 3;
+  common.v1.Cursor cursor = 4;
+}
+
+// GetFollowRelationRequest 我与目标用户的关注关系。
+message GetFollowRelationRequest {
+  string target_uid = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message GetFollowRelationResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  bool is_following = 3;
+  bool is_follower = 4;
+}

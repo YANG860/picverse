@@ -1,0 +1,111 @@
+syntax = "proto3";
+
+package bff.v1;
+
+import "buf/validate/validate.proto";
+import "common/v1/common.proto";
+import "media/v1/media.proto";
+import "post/v1/post.proto";
+import "user/v1/user.proto";
+
+// Relation 当前会话用户与目标用户的关注关系视图（BFF 聚合 user 服务）
+message Relation {
+  // 我关注了对方
+  bool is_following = 1;
+  // 对方关注了我
+  bool is_follower = 2;
+}
+
+// MediaView 面客媒体视图：BFF 返回前按内容公开性分级签发 URL（公开内容长 TTL / 私有内容 24h）。
+// 存储坐标不面客（与"身份不面客"同一治理），前端开箱即用；过期后重拉原接口刷新。
+message MediaView {
+  string asset_id = 1 [(buf.validate.field).string.min_len = 1];
+  media.v1.MediaFileType type = 2;
+  // 预签名展示 URL（公开内容未来可切换 CDN 直链）
+  string url = 3;
+  // 签名 URL 过期时间：unix 毫秒
+  int64 expires_at = 4;
+  // 媒体尺寸（布局用，来自媒体元数据）
+  int64 width = 5;
+  int64 height = 6;
+}
+
+// AssetRef 面客媒体引用（请求侧专用）：客户端只传 asset_id + 变体，
+// 存储坐标不面客；BFF 校验归属、查完整文件后回填下游。
+message AssetRef {
+  string asset_id = 1 [(buf.validate.field).string.min_len = 1];
+  media.v1.MediaFileType type = 2;
+}
+
+// UserBrief 面客用户简视图（user.v1.UserBrief 的面客镜像，avatar 降维为 MediaView）
+message UserBrief {
+  MediaView avatar = 1;
+  string name = 2;
+  string uid = 3;
+}
+
+// UserProfile 面客用户主页视图（user.v1.UserProfile 的面客镜像）
+message UserProfile {
+  UserBrief brief = 1;
+  string bio = 2;
+  // 纯数字统计与状态无媒体坐标，直传下游类型
+  user.v1.UserStat stat = 3;
+  user.v1.UserStatus status = 4;
+  common.v1.JsonStr metadata = 5;
+}
+
+// PostCard 帖子卡片：列表页/信息流通用的聚合视图。
+// 由 post 服务 PostBrief（封面 + 标题 + 统计 + 状态）与 user 服务 UserBrief（作者）组装。
+message PostCard {
+  string post_id = 1;
+  string title = 2;
+  // 封面：帖子的首张媒体（post 服务仅预载 sort_order=0 的关联）
+  MediaView cover = 3;
+  UserBrief author = 4;
+  post.v1.PostStat stat = 5;
+  // 与下游 post.v1.Post.created_at 一致：unix 毫秒时间戳的字符串形式
+  string created_at = 6;
+  // 帖子状态：他人视角恒为 PUBLISHED；"我的帖子"列表含草稿/审核中，前端按需展示
+  post.v1.PostStatus status = 7;
+}
+
+// PostDetail 帖子详情页的聚合视图。
+// 由 post 服务 Post + user 服务作者 UserBrief + 关注关系组装。
+message PostDetail {
+  string post_id = 1;
+  string title = 2;
+  string full_text = 3;
+  // 全部媒体，首张即封面
+  repeated MediaView medias = 4;
+  common.v1.JsonStr metadata = 5;
+  UserBrief author = 6;
+  post.v1.PostStat stat = 7;
+  // 当前会话用户与作者的关注关系（未登录访问公开帖时为空）
+  Relation relation = 8;
+  // 与下游 post.v1.Post 一致：unix 毫秒时间戳的字符串形式
+  string created_at = 9;
+  string updated_at = 10;
+  // 他人视角仅 PUBLISHED 可见；作者本人可见草稿/审核中等状态
+  post.v1.PostStatus status = 11;
+}
+
+// PostView 面客帖子视图（post.v1.Post 的面客镜像，medias 降维为 MediaView）。
+// 用于草稿写入回显（作者即会话用户，无需聚合作者/关系）。
+message PostView {
+  string post_id = 1;
+  string title = 2;
+  string full_text = 3;
+  repeated MediaView medias = 4;
+  common.v1.JsonStr metadata = 5;
+  post.v1.PostStat stat = 6;
+  string created_at = 7;
+  string updated_at = 8;
+  post.v1.PostStatus status = 9;
+}
+
+// ProfileView 用户主页的聚合视图。
+// UserProfile 为面客镜像；关注关系由 BFF 聚合。
+message ProfileView {
+  UserProfile profile = 1;
+  Relation relation = 2;
+}
