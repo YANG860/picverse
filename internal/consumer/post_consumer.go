@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"rednote/config"
+	mediav1 "rednote/gen/go/media/v1"
 	"rednote/gen/go/media/v1/mediav1connect"
 	postv1 "rednote/gen/go/post/v1"
 	v1 "rednote/internal/post/v1"
@@ -14,6 +15,7 @@ import (
 	"rednote/packages/oss"
 	"rednote/packages/trace"
 	"runtime/debug"
+	"strconv"
 
 	"github.com/bwmarrin/snowflake"
 	"github.com/nats-io/nats.go/jetstream"
@@ -234,7 +236,8 @@ func (c *PostConsumer) handlePublishPost(ctx context.Context, msg *postv1.Publis
 }
 
 // handleDeletePost 删帖消息的下游回收：同事务物理删除软删帖子行（仅 DELETED 行，见 repo.DeletePost）
-// 与其媒体关联；重复投递时 0 行命中即幂等成功，媒体关联清理无条件执行（幂等）
+// 与其媒体关联，并按被删关联逐槽位写 outbox 卸载消息（deref_media → media consumer 递减引用计数），
+// 计数回收与删除同事务必达不漏；重复投递时 0 行命中即幂等成功（不重复发消息/减计数）。
 func (c *PostConsumer) handleDeletePost(ctx context.Context, msg *postv1.DeletePost) (ack bool, err error) {
 	postID, err := snowflake.ParseString(msg.PostId)
 	if err != nil {
@@ -247,15 +250,30 @@ func (c *PostConsumer) handleDeletePost(ctx context.Context, msg *postv1.DeleteP
 	}
 
 	err = c.Repo.Transaction(func(repo v1.PostRepository) error {
-		_, err := repo.DeletePost(ctx, authorID.Int64(), postID.Int64())
+		if _, err := repo.DeletePost(ctx, authorID.Int64(), postID.Int64()); err != nil {
+			return err
+		}
+
+		assetIDs, err := repo.DeletePostMedias(ctx, postID.Int64())
 		if err != nil {
 			return err
 		}
 
-		_, err = repo.DeletePostMedias(ctx, postID.Int64())
-		if err != nil {
-			return err
+		// 逐槽位卸载消息与删除同事务写 outbox（SendTX），必达；每条消息唯一 ID，媒体侧幂等去重
+		for _, assetID := range assetIDs {
+			deref, err := mq.NewMQMessage(defaults.MediaMessageStream, nil, &mediav1.MediaMessage{
+				Payload: &mediav1.MediaMessage_DerefMedia{
+					DerefMedia: &mediav1.DerefMedia{AssetId: strconv.FormatInt(assetID, 10)},
+				},
+			})
+			if err != nil {
+				return err
+			}
+			if err := c.MQ.SendTX(ctx, deref, repo.DB()); err != nil {
+				return err
+			}
 		}
+
 		return nil
 	})
 	if err != nil {

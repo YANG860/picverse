@@ -15,6 +15,10 @@ message PostBrief {
   PostStat stat = 5;
 
   string created_at = 4;
+
+  // 帖子状态（BFF 组装 PostCard 直接使用，避免二次查询）：
+  // 他人视角恒为 PUBLISHED，作者视角含草稿/审核中
+  PostStatus status = 7;
 }
 
 message PostStat {

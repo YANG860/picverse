@@ -724,9 +724,10 @@ func TestDeletePostMedias(t *testing.T) {
 		seedPostMedia(t, db, 5002, postID1, 4002, 6002, 1)
 		seedPostMedia(t, db, 5003, postID2, 4003, 6003, 0) // 其他帖子
 
-		info, err := repo.DeletePostMedias(ctx, postID1)
+		assetIDs, err := repo.DeletePostMedias(ctx, postID1)
 		require.NoError(t, err)
-		assert.Equal(t, int64(2), info.RowsAffected)
+		require.Len(t, assetIDs, 2, "返回被删关联的资产 ID 供计数回收")
+		assert.ElementsMatch(t, []int64{6001, 6002}, assetIDs)
 
 		var rows []models.PostMedia
 		require.NoError(t, db.Where("post_id IN ?", []int64{postID1, postID2}).Find(&rows).Error)
@@ -741,9 +742,9 @@ func TestDeletePostMedias(t *testing.T) {
 		_, err := repo.DeletePostMedias(ctx, postID1)
 		require.NoError(t, err)
 
-		info, err := repo.DeletePostMedias(ctx, postID1)
+		assetIDs, err := repo.DeletePostMedias(ctx, postID1)
 		require.NoError(t, err)
-		assert.Zero(t, info.RowsAffected)
+		assert.Empty(t, assetIDs, "重复删除无被删关联，计数回收天然幂等")
 	})
 }
 

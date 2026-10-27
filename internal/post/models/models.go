@@ -87,6 +87,7 @@ func (p *PostDetail) ToBrief() *postv1.PostBrief {
 		// proto 契约字段：author_id/created_at 必须回填，调用方依赖它们定位与展示
 		AuthorId:  snowflake.ParseInt64(p.AuthorID).String(),
 		CreatedAt: strconv.FormatInt(p.CreatedAt, 10),
+		Status:    p.Status,
 		Stat: &postv1.PostStat{
 			LikeCount:      p.LikeCount,
 			FavouriteCount: p.FavouriteCount,

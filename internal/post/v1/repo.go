@@ -82,8 +82,8 @@ type PostRepository interface {
 	GetPostMedias(ctx context.Context, postIDs []int64) ([]*models.PostMedia, error)
 	// GetPostCover 获取帖子封面，首个媒体关联
 	GetPostCover(ctx context.Context, postIDs []int64) ([]*models.PostMedia, error)
-	// DeletePostMedias 删除帖子与媒体的关联
-	DeletePostMedias(ctx context.Context, postID int64) (gen.ResultInfo, error)
+	// DeletePostMedias 删除帖子与媒体的关联，返回被删关联的媒体资产 ID（供调用方回收引用计数）
+	DeletePostMedias(ctx context.Context, postID int64) ([]int64, error)
 }
 
 var _ PostRepository = (*PostRepoImpl)(nil)
@@ -397,9 +397,27 @@ func (r *PostRepoImpl) GetPostMedias(ctx context.Context, postIDs []int64) ([]*m
 		Find()
 }
 
-// DeletePostMedias 删除帖子下的媒体关联（物理删除）
-func (r *PostRepoImpl) DeletePostMedias(ctx context.Context, postID int64) (gen.ResultInfo, error) {
-	return r.q.PostMedia.WithContext(ctx).
+// DeletePostMedias 删除帖子下的媒体关联（物理删除），返回被删关联的媒体资产 ID 列表
+// （调用方据此逐槽位回收引用计数：删几行减几槽）；先查后删，重复删除返回空列表，
+// 计数回收天然幂等。
+func (r *PostRepoImpl) DeletePostMedias(ctx context.Context, postID int64) ([]int64, error) {
+	rows, err := r.q.PostMedia.WithContext(ctx).
 		Where(r.q.PostMedia.PostID.Eq(postID)).
-		Delete()
+		Find()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := r.q.PostMedia.WithContext(ctx).
+		Where(r.q.PostMedia.PostID.Eq(postID)).
+		Delete(); err != nil {
+		return nil, err
+	}
+
+	assetIDs := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		if row.Media != nil {
+			assetIDs = append(assetIDs, row.Media.AssetID)
+		}
+	}
+	return assetIDs, nil
 }

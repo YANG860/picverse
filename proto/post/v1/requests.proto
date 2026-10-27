@@ -171,16 +171,6 @@ message DeletePostResponse {
   common.v1.Error err = 2;
 }
 
-// DeleteUnusedPostRequest 回收已删除帖子,物理删除 POST_STATUS_DELETED 状态的帖子
-message DeleteUnusedPostRequest {}
-
-message DeleteUnusedPostResponse {
-  bool fail = 1;
-  common.v1.Error err = 2;
-
-  int64 deleted_count = 3;
-}
-
 // SyncPostStatRequest 同步帖子统计信息（异步链路调用：MQ 消费者 / 定时任务推送统计数据）。
 // 逐字段部分更新（参考 UpdateUserProfileRequest 语义）：字段为 nil 表示不修改，设置则覆盖该统计列（含 0）；
 // 所有字段均未设置 → InvalidArgument；计数必须非负；仅统计字段，不改帖子状态
