@@ -122,14 +122,19 @@ func (c *PostConsumer) HandleMessage(msg jetstream.Msg) {
 
 	switch message := m.Payload.(type) {
 	case *postv1.PostMessage_AuditPost:
+		c.log.Info("post message dispatch", "id", id, "type", "audit")
 		ack, err = c.handleAuditPost(ctx, message.AuditPost)
 	case *postv1.PostMessage_PublishPost:
+		c.log.Info("post message dispatch", "id", id, "type", "publish")
 		ack, err = c.handlePublishPost(ctx, message.PublishPost)
 	case *postv1.PostMessage_BanPost:
+		c.log.Info("post message dispatch", "id", id, "type", "ban")
 		ack, err = c.handleBanPost(ctx, message.BanPost)
 	case *postv1.PostMessage_DeletePost:
+		c.log.Info("post message dispatch", "id", id, "type", "delete")
 		ack, err = c.handleDeletePost(ctx, message.DeletePost)
 	default:
+		c.log.Info("post message dispatch", "id", id, "type", fmt.Sprintf("unknown:%T", m.Payload))
 		ack = true
 		err = fmt.Errorf("unhandled post message")
 	}
@@ -258,6 +263,7 @@ func (c *PostConsumer) handleDeletePost(ctx context.Context, msg *postv1.DeleteP
 		if err != nil {
 			return err
 		}
+		c.log.Info("delete post reclaim", "post_id", msg.GetPostId(), "asset_ids", assetIDs)
 
 		// 逐槽位卸载消息与删除同事务写 outbox（SendTX），必达；每条消息唯一 ID，媒体侧幂等去重
 		for _, assetID := range assetIDs {

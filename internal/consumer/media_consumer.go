@@ -151,6 +151,11 @@ func (c *MediaConsumer) HandleMessage(msg jetstream.Msg) {
 		ack, err = c.HandleProcessMedia(ctx, message.ProcessMedia)
 	case *mediav1.MediaMessage_PublishMedia:
 		ack, err = c.HandlePublishMedia(ctx, message.PublishMedia)
+	case *mediav1.MediaMessage_BanMedia:
+		ack, err = c.HandleBanMedia(ctx, message.BanMedia)
+	case *mediav1.MediaMessage_DerefMedia:
+		c.log.Info("deref dispatch", "id", id, "asset_id", message.DerefMedia.GetAssetId())
+		ack, err = c.HandleDerefMedia(ctx, message.DerefMedia)
 
 	default:
 		ack = true
@@ -314,8 +319,6 @@ func (c *MediaConsumer) SetMediaStatusAuditing(ctx context.Context, assetID int6
 
 	return ACK, nil
 }
-
-
 
 func (c *MediaConsumer) HandleAuditMedia(ctx context.Context, message *mediav1.AuditMedia) (ack bool, err error) {
 	// Implementation for handling audit media message
@@ -639,4 +642,21 @@ func (c *MediaConsumer) HandleBanMedia(ctx context.Context, message *mediav1.Ban
 	}
 	return ACK, nil
 
+}
+
+// HandleDerefMedia 异步卸载：引用计数 -1（BFF 挂载点替换/删帖回收时发出，替代同步 RPC）。
+// 投递语义 AtLeastOnce：当前实现无消息 ID 幂等去重，重复投递会造成计数负漂移，
+// 由闲置资产回收（ref_count <= 0）兑底；TODO: 补消息 ID 去重表实现严格幂等。
+func (c *MediaConsumer) HandleDerefMedia(ctx context.Context, message *mediav1.DerefMedia) (ack bool, err error) {
+	assetID, err := snowflake.ParseString(message.GetAssetId())
+	if err != nil {
+		// 非法资产 ID 不可恢复，ACK 丢弃（与 HandleDeleteMedia 一致）
+		return ACK, err
+	}
+
+	if err := c.Repo.ModifyMediaAssetRefCount(ctx, []int64{assetID.Int64()}, []int64{-1}); err != nil {
+		return RETRY, err
+	}
+	c.log.Info("media ref decremented", "asset_id", message.GetAssetId())
+	return ACK, nil
 }
