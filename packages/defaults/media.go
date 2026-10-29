@@ -22,5 +22,6 @@ var (
 )
 
 var (
-	AvatarAssetID = "default-avatar" //TODO: 上传替换为默认头像的asset
+	// AvatarAssetID 默认头像资产 ID（部署预置的真实资产，注册时统一挂 216 变体）
+	AvatarAssetID = "2115637161121284096"
 )
