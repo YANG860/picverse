@@ -86,7 +86,7 @@ rednote/
 ├── internal/       业务模块（auth / user / media / post / bff / common / consumer / poller）
 ├── packages/       基础组件（db / mq / oss / jwt / trace / logger / utils / defaults / errmsg / redis）
 ├── sql/            建表与索引迁移脚本（幂等）
-├── scripts/        dbinit（重建模板库）/ dbsync（同步表结构）
+├── scripts/        dbinit（重建模板库）/ dbsync（同步表结构）/ dbtool（清空测试基线：表+流+消费者）/ jsprobe（JetStream 状态探测）/ compose
 ├── test/           测试基础设施（testdb 模板库克隆、e2e 黑盒测试）
 ├── doc/            项目文档（本目录）
 └── build.sh        本地编译脚本（输出到 tmp/）
