@@ -132,7 +132,7 @@ func draftRefs() []*bffv1.AssetRef {
 	}
 }
 
-// draftPost 下游回显的草稿（DRAFT 状态 → 私有 TTL）
+// draftPost 下游回显的草稿（DRAFT 状态 → 私有 TTL），全字段填充供全字段断言
 func draftPost() *postv1.Post {
 	return &postv1.Post{
 		PostId:   "p1",
@@ -142,9 +142,11 @@ func draftPost() *postv1.Post {
 			{AssetId: "a1", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_540},
 			{AssetId: "a2", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_216},
 		},
-		Metadata: &commonv1.JsonStr{Payload: `{"k":1}`},
-		PostStat: &postv1.PostStat{LikeCount: 3},
-		Status:   postv1.PostStatus_POST_STATUS_DRAFT,
+		Metadata:  &commonv1.JsonStr{Payload: `{"k":1}`},
+		PostStat:  &postv1.PostStat{LikeCount: 3, ViewCount: 5, CommentCount: 7, FavouriteCount: 9},
+		CreatedAt: "1700000000000",
+		UpdatedAt: "1700000001000",
+		Status:    postv1.PostStatus_POST_STATUS_DRAFT,
 	}
 }
 
@@ -236,10 +238,21 @@ func TestBFFCreateDraft(t *testing.T) {
 		require.Len(t, post.gotCreateDraft.GetMedias(), 2, "下游回填完整 MediaFile")
 
 		require.NotNil(t, resp.GetPost())
-		assert.Equal(t, "p1", resp.GetPost().GetPostId())
-		assert.Equal(t, postv1.PostStatus_POST_STATUS_DRAFT, resp.GetPost().GetStatus())
-		require.Len(t, resp.GetPost().GetMedias(), 2)
-		assert.Equal(t, "https://signed/a1", resp.GetPost().GetMedias()[0].GetUrl())
+		pv := resp.GetPost()
+		// 全字段断言：PostView 逐字段回显
+		assert.Equal(t, "p1", pv.GetPostId())
+		assert.Equal(t, "t", pv.GetTitle())
+		assert.Equal(t, "body", pv.GetFullText())
+		assert.Equal(t, meta, pv.GetMetadata())
+		assert.Equal(t, int64(3), pv.GetStat().GetLikeCount())
+		assert.Equal(t, int64(5), pv.GetStat().GetViewCount())
+		assert.Equal(t, int64(7), pv.GetStat().GetCommentCount())
+		assert.Equal(t, int64(9), pv.GetStat().GetFavouriteCount())
+		assert.Equal(t, "1700000000000", pv.GetCreatedAt())
+		assert.Equal(t, "1700000001000", pv.GetUpdatedAt())
+		assert.Equal(t, postv1.PostStatus_POST_STATUS_DRAFT, pv.GetStatus())
+		require.Len(t, pv.GetMedias(), 2)
+		assert.Equal(t, "https://signed/a1", pv.GetMedias()[0].GetUrl())
 		require.NotEmpty(t, media.gotSignTTLs)
 		assert.Equal(t, int64(24*3600), media.gotSignTTLs[0], "草稿媒体私有 TTL 24h")
 	})
@@ -325,6 +338,25 @@ func TestBFFUpdateDraftMedias(t *testing.T) {
 		assert.Equal(t, errmsg.NotEditable.Code, resp.Err.GetCode())
 		assert.Equal(t, []string{"a1", "a2"}, derefSent(t, u), "只回滚新挂载，不得动旧资产")
 	})
+
+	t.Run("同资产多槽位：逐槽 +1，旧槽位逐个卸载（计数守恒）", func(t *testing.T) {
+		media := &fakeMediaClient{
+			batch: []*mediav1.MediaAssetResult{{Id: "a1", Asset: &mediav1.MediaAsset{UploaderId: "u1", Status: mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_ACTIVE}}},
+			file:  &mediav1.MediaFile{},
+		}
+		post := &fakePostClient{post: draftPost(), oldAssetIDs: []string{"a1", "a1"}}
+		u := newBFFForPostTest(&fakeUserClient{}, media, post)
+
+		resp, err := u.UpdateDraftMedias(ctxWithUID("u1"), &bffv1.UpdateDraftMediasRequest{PostId: "p1", Medias: []*bffv1.AssetRef{
+			{AssetId: "a1", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_540},
+			{AssetId: "a1", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_216},
+		}})
+		require.NoError(t, err)
+		require.False(t, resp.Fail)
+		assert.Equal(t, []refCall{{id: "a1", delta: 1}, {id: "a1", delta: 1}}, media.refCalls,
+			"同资产多变体各占一槽，逐槽 +1")
+		assert.Equal(t, []string{"a1", "a1"}, derefSent(t, u), "旧两槽逐个卸载，计数与新槽对齐")
+	})
 }
 
 // TestBFFPublishDraft 发布草稿：uid 注入透传，错误分类
@@ -354,17 +386,34 @@ func TestBFFPublishDraft(t *testing.T) {
 	})
 }
 
-// TestBFFDeletePost 删除帖子：uid 注入透传（计数回收待定，暂不回收）
+// TestBFFDeletePost 删除帖子：uid 注入透传 + 错误分类
+// （资产计数由删帖消息链路回收，BFF 不发卸载消息）
 func TestBFFDeletePost(t *testing.T) {
-	post := &fakePostClient{}
-	u := newBFFForPostTest(&fakeUserClient{}, &fakeMediaClient{}, post)
+	t.Run("成功：uid 注入透传，无卸载消息", func(t *testing.T) {
+		post := &fakePostClient{}
+		u := newBFFForPostTest(&fakeUserClient{}, &fakeMediaClient{}, post)
 
-	resp, err := u.DeletePost(ctxWithUID("u1"), &bffv1.DeletePostRequest{PostId: "p1"})
-	require.NoError(t, err)
-	require.False(t, resp.Fail)
-	require.NotNil(t, post.gotDeletePost)
-	assert.Equal(t, "u1", post.gotDeletePost.GetUid())
-	assert.Equal(t, "p1", post.gotDeletePost.GetPostId())
+		resp, err := u.DeletePost(ctxWithUID("u1"), &bffv1.DeletePostRequest{PostId: "p1"})
+		require.NoError(t, err)
+		require.False(t, resp.Fail)
+		assert.Nil(t, resp.Err)
+		require.NotNil(t, post.gotDeletePost)
+		assert.Equal(t, "u1", post.gotDeletePost.GetUid())
+		assert.Equal(t, "p1", post.gotDeletePost.GetPostId())
+		assert.Empty(t, derefSent(t, u), "计数回收由删帖消息链路承担，BFF 不发卸载消息")
+	})
+
+	t.Run("业务失败透传 / 连接层错误归为 InternalError", func(t *testing.T) {
+		u := newBFFForPostTest(&fakeUserClient{}, &fakeMediaClient{}, &fakePostClient{failErr: errmsg.NotFound})
+		resp, err := u.DeletePost(ctxWithUID("u1"), &bffv1.DeletePostRequest{PostId: "p1"})
+		require.NoError(t, err)
+		assert.Equal(t, errmsg.NotFound.Code, resp.Err.GetCode())
+
+		u = newBFFForPostTest(&fakeUserClient{}, &fakeMediaClient{}, &fakePostClient{rpcErr: errors.New("dial fail")})
+		resp, err = u.DeletePost(ctxWithUID("u1"), &bffv1.DeletePostRequest{PostId: "p1"})
+		require.NoError(t, err)
+		assert.Equal(t, errmsg.InternalError.Code, resp.Err.GetCode())
+	})
 }
 
 // TestMediaTTLFor URL TTL 分级：PUBLISHED 公开 7d，其余私有 24h
@@ -380,13 +429,16 @@ func TestMediaTTLFor(t *testing.T) {
 func TestBFFGetPost(t *testing.T) {
 	authorBrief := &userv1.UserBrief{Uid: "u2", Name: "bob", Avatar: &mediav1.MediaFile{AssetId: "av1", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_216}}
 	viewPost := &postv1.Post{
-		PostId:   "p1",
-		Title:    "t",
-		FullText: "body",
-		Medias:   []*mediav1.MediaFile{{AssetId: "a1", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_540}},
-		AuthorId: "u2",
-		PostStat: &postv1.PostStat{ViewCount: 9},
-		Status:   postv1.PostStatus_POST_STATUS_PUBLISHED,
+		PostId:    "p1",
+		Title:     "t",
+		FullText:  "body",
+		Medias:    []*mediav1.MediaFile{{AssetId: "a1", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_540}},
+		Metadata:  &commonv1.JsonStr{Payload: `{"k":1}`},
+		AuthorId:  "u2",
+		PostStat:  &postv1.PostStat{LikeCount: 1, ViewCount: 9, CommentCount: 2, FavouriteCount: 4},
+		CreatedAt: "1700000000000",
+		UpdatedAt: "1700000001000",
+		Status:    postv1.PostStatus_POST_STATUS_PUBLISHED,
 	}
 
 	t.Run("无会话返回 Unauthorized", func(t *testing.T) {
@@ -404,6 +456,24 @@ func TestBFFGetPost(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, resp.Fail)
 		assert.Equal(t, errmsg.Banned.Code, resp.Err.GetCode())
+	})
+
+	t.Run("下游裁决透传：软删 NotFound / 非作者看草稿 Unauthorized", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			err  *commonv1.Error
+		}{
+			{"软删对外隐藏透传 NotFound", errmsg.NotFound},
+			{"非作者看草稿透传 Unauthorized", errmsg.Unauthorized},
+		} {
+			post := &fakePostClient{viewPostErr: tc.err}
+			u := newBFFForPostTest(&fakeUserClient{}, &fakeMediaClient{}, post)
+
+			resp, err := u.GetPost(ctxWithUID("u1"), &bffv1.GetPostRequest{PostId: "p1"})
+			require.NoError(t, err)
+			assert.True(t, resp.Fail)
+			assert.Equal(t, tc.err.GetCode(), resp.Err.GetCode(), tc.name)
+		}
 	})
 
 	t.Run("成功：作者/关系聚合 + PostDetail 组装", func(t *testing.T) {
@@ -424,12 +494,25 @@ func TestBFFGetPost(t *testing.T) {
 		assert.Equal(t, "p1", post.gotViewPost.GetPostId())
 
 		d := resp.GetPost()
+		// 全字段断言：PostDetail 逐字段回显
 		assert.Equal(t, "p1", d.GetPostId())
+		assert.Equal(t, "t", d.GetTitle())
 		assert.Equal(t, "body", d.GetFullText())
+		assert.Equal(t, &commonv1.JsonStr{Payload: `{"k":1}`}, d.GetMetadata())
+		assert.Equal(t, int64(1), d.GetStat().GetLikeCount())
 		assert.Equal(t, int64(9), d.GetStat().GetViewCount())
+		assert.Equal(t, int64(2), d.GetStat().GetCommentCount())
+		assert.Equal(t, int64(4), d.GetStat().GetFavouriteCount())
+		assert.Equal(t, "1700000000000", d.GetCreatedAt())
+		assert.Equal(t, "1700000001000", d.GetUpdatedAt())
+		assert.Equal(t, postv1.PostStatus_POST_STATUS_PUBLISHED, d.GetStatus())
+		assert.Equal(t, "u2", d.GetAuthor().GetUid())
 		assert.Equal(t, "bob", d.GetAuthor().GetName())
+		assert.Equal(t, "av1", d.GetAuthor().GetAvatar().GetAssetId())
 		assert.True(t, d.GetRelation().GetIsFollowing())
+		assert.False(t, d.GetRelation().GetIsFollower())
 		require.Len(t, d.GetMedias(), 1)
+		assert.Equal(t, "a1", d.GetMedias()[0].GetAssetId())
 		assert.Equal(t, "https://signed/a1", d.GetMedias()[0].GetUrl())
 		require.Len(t, media.gotSignTTLs, 2)
 		assert.Equal(t, int64(7*24*3600), media.gotSignTTLs[0], "作者头像公开 TTL 7d")
@@ -491,6 +574,8 @@ func TestBFFGetPost(t *testing.T) {
 }
 
 // TestBFFGetMyPosts 我的帖子列表：状态随 PostBrief 返回 + 封面分级签发 + 作者一次取齐
+// （回归：postCards 直读 PostBrief.status，fakePostClient 未实现 GetPostsByIDs，
+// 若实现退回二次查询状态会因未覆写方法 panic 而失败）
 func TestBFFGetMyPosts(t *testing.T) {
 	briefs := []*postv1.PostBrief{
 		{PostId: "p1", Title: "pub", AuthorId: "u1", Status: postv1.PostStatus_POST_STATUS_PUBLISHED, Cover: &mediav1.MediaFile{AssetId: "c1", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_540}},
@@ -518,15 +603,66 @@ func TestBFFGetMyPosts(t *testing.T) {
 		assert.Equal(t, "next", resp.GetCursor().GetStr())
 
 		require.Len(t, resp.GetPosts(), 2)
-		assert.Equal(t, postv1.PostStatus_POST_STATUS_PUBLISHED, resp.GetPosts()[0].GetStatus())
-		assert.Equal(t, postv1.PostStatus_POST_STATUS_DRAFT, resp.GetPosts()[1].GetStatus())
-		assert.Equal(t, "me", resp.GetPosts()[0].GetAuthor().GetName())
-		assert.Equal(t, "https://signed/c1", resp.GetPosts()[0].GetCover().GetUrl())
-		assert.Equal(t, "https://signed/c2", resp.GetPosts()[1].GetCover().GetUrl())
+		// 全字段断言：PostCard 逐字段回显
+		c0, c1 := resp.GetPosts()[0], resp.GetPosts()[1]
+		assert.Equal(t, "p1", c0.GetPostId())
+		assert.Equal(t, "pub", c0.GetTitle())
+		assert.Equal(t, postv1.PostStatus_POST_STATUS_PUBLISHED, c0.GetStatus())
+		assert.Equal(t, "me", c0.GetAuthor().GetName())
+		assert.Equal(t, "u1", c0.GetAuthor().GetUid())
+		assert.Equal(t, "https://signed/c1", c0.GetCover().GetUrl())
+		assert.Equal(t, "c1", c0.GetCover().GetAssetId())
+		assert.Equal(t, "p2", c1.GetPostId())
+		assert.Equal(t, "draft", c1.GetTitle())
+		assert.Equal(t, postv1.PostStatus_POST_STATUS_DRAFT, c1.GetStatus())
+		assert.Equal(t, "https://signed/c2", c1.GetCover().GetUrl())
 		require.Len(t, media.gotSignTTLs, 2, "公开/私有各一批签发")
 		assert.Equal(t, int64(7*24*3600), media.gotSignTTLs[0], "已发布封面公开 TTL")
 		assert.Equal(t, int64(24*3600), media.gotSignTTLs[1], "草稿封面私有 TTL")
 		require.Len(t, user.gotBriefReqs, 1, "作者仅批量取一次")
+	})
+
+	t.Run("空列表：无卡片不签发，游标透传", func(t *testing.T) {
+		user := &fakeUserClient{briefResults: []*userv1.UserBriefResult{{Uid: "u1", Brief: &userv1.UserBrief{Uid: "u1"}}}}
+		media := &fakeMediaClient{}
+		post := &fakePostClient{
+			byAuthorPosts:  map[string][]*postv1.PostBrief{"u1": {}},
+			byAuthorCursor: &commonv1.Cursor{},
+		}
+		u := newBFFForPostTest(user, media, post)
+
+		resp, err := u.GetMyPosts(ctxWithUID("u1"), &bffv1.GetMyPostsRequest{})
+		require.NoError(t, err)
+		require.False(t, resp.Fail)
+		assert.Empty(t, resp.GetPosts())
+		assert.Empty(t, media.gotSignReqs, "空列表不调签发")
+	})
+}
+
+// TestBFFAuthorViews 作者简视图批量：去重 + 空串过滤 + 部分失败降级 + 全失败返回空
+func TestBFFAuthorViews(t *testing.T) {
+	t.Run("去重 + 空串过滤 + 部分失败降级", func(t *testing.T) {
+		user := &fakeUserClient{briefResults: []*userv1.UserBriefResult{
+			{Uid: "u1", Brief: &userv1.UserBrief{Uid: "u1", Name: "a"}},
+			{Uid: "u2", Fail: true, Err: errmsg.NotFound},
+		}}
+		u := newBFFForPostTest(user, &fakeMediaClient{}, &fakePostClient{})
+
+		views, errCode := u.authorViews(context.Background(), []string{"u1", "u2", "u1", ""})
+		require.Nil(t, errCode)
+		require.Len(t, views, 1, "失败项跳过，成功项保留（列表可用性优先）")
+		assert.Equal(t, "a", views["u1"].GetName())
+		require.Len(t, user.gotBriefReqs, 1)
+		assert.ElementsMatch(t, []string{"u1", "u2"}, user.gotBriefReqs[0].GetUids(), "去重 + 空串过滤后批量取")
+	})
+
+	t.Run("全失败返回空 map 不打挂", func(t *testing.T) {
+		user := &fakeUserClient{briefResults: []*userv1.UserBriefResult{{Uid: "u2", Fail: true, Err: errmsg.NotFound}}}
+		u := newBFFForPostTest(user, &fakeMediaClient{}, &fakePostClient{})
+
+		views, errCode := u.authorViews(context.Background(), []string{"u2"})
+		require.Nil(t, errCode)
+		assert.Empty(t, views)
 	})
 }
 
@@ -536,7 +672,9 @@ func TestBFFGetUserPosts(t *testing.T) {
 	media := &fakeMediaClient{}
 	post := &fakePostClient{
 		byAuthorPosts: map[string][]*postv1.PostBrief{
-			"u2": {{PostId: "p9", Title: "hi", AuthorId: "u2", Status: postv1.PostStatus_POST_STATUS_PUBLISHED, Cover: &mediav1.MediaFile{AssetId: "c9", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_540}}},
+			"u2": {{PostId: "p9", Title: "hi", AuthorId: "u2", Status: postv1.PostStatus_POST_STATUS_PUBLISHED,
+				Stat: &postv1.PostStat{ViewCount: 8}, CreatedAt: "1700000002000",
+				Cover: &mediav1.MediaFile{AssetId: "c9", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_540}}},
 		},
 	}
 	u := newBFFForPostTest(user, media, post)
@@ -544,14 +682,34 @@ func TestBFFGetUserPosts(t *testing.T) {
 	resp, err := u.GetUserPosts(ctxWithUID("u1"), &bffv1.GetUserPostsRequest{Uid: "u2"})
 	require.NoError(t, err)
 	require.False(t, resp.Fail)
+	assert.Nil(t, resp.Err)
 
 	require.Len(t, post.gotByAuthor, 1)
 	assert.Equal(t, "u1", post.gotByAuthor[0].GetViewerId(), "viewer 为会话用户")
 	assert.Equal(t, "u2", post.gotByAuthor[0].GetAuthorId(), "author 为目标用户")
 
 	require.Len(t, resp.GetPosts(), 1)
-	assert.Equal(t, postv1.PostStatus_POST_STATUS_PUBLISHED, resp.GetPosts()[0].GetStatus())
-	assert.Equal(t, "bob", resp.GetPosts()[0].GetAuthor().GetName())
+	c := resp.GetPosts()[0]
+	// 全字段断言：PostCard 逐字段回显
+	assert.Equal(t, "p9", c.GetPostId())
+	assert.Equal(t, "hi", c.GetTitle())
+	assert.Equal(t, postv1.PostStatus_POST_STATUS_PUBLISHED, c.GetStatus())
+	assert.Equal(t, "bob", c.GetAuthor().GetName())
+	assert.Equal(t, "u2", c.GetAuthor().GetUid())
+	assert.Equal(t, int64(8), c.GetStat().GetViewCount())
+	assert.Equal(t, "1700000002000", c.GetCreatedAt())
+	assert.Equal(t, "c9", c.GetCover().GetAssetId())
 	require.NotEmpty(t, media.gotSignTTLs)
 	assert.Equal(t, int64(7*24*3600), media.gotSignTTLs[0], "已发布封面公开 TTL")
+
+	t.Run("target 为会话用户：暂返空列表（TODO 他人视角主页语义待定稿）", func(t *testing.T) {
+		p := &fakePostClient{}
+		u := newBFFForPostTest(&fakeUserClient{}, &fakeMediaClient{}, p)
+
+		resp, err := u.GetUserPosts(ctxWithUID("u1"), &bffv1.GetUserPostsRequest{Uid: "u1"})
+		require.NoError(t, err)
+		require.False(t, resp.Fail)
+		assert.Empty(t, resp.GetPosts())
+		assert.Empty(t, p.gotByAuthor, "不调下游")
+	})
 }

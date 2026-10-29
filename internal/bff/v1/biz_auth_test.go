@@ -149,6 +149,7 @@ func TestBFFRegister(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.False(t, resp.Fail)
+		assert.Nil(t, resp.Err, "成功响应无错误字段")
 
 		require.NotNil(t, auth.gotRegister)
 		assert.Equal(t, "a@b.c", auth.gotRegister.GetCredential().GetEmail())
@@ -380,6 +381,18 @@ func TestBFFLogout(t *testing.T) {
 		require.False(t, resp.Fail)
 		require.NotNil(t, auth.gotLogout)
 		assert.Equal(t, "u1", auth.gotLogout.GetUid(), "uid 必须来自会话而非请求体")
+	})
+
+	t.Run("重复登出幂等透传", func(t *testing.T) {
+		auth := &fakeAuthClient{}
+		u := newBFFForAuthTest(auth, &fakeUserClient{}, &fakeMediaClient{})
+
+		for range 2 {
+			resp, err := u.Logout(ctxWithUID("u1"), &bffv1.LogoutRequest{})
+			require.NoError(t, err)
+			require.False(t, resp.Fail, "重复登出幂等（下游语义），不报错")
+		}
+		assert.Equal(t, "u1", auth.gotLogout.GetUid(), "重复调用仍按会话注入")
 	})
 
 	t.Run("业务失败透传", func(t *testing.T) {

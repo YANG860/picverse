@@ -44,6 +44,10 @@ type fakeUserClient struct {
 	createUserErr    *commonv1.Error
 	createUserRPCErr error
 
+	// followingsResp / followersResp 自定义列表响应（nil 时回退默认 fixture）
+	followingsResp *userv1.GetFollowingsResponse
+	followersResp  *userv1.GetFollowersResponse
+
 	gotProfileUIDs  []string
 	gotRelationReqs []*userv1.GetFollowingRelationRequest
 	gotAvatarReq    *userv1.UpdateUserAvatarRequest
@@ -96,6 +100,9 @@ func (f *fakeUserClient) SetUnFollow(_ context.Context, req *connect.Request[use
 
 func (f *fakeUserClient) GetFollowings(_ context.Context, req *connect.Request[userv1.GetFollowingsRequest]) (*connect.Response[userv1.GetFollowingsResponse], error) {
 	f.gotFollowings = req.Msg
+	if f.followingsResp != nil {
+		return connect.NewResponse(f.followingsResp), nil
+	}
 	return connect.NewResponse(&userv1.GetFollowingsResponse{
 		UserBriefs: []*userv1.UserBrief{{Uid: "u2", Name: "bob"}},
 		Cursor:     &commonv1.Cursor{Str: "next", Limit: 10},
@@ -126,8 +133,10 @@ type fakeMediaClient struct {
 	asset    *mediav1.MediaAsset
 	assetErr *commonv1.Error
 	file     *mediav1.MediaFile
-	fileErr  *commonv1.Error
-	refErr   *commonv1.Error
+	// fileByType 按变体类型返回不同文件（多槽位对齐断言用），未命中回退 file
+	fileByType map[mediav1.MediaFileType]*mediav1.MediaFile
+	fileErr    *commonv1.Error
+	refErr     *commonv1.Error
 
 	upload    *mediav1.UploadMediaResponse
 	uploadErr *commonv1.Error
@@ -191,7 +200,13 @@ func (f *fakeMediaClient) GetMediaAssetFile(_ context.Context, req *connect.Requ
 	if f.fileRPCErr != nil {
 		return nil, f.fileRPCErr
 	}
-	return connect.NewResponse(&mediav1.GetMediaAssetFileResponse{Fail: f.fileErr != nil, Err: f.fileErr, File: f.file}), nil
+	if f.fileErr != nil {
+		return connect.NewResponse(&mediav1.GetMediaAssetFileResponse{Fail: true, Err: f.fileErr}), nil
+	}
+	if file, ok := f.fileByType[req.Msg.GetType()]; ok {
+		return connect.NewResponse(&mediav1.GetMediaAssetFileResponse{File: file}), nil
+	}
+	return connect.NewResponse(&mediav1.GetMediaAssetFileResponse{File: f.file}), nil
 }
 
 func (f *fakeMediaClient) ModifyMediaAssetRefCount(_ context.Context, req *connect.Request[mediav1.ModifyMediaAssetRefCountRequest]) (*connect.Response[mediav1.ModifyMediaAssetRefCountResponse], error) {
@@ -301,6 +316,11 @@ func TestBFFUserUnauthorized(t *testing.T) {
 			require.NoError(t, err)
 			return r.Fail, r.Err
 		}},
+		{"GetFollowerList", func() (bool, *commonv1.Error) {
+			r, err := u.GetFollowerList(context.Background(), &bffv1.GetFollowerListRequest{})
+			require.NoError(t, err)
+			return r.Fail, r.Err
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -311,23 +331,44 @@ func TestBFFUserUnauthorized(t *testing.T) {
 	}
 }
 
-// TestBFFGetMyProfile 会话 uid 注入下游 + profile 透传
+// TestBFFGetMyProfile 会话 uid 注入下游 + profile 全字段透传
 func TestBFFGetMyProfile(t *testing.T) {
-	user := &fakeUserClient{profile: &userv1.UserProfile{Brief: &userv1.UserBrief{Uid: "u1", Name: "alice"}}}
+	user := &fakeUserClient{profile: &userv1.UserProfile{
+		Brief:  &userv1.UserBrief{Uid: "u1", Name: "alice", Avatar: &mediav1.MediaFile{AssetId: "av1", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_216}},
+		Bio:    "hello",
+		Stat:   &userv1.UserStat{Followings: 3, Followers: 5},
+		Status: userv1.UserStatus_USER_STATUS_ACTIVE,
+	}}
 	u := newBFFForTest(user, &fakeMediaClient{})
 
 	resp, err := u.GetMyProfile(ctxWithUID("u1"), &bffv1.GetMyProfileRequest{})
 	require.NoError(t, err)
 	require.False(t, resp.Fail)
-	assert.Equal(t, "alice", resp.Profile.GetBrief().GetName())
+	assert.Nil(t, resp.Err)
+
+	// 全字段断言：Profile 逐字段回显
+	p := resp.GetProfile()
+	assert.Equal(t, "u1", p.GetBrief().GetUid())
+	assert.Equal(t, "alice", p.GetBrief().GetName())
+	assert.Equal(t, "av1", p.GetBrief().GetAvatar().GetAssetId())
+	assert.Equal(t, mediav1.MediaFileType_MEDIA_FILE_TYPE_216, p.GetBrief().GetAvatar().GetType())
+	assert.Equal(t, "hello", p.GetBio())
+	assert.Equal(t, int64(3), p.GetStat().GetFollowings())
+	assert.Equal(t, int64(5), p.GetStat().GetFollowers())
+	assert.Equal(t, userv1.UserStatus_USER_STATUS_ACTIVE, p.GetStatus())
 	assert.Equal(t, []string{"u1"}, user.gotProfileUIDs, "uid 必须来自会话而非请求体")
 }
 
 // TestBFFGetUserProfile 聚合 ProfileView：资料 + 关注关系并行组装
 func TestBFFGetUserProfile(t *testing.T) {
-	t.Run("正常聚合", func(t *testing.T) {
+	t.Run("正常聚合：全字段回显", func(t *testing.T) {
 		user := &fakeUserClient{
-			profile:  &userv1.UserProfile{Brief: &userv1.UserBrief{Uid: "u2", Name: "bob"}},
+			profile: &userv1.UserProfile{
+				Brief:  &userv1.UserBrief{Uid: "u2", Name: "bob", Avatar: &mediav1.MediaFile{AssetId: "av2", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_216}},
+				Bio:    "bio2",
+				Stat:   &userv1.UserStat{Followings: 1, Followers: 2},
+				Status: userv1.UserStatus_USER_STATUS_ACTIVE,
+			},
 			relation: &userv1.GetFollowingRelationResponse{IsFollowing: true, IsFollower: false},
 		}
 		u := newBFFForTest(user, &fakeMediaClient{})
@@ -335,9 +376,20 @@ func TestBFFGetUserProfile(t *testing.T) {
 		resp, err := u.GetUserProfile(ctxWithUID("u1"), &bffv1.GetUserProfileRequest{Uid: "u2"})
 		require.NoError(t, err)
 		require.False(t, resp.Fail)
-		assert.Equal(t, "bob", resp.View.GetProfile().GetBrief().GetName())
-		assert.True(t, resp.View.GetRelation().GetIsFollowing())
-		assert.False(t, resp.View.GetRelation().GetIsFollower())
+		assert.Nil(t, resp.Err)
+
+		// 全字段断言：ProfileView（profile + relation）逐字段
+		v := resp.GetView()
+		p := v.GetProfile()
+		assert.Equal(t, "u2", p.GetBrief().GetUid())
+		assert.Equal(t, "bob", p.GetBrief().GetName())
+		assert.Equal(t, "av2", p.GetBrief().GetAvatar().GetAssetId())
+		assert.Equal(t, "bio2", p.GetBio())
+		assert.Equal(t, int64(1), p.GetStat().GetFollowings())
+		assert.Equal(t, int64(2), p.GetStat().GetFollowers())
+		assert.Equal(t, userv1.UserStatus_USER_STATUS_ACTIVE, p.GetStatus())
+		assert.True(t, v.GetRelation().GetIsFollowing())
+		assert.False(t, v.GetRelation().GetIsFollower())
 		require.Len(t, user.gotRelationReqs, 1)
 		assert.Equal(t, "u1", user.gotRelationReqs[0].GetUid(), "关系查询方向：会话用户 → 目标")
 		assert.Equal(t, "u2", user.gotRelationReqs[0].GetTargetUid())
@@ -453,9 +505,15 @@ func TestBFFFollowUnfollow(t *testing.T) {
 	assert.Equal(t, "u1", user.gotSetFollow.GetUid())
 	assert.Equal(t, "u2", user.gotSetFollow.GetTargetUid())
 
-	r2, err := u.Unfollow(ctxWithUID("u1"), &bffv1.UnfollowRequest{TargetUid: "u2"})
+	// 重复关注幂等透传（下游语义），两次均按会话注入
+	r2, err := u.Follow(ctxWithUID("u1"), &bffv1.FollowRequest{TargetUid: "u2"})
 	require.NoError(t, err)
-	require.False(t, r2.Fail)
+	require.False(t, r2.Fail, "重复关注幂等透传")
+	assert.Equal(t, "u2", user.gotSetFollow.GetTargetUid())
+
+	r3, err := u.Unfollow(ctxWithUID("u1"), &bffv1.UnfollowRequest{TargetUid: "u2"})
+	require.NoError(t, err)
+	require.False(t, r3.Fail)
 	require.NotNil(t, user.gotSetUnFollow)
 	assert.Equal(t, "u1", user.gotSetUnFollow.GetUid())
 	assert.Equal(t, "u2", user.gotSetUnFollow.GetTargetUid())
@@ -475,6 +533,17 @@ func TestBFFGetFollowingList(t *testing.T) {
 	require.Len(t, resp.UserBriefs, 1)
 	assert.Equal(t, "bob", resp.UserBriefs[0].GetName())
 	assert.Equal(t, "next", resp.Cursor.GetStr())
+
+	t.Run("空页：列表为空不报错（翻页到底以空列表表达）", func(t *testing.T) {
+		empty := &fakeUserClient{followingsResp: &userv1.GetFollowingsResponse{}}
+		u := newBFFForTest(empty, &fakeMediaClient{})
+
+		r, err := u.GetFollowingList(ctxWithUID("u1"), &bffv1.GetFollowingListRequest{})
+		require.NoError(t, err)
+		require.False(t, r.Fail)
+		assert.Empty(t, r.GetUserBriefs())
+		assert.Empty(t, r.GetCursor().GetStr(), "空页游标置空")
+	})
 }
 
 // TestBFFGetFollowRelation 关系查询：uid 来自会话 + is_following/is_follower 透传
