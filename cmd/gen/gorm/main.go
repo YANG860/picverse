@@ -38,6 +38,7 @@ func main() {
 		&media.MediaFile{},
 		&common.BaseModel{},
 		&common.OutBoxEntry{},
+		&common.ProcessedMessage{},
 		&auth.UserCredential{},
 		&post.PostDetail{},
 		&post.PostMedia{},
