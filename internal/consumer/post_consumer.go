@@ -16,6 +16,7 @@ import (
 	"rednote/packages/trace"
 	"runtime/debug"
 	"strconv"
+	"strings"
 
 	"github.com/bwmarrin/snowflake"
 	"github.com/nats-io/nats.go/jetstream"
@@ -120,21 +121,17 @@ func (c *PostConsumer) HandleMessage(msg jetstream.Msg) {
 		return
 	}
 
+	msgType := strings.TrimPrefix(fmt.Sprintf("%T", m.Payload), "*postv1.PostMessage_")
 	switch message := m.Payload.(type) {
 	case *postv1.PostMessage_AuditPost:
-		c.log.Info("post message dispatch", "id", id, "type", "audit")
 		ack, err = c.handleAuditPost(ctx, message.AuditPost)
 	case *postv1.PostMessage_PublishPost:
-		c.log.Info("post message dispatch", "id", id, "type", "publish")
 		ack, err = c.handlePublishPost(ctx, message.PublishPost)
 	case *postv1.PostMessage_BanPost:
-		c.log.Info("post message dispatch", "id", id, "type", "ban")
 		ack, err = c.handleBanPost(ctx, message.BanPost)
 	case *postv1.PostMessage_DeletePost:
-		c.log.Info("post message dispatch", "id", id, "type", "delete")
 		ack, err = c.handleDeletePost(ctx, message.DeletePost)
 	default:
-		c.log.Info("post message dispatch", "id", id, "type", fmt.Sprintf("unknown:%T", m.Payload))
 		ack = true
 		err = fmt.Errorf("unhandled post message")
 	}
@@ -142,6 +139,7 @@ func (c *PostConsumer) HandleMessage(msg jetstream.Msg) {
 	if err != nil {
 		c.log.Error("failed to handle post message",
 			"id", id,
+			"type", msgType,
 			"trace_id", traceID,
 			"send_at", sendAt,
 			"error", err,
@@ -149,20 +147,19 @@ func (c *PostConsumer) HandleMessage(msg jetstream.Msg) {
 	} else {
 		c.log.Info("successfully handled post message",
 			"id", id,
+			"type", msgType,
 			"trace_id", traceID,
 			"send_at", sendAt,
 		)
 	}
 
+	// Ack/Nak 失败不吞错：Ack 失败会导致消息重投（AtLeastOnce），需可追溯
 	if ack {
-		_ = msg.Ack()
-	} else {
-		_ = msg.Nak()
-		c.log.Error("message nak",
-			"id", id,
-			"trace_id", traceID,
-			"send_at", sendAt,
-		)
+		if ackErr := msg.Ack(); ackErr != nil {
+			c.log.Warn("message ack failed，将重投", "id", id, "error", ackErr)
+		}
+	} else if nakErr := msg.Nak(); nakErr != nil {
+		c.log.Warn("message nak failed", "id", id, "error", nakErr)
 	}
 
 }

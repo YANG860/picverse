@@ -12,6 +12,7 @@ import (
 	"rednote/config"
 	mediav1 "rednote/gen/go/media/v1"
 	"rednote/gen/query"
+	commonv1 "rednote/internal/common/v1"
 	media "rednote/internal/media/models"
 	v1 "rednote/internal/media/v1"
 	"rednote/packages/defaults"
@@ -21,6 +22,8 @@ import (
 	"rednote/packages/trace"
 	"rednote/packages/utils"
 	"runtime/debug"
+	"strconv"
+	"strings"
 
 	"github.com/bwmarrin/snowflake"
 	"github.com/chai2010/webp"
@@ -35,6 +38,7 @@ import (
 type MediaConsumer struct {
 	Consumer
 	Repo       v1.MediaRepository
+	Dedup      commonv1.ProcessedMessageRepository
 	ConsumeCtx jetstream.ConsumeContext
 }
 
@@ -47,7 +51,7 @@ var (
 	}
 )
 
-func NewMediaConsumer(db *gorm.DB, mqClient mq.MQClient, s3 oss.S3Repo, lf logger.LoggerFactory, cfg *config.Config, repo v1.MediaRepository) *MediaConsumer {
+func NewMediaConsumer(db *gorm.DB, mqClient mq.MQClient, s3 oss.S3Repo, lf logger.LoggerFactory, cfg *config.Config, repo v1.MediaRepository, dedup commonv1.ProcessedMessageRepository) *MediaConsumer {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &MediaConsumer{
 		Consumer: Consumer{
@@ -64,7 +68,8 @@ func NewMediaConsumer(db *gorm.DB, mqClient mq.MQClient, s3 oss.S3Repo, lf logge
 			ctx:    ctx,
 			cancel: cancel,
 		},
-		Repo: repo,
+		Repo:  repo,
+		Dedup: dedup,
 	}
 }
 
@@ -140,6 +145,7 @@ func (c *MediaConsumer) HandleMessage(msg jetstream.Msg) {
 		return
 	}
 
+	msgType := strings.TrimPrefix(fmt.Sprintf("%T", m.Payload), "*mediav1.MediaMessage_")
 	switch message := m.Payload.(type) {
 	case *mediav1.MediaMessage_DeleteMedia:
 		ack, err = c.HandleDeleteMedia(ctx, message.DeleteMedia)
@@ -154,8 +160,7 @@ func (c *MediaConsumer) HandleMessage(msg jetstream.Msg) {
 	case *mediav1.MediaMessage_BanMedia:
 		ack, err = c.HandleBanMedia(ctx, message.BanMedia)
 	case *mediav1.MediaMessage_DerefMedia:
-		c.log.Info("deref dispatch", "id", id, "asset_id", message.DerefMedia.GetAssetId())
-		ack, err = c.HandleDerefMedia(ctx, message.DerefMedia)
+		ack, err = c.HandleDerefMedia(ctx, message.DerefMedia, id)
 
 	default:
 		ack = true
@@ -165,6 +170,7 @@ func (c *MediaConsumer) HandleMessage(msg jetstream.Msg) {
 	if err != nil {
 		c.log.Error("failed to handle media message",
 			"id", id,
+			"type", msgType,
 			"trace_id", traceID,
 			"send_at", sendAt,
 			"error", err,
@@ -172,20 +178,19 @@ func (c *MediaConsumer) HandleMessage(msg jetstream.Msg) {
 	} else {
 		c.log.Info("successfully handled media message",
 			"id", id,
+			"type", msgType,
 			"trace_id", traceID,
 			"send_at", sendAt,
 		)
 	}
 
+	// Ack/Nak 失败不吞错：Ack 失败会导致消息重投（AtLeastOnce，无去重时有害），需可追溯
 	if ack {
-		_ = msg.Ack()
-	} else {
-		_ = msg.Nak()
-		c.log.Error("message nak",
-			"id", id,
-			"trace_id", traceID,
-			"send_at", sendAt,
-		)
+		if ackErr := msg.Ack(); ackErr != nil {
+			c.log.Warn("message ack failed，将重投", "id", id, "error", ackErr)
+		}
+	} else if nakErr := msg.Nak(); nakErr != nil {
+		c.log.Warn("message nak failed", "id", id, "error", nakErr)
 	}
 
 }
@@ -645,17 +650,30 @@ func (c *MediaConsumer) HandleBanMedia(ctx context.Context, message *mediav1.Ban
 }
 
 // HandleDerefMedia 异步卸载：引用计数 -1（BFF 挂载点替换/删帖回收时发出，替代同步 RPC）。
-// 投递语义 AtLeastOnce：当前实现无消息 ID 幂等去重，重复投递会造成计数负漂移，
-// 由闲置资产回收（ref_count <= 0）兑底；TODO: 补消息 ID 去重表实现严格幂等。
-func (c *MediaConsumer) HandleDerefMedia(ctx context.Context, message *mediav1.DerefMedia) (ack bool, err error) {
+// 投递语义 AtLeastOnce：经 consumer_processed_messages 同事务去重登记（ApplyDerefIdempotent），
+// 重复投递跳过、乱序无害（delta 可交换），恰好一次效果。
+func (c *MediaConsumer) HandleDerefMedia(ctx context.Context, message *mediav1.DerefMedia, messageID string) (ack bool, err error) {
+	msgID, err := strconv.ParseInt(messageID, 10, 64)
+	if err != nil {
+		// message_id 缺失/非法：不减数不登记，RETRY 等正确消息（宁可重试不可错减）
+		return RETRY, fmt.Errorf("invalid message id %q: %w", messageID, err)
+	}
 	assetID, err := snowflake.ParseString(message.GetAssetId())
 	if err != nil {
 		// 非法资产 ID 不可恢复，ACK 丢弃（与 HandleDeleteMedia 一致）
 		return ACK, err
 	}
 
-	if err := c.Repo.ModifyMediaAssetRefCount(ctx, []int64{assetID.Int64()}, []int64{-1}); err != nil {
+	// 幂等执行模板（共用去重机制）：去重登记与计数变更同事务，恰好一次效果
+	applied, err := c.Dedup.ExecuteIdempotent(ctx, msgID, "deref_media", func(tx *gorm.DB) error {
+		return c.Repo.WithTX(tx).ModifyMediaAssetRefCount(ctx, []int64{assetID.Int64()}, []int64{-1})
+	})
+	if err != nil {
 		return RETRY, err
+	}
+	if !applied {
+		c.log.Info("deref skipped duplicate", "id", messageID, "asset_id", message.GetAssetId())
+		return ACK, nil
 	}
 	c.log.Info("media ref decremented", "asset_id", message.GetAssetId())
 	return ACK, nil

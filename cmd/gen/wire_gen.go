@@ -38,7 +38,8 @@ func InitializeConsumer(cfg *config.Config) (*consumer.MediaConsumer, func()) {
 	jetStreamClient, cleanup3 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
 	minioClient := oss.NewClient(cfg, loggerFactoryImpl)
 	mediaRepoImpl := v1.NewMediaRepo(gormDB)
-	mediaConsumer := consumer.NewMediaConsumer(gormDB, jetStreamClient, minioClient, loggerFactoryImpl, cfg, mediaRepoImpl)
+	processedMessageRepoImpl := v1_3.NewProcessedMessageRepo(gormDB)
+	mediaConsumer := consumer.NewMediaConsumer(gormDB, jetStreamClient, minioClient, loggerFactoryImpl, cfg, mediaRepoImpl, processedMessageRepoImpl)
 	return mediaConsumer, func() {
 		cleanup3()
 		cleanup2()

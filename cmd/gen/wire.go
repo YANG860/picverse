@@ -45,6 +45,9 @@ var Repos = wire.NewSet(
 
 	commonv1.NewOutBoxRepo,
 	wire.Bind(new(commonv1.OutBoxRepository), new(*commonv1.OutBoxRepoImpl)),
+
+	commonv1.NewProcessedMessageRepo,
+	wire.Bind(new(commonv1.ProcessedMessageRepository), new(*commonv1.ProcessedMessageRepoImpl)),
 )
 
 var Services = wire.NewSet(
