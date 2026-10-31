@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"gorm.io/gorm"
 )
 
@@ -118,8 +119,8 @@ func (p *OutBoxPoller) Work() {
 			return nil
 		})
 		if err != nil {
-			p.log.Error("failed to process entries", "err", err)
-		} else {
+			p.log.Error("failed to process entries", "error", err)
+		} else if affected > 0 {
 			p.log.Info("entries processed successfully", "count", affected)
 		}
 	}
@@ -149,7 +150,10 @@ func (p *OutBoxPoller) sendMsg(ctx context.Context, msgEntry *common.OutBoxEntry
 		Subject: msgEntry.Subject,
 		Header:  headers,
 		Data:    msgEntry.Payload,
-	})
+	},
+		// MsgID 与 Send 直发路径对齐：broker 端去重，堵发布重试双发
+		jetstream.WithMsgID(strconv.FormatInt(id, 10)),
+	)
 
 	if err != nil {
 		return err
@@ -191,7 +195,7 @@ func (p *OutBoxPoller) dispatch(ctx context.Context, entries []*common.OutBoxEnt
 
 	for result := range results {
 		if result.err != nil {
-			p.log.Error("failed to publish message", "id", result.id, "err", result.err)
+			p.log.Error("failed to publish message", "id", result.id, "error", result.err)
 			failures = append(failures, result.id)
 		} else {
 			p.log.Info("message published successfully", "id", result.id)
