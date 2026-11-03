@@ -21,13 +21,19 @@ import (
 	"image/color"
 	"image/png"
 	"net/http"
+	"strconv"
 	"testing"
 	"time"
 
 	"connectrpc.com/connect"
+	jwtlib "github.com/golang-jwt/jwt/v5"
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"rednote/config"
+	authv1 "rednote/gen/go/auth/v1"
 	bffv1 "rednote/gen/go/bff/v1"
 	"rednote/gen/go/bff/v1/bffv1connect"
 	commonv1 "rednote/gen/go/common/v1"
@@ -38,7 +44,9 @@ import (
 	userv1 "rednote/gen/go/user/v1"
 	"rednote/packages/defaults"
 	"rednote/packages/errmsg"
+	"rednote/packages/jwt"
 
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -533,3 +541,301 @@ func TestBFFE2EVisibilityAndLists(t *testing.T) {
 	require.NoError(t, err, "封禁后 GetPost RPC")
 	assertBizErr(t, banned.Msg.GetFail(), banned.Msg.GetErr(), errmsg.Banned, "封禁帖子应显式返回 Banned")
 }
+
+// ==================== E8 鉴权矩阵 ====================
+
+// TestBFFE2EAuthMatrix E8：20 个需会话 rpc 在无 token / 伪造 token / 过期 token 下一律 Unauthorized。
+// 免会话设计（固化为契约）：Register/Login（E1 覆盖）、GetMediaAssetStatus（只读轮询，见 bff.md）。
+func TestBFFE2EAuthMatrix(t *testing.T) {
+	client := newBFFClient(t)
+
+	// 过期 token：jwtlib 直签 exp 过去（Generate 恒按 TTL 覆写 exp，须绕开直签走 exp 校验路径）
+	token, _ := registerAndLogin(t, client, "authmx")
+	_ = token
+	expiredClaims := &jwt.Claims{
+		RegisteredClaims: jwtlib.RegisteredClaims{ExpiresAt: jwtlib.NewNumericDate(time.Now().Add(-time.Hour))},
+		Type:             defaults.JwtAccessToken,
+		Role:             authv1.Role_ROLE_USER.String(),
+		UID:              "999001",
+	}
+	expired, err := jwtlib.NewWithClaims(jwtlib.SigningMethodHS256, expiredClaims).
+		SignedString([]byte(config.Init("../../config/").JWT.Secret))
+	require.NoError(t, err)
+
+	tokens := map[string]string{
+		"无token":  "",
+		"伪造token": "garbage.token.value",
+		"过期token": expired,
+	}
+
+	type rpcCall struct {
+		name string
+		call func(tok string) (bool, *commonv1.Error, error)
+	}
+	rpcs := []rpcCall{
+		{"UploadMedia", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.UploadMedia(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.UploadMediaRequest{Meta: &mediav1.MediaMetaData{Format: mediav1.MediaFormat_MEDIA_FORMAT_PNG, SizeBytes: 1, Width: 1, Height: 1}}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
+		{"CreateDraft", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.CreateDraft(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.CreateDraftRequest{Title: "t", FullText: "b", Medias: []*bffv1.AssetRef{{AssetId: "1", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_540}}}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
+		{"UpdateDraft", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.UpdateDraft(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.UpdateDraftRequest{PostId: "1", Title: wrapperspb.String("t")}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
+		{"UpdateDraftMedias", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.UpdateDraftMedias(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.UpdateDraftMediasRequest{PostId: "1", Medias: []*bffv1.AssetRef{{AssetId: "1", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_540}}}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
+		{"PublishDraft", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.PublishDraft(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.PublishDraftRequest{PostId: "1"}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
+		{"DeletePost", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.DeletePost(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.DeletePostRequest{PostId: "1"}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
+		{"GetPost", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.GetPost(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.GetPostRequest{PostId: "1"}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
+		{"GetMyPosts", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.GetMyPosts(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.GetMyPostsRequest{}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
+		{"GetUserPosts", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.GetUserPosts(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.GetUserPostsRequest{Uid: "1"}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
+		{"GetMyProfile", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.GetMyProfile(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.GetMyProfileRequest{}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
+		{"GetUserProfile", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.GetUserProfile(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.GetUserProfileRequest{Uid: "1"}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
+		{"UpdateMyProfile", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.UpdateMyProfile(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.UpdateMyProfileRequest{}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
+		{"UpdateMyAvatar", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.UpdateMyAvatar(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.UpdateMyAvatarRequest{Avatar: &bffv1.AssetRef{AssetId: "1", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_216}}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
+		{"Follow", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.Follow(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.FollowRequest{TargetUid: "1"}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
+		{"Unfollow", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.Unfollow(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.UnfollowRequest{TargetUid: "1"}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
+		{"GetFollowingList", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.GetFollowingList(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.GetFollowingListRequest{}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
+		{"GetFollowerList", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.GetFollowerList(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.GetFollowerListRequest{}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
+		{"GetFollowRelation", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.GetFollowRelation(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.GetFollowRelationRequest{TargetUid: "1"}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
+		{"RefreshTokens", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.RefreshTokens(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.RefreshTokensRequest{}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
+		{"Logout", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.Logout(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.LogoutRequest{}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
+	}
+
+	t.Run("免会话契约固化：GetMediaAssetStatus 无 token 可查（只读轮询设计）", func(t *testing.T) {
+		r, err := client.GetMediaAssetStatus(context.Background(), connect.NewRequest(&bffv1.GetMediaAssetStatusRequest{Ids: []string{"1"}}))
+		require.NoError(t, err)
+		assert.False(t, r.Msg.GetFail() && r.Msg.GetErr().GetCode() == errmsg.Unauthorized.Code,
+			"只读轮询免会话（bff.md 设计），不得要求登录")
+	})
+
+	for tk, tok := range tokens {
+		for _, rc := range rpcs {
+			t.Run(tk+"/"+rc.name, func(t *testing.T) {
+				fail, bizErr, err := rc.call(tok)
+				require.NoError(t, err, "请求体须过 validate（本矩阵专测鉴权层）")
+				assert.True(t, fail)
+				assert.Equal(t, errmsg.Unauthorized.Code, bizErr.GetCode())
+			})
+		}
+	}
+}
+
+// ==================== E9 错误契约矩阵 ====================
+
+// TestBFFE2EErrorContract E9：validate 拦截器契约 + 面客业务错误码对照表
+func TestBFFE2EErrorContract(t *testing.T) {
+	client := newBFFClient(t)
+
+	t.Run("validate 拦截层形态：空/非法 email 以连接错误 InvalidArgument 拒绝", func(t *testing.T) {
+		_, err := client.Login(context.Background(), connect.NewRequest(&bffv1.LoginRequest{Email: "", Password: "x"}))
+		require.Error(t, err, "validate 拦截器在业务层之前拒绝，走连接错误形态")
+		assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+
+		_, err = client.Register(context.Background(), connect.NewRequest(&bffv1.RegisterRequest{Email: "not-an-email", Password: "p", Name: "n"}))
+		require.Error(t, err)
+		assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err), "非法 email 被 validate 拦截")
+	})
+
+	t.Run("密码长度无 validate 规则（契约固化）：短密码走业务层校验", func(t *testing.T) {
+		r, err := client.Register(context.Background(), connect.NewRequest(&bffv1.RegisterRequest{Email: "a@b.c", Password: "1", Name: "n"}))
+		require.NoError(t, err, "短密码不在 validate 规则内，不走连接错误")
+		assert.True(t, r.Msg.GetFail(), "由业务层拒绝（密码策略在 auth 域）")
+		assert.NotZero(t, r.Msg.GetErr().GetCode())
+	})
+
+	t.Run("拦截顺序契约（实测固化）：validate 先于鉴权——无 token + 非法请求体 → InvalidArgument", func(t *testing.T) {
+		_, err := client.CreateDraft(context.Background(), connect.NewRequest(&bffv1.CreateDraftRequest{}))
+		require.Error(t, err, "medias 缺失被 validate 先拦截（连接错误形态），不进鉴权层")
+		assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	})
+
+	t.Run("业务码表：NotFound（查无帖子）", func(t *testing.T) {
+		token, _ := registerAndLogin(t, client, "errnf")
+		r, err := client.GetPost(context.Background(), withBearer(connect.NewRequest(&bffv1.GetPostRequest{PostId: e2eID(9223372036854775804)}), token))
+		require.NoError(t, err)
+		assert.True(t, r.Msg.GetFail())
+		assert.Equal(t, errmsg.NotFound.Code, r.Msg.GetErr().GetCode())
+	})
+
+	t.Run("业务码表：NotEditable（已发布再编辑）", func(t *testing.T) {
+		token, _ := registerAndLogin(t, client, "errne")
+		asset := uploadAsset(t, client, token)
+		cr, err := client.CreateDraft(context.Background(), withBearer(connect.NewRequest(&bffv1.CreateDraftRequest{
+			Title: "not-editable", FullText: "body",
+			Medias: []*bffv1.AssetRef{{AssetId: asset, Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_540}},
+		}), token))
+		require.NoError(t, err)
+		require.False(t, cr.Msg.GetFail())
+		pid := cr.Msg.GetPost().GetPostId()
+
+		requireNoErr(t, client, token, pid)
+		r, err := client.UpdateDraft(context.Background(), withBearer(connect.NewRequest(&bffv1.UpdateDraftRequest{PostId: pid, Title: wrapperspb.String("x")}), token))
+		require.NoError(t, err)
+		assert.True(t, r.Msg.GetFail())
+		assert.Equal(t, errmsg.NotEditable.Code, r.Msg.GetErr().GetCode())
+	})
+}
+
+// ==================== E12 幂等/重复操作 ====================
+
+// TestBFFE2EIdempotency E12：重复操作语义 + G11 deref 消息幂等（机制级回归：同业务 message_id 双投只减一次）
+func TestBFFE2EIdempotency(t *testing.T) {
+	client := newBFFClient(t)
+
+	t.Run("重复 Logout：幂等成功（无状态 access JWT 语义，Logout 只销毁 refresh 会话）", func(t *testing.T) {
+		token, _ := registerAndLogin(t, client, "idem-logout")
+
+		r1, err := client.Logout(context.Background(), withBearer(connect.NewRequest(&bffv1.LogoutRequest{}), token))
+		require.NoError(t, err)
+		require.False(t, r1.Msg.GetFail())
+
+		r2, err := client.Logout(context.Background(), withBearer(connect.NewRequest(&bffv1.LogoutRequest{}), token))
+		require.NoError(t, err)
+		assert.False(t, r2.Msg.GetFail(), "重复登出幂等透传（与单测语义一致），不报错")
+	})
+
+	t.Run("重复 DeletePost：幂等成功（软删可重复，不报错）", func(t *testing.T) {
+		token, _ := registerAndLogin(t, client, "idem-del")
+		asset := uploadAsset(t, client, token)
+		cr, err := client.CreateDraft(context.Background(), withBearer(connect.NewRequest(&bffv1.CreateDraftRequest{
+			Title: "idem-del", FullText: "body",
+			Medias: []*bffv1.AssetRef{{AssetId: asset, Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_540}},
+		}), token))
+		require.NoError(t, err)
+		require.False(t, cr.Msg.GetFail())
+		pid := cr.Msg.GetPost().GetPostId()
+
+		d1, err := client.DeletePost(context.Background(), withBearer(connect.NewRequest(&bffv1.DeletePostRequest{PostId: pid}), token))
+		require.NoError(t, err)
+		require.False(t, d1.Msg.GetFail())
+
+		d2, err := client.DeletePost(context.Background(), withBearer(connect.NewRequest(&bffv1.DeletePostRequest{PostId: pid}), token))
+		require.NoError(t, err)
+		assert.False(t, d2.Msg.GetFail(), "软删幂等：重复删除不报错（下游 DeletePostMedias 重复 0 行天然幂等）")
+	})
+
+	t.Run("G11 deref 幂等：同业务 message_id 双投只减一次（消费端去重机制回归）", func(t *testing.T) {
+		client := newBFFClient(t)
+		media := newMediaProbe(t)
+		token, _ := registerAndLogin(t, client, "idem-deref")
+
+		asset := uploadAsset(t, client, token)
+		cr, err := client.CreateDraft(context.Background(), withBearer(connect.NewRequest(&bffv1.CreateDraftRequest{
+			Title: "idem-deref", FullText: "body",
+			Medias: []*bffv1.AssetRef{
+				{AssetId: asset, Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_540},
+				{AssetId: asset, Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_1080},
+			},
+		}), token))
+		require.NoError(t, err)
+		require.False(t, cr.Msg.GetFail())
+		require.Equal(t, int64(2), refCount(t, media, asset), "双槽位挂载 +2")
+
+		// 双投同业务 message_id、不同 broker MsgID 的 deref 消息（绕开 broker 去重，专测消费端幂等）
+		e2ePublishDerefTwice(t, asset)
+
+		// 幂等生效 = 只减一次 → 稳定 1；若无幂等会到 0（区分度明确）
+		awaitRefCount(t, media, asset, 1, "同 message_id 双投只减一次")
+		assert.Equal(t, int64(1), refCount(t, media, asset), "稳定在 1，不得被第二条重复消息减到 0")
+	})
+}
+
+// e2ePublishDerefTwice 向 media 流投递两条同业务 message_id、不同 broker MsgID 的 DerefMedia
+func e2ePublishDerefTwice(t *testing.T, assetID string) {
+	t.Helper()
+	addr := e2eAddr("NATS_E2E_ADDR", config.Init("../../config/").JetStream.Url)
+	nc, err := nats.Connect(addr)
+	require.NoError(t, err, "连接 JetStream（NATS_E2E_ADDR 或 config）")
+	defer nc.Close()
+	js, err := jetstream.New(nc)
+	require.NoError(t, err)
+
+	var msg mediav1.MediaMessage
+	msg.Payload = &mediav1.MediaMessage_DerefMedia{DerefMedia: &mediav1.DerefMedia{AssetId: assetID}}
+	payload, err := proto.Marshal(&msg)
+	require.NoError(t, err)
+
+	// 业务 message_id 同轮相同（消费端去重键）、跨轮唯一（避免历史去重记录误挡）；
+	// broker MsgID 不同（绕开 broker 去重，专测消费端幂等）
+	bizMsgID := strconv.FormatInt(time.Now().UnixNano(), 10)
+	for i := 0; i < 2; i++ {
+		_, err = js.PublishMsg(context.Background(), &nats.Msg{
+			Subject: defaults.MediaMessageStream,
+			Header: nats.Header{
+				defaults.MessageIDKey: []string{bizMsgID},
+				defaults.SendAtKey:    []string{strconv.FormatInt(time.Now().UnixMilli(), 10)},
+			},
+			Data: payload,
+		}, jetstream.WithMsgID(fmt.Sprintf("e2e-dup-%d", time.Now().UnixNano()+int64(i))))
+		require.NoError(t, err)
+	}
+}
+
+// requireNoErr 发布草稿并轮询至 PUBLISHED（E9 NotEditable 前置）
+func requireNoErr(t *testing.T, client bffv1connect.BFFServiceClient, token string, postID string) {
+	t.Helper()
+	pb, err := client.PublishDraft(context.Background(), withBearer(connect.NewRequest(&bffv1.PublishDraftRequest{PostId: postID}), token))
+	require.NoError(t, err)
+	require.False(t, pb.Msg.GetFail(), "发布失败: %v", pb.Msg.GetErr())
+	require.Eventually(t, func() bool {
+		gp, err := client.GetPost(context.Background(), withBearer(connect.NewRequest(&bffv1.GetPostRequest{PostId: postID}), token))
+		return err == nil && !gp.Msg.GetFail() && gp.Msg.GetPost().GetStatus() == postv1.PostStatus_POST_STATUS_PUBLISHED
+	}, 60*time.Second, 500*time.Millisecond, "发布走审核链路应最终 PUBLISHED")
+}
+
+// ctxOrBackground 普通请求上下文（会话由 header 携带）
+func ctxOrBackground() context.Context { return context.Background() }
