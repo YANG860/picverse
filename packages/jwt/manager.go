@@ -50,8 +50,8 @@ func NewManager(cfg *config.Config) *ManagerImpl {
 	}
 }
 
-// Generate 签发 HS256 token
-// Claims 中未设置 issuer/iat/exp 时按配置补齐默认值
+// Generate 签发 HS256 token：Issuer 缺省按配置补齐；iat 恒为当前时间；
+// exp 按 token 类型恒按配置 TTL 签发（覆写传入值，防调用方拉长有效期）
 func (m *ManagerImpl) Generate(claims *Claims) (string, error) {
 	now := time.Now()
 
