@@ -330,3 +330,44 @@ func TestBFFDeRefMediaFile(t *testing.T) {
 		assert.Equal(t, errmsg.InternalError.Code, u.DeRefMediaFile(context.Background(), "a9").GetCode())
 	})
 }
+
+// TestBFFGetMediaAssetStatusMixedBatch 混合批量顺序对齐（G12 边界）：成功/失败交错 5 项，
+// 逐项状态与请求 ids 顺序严格对齐（防批量结果错位）
+func TestBFFGetMediaAssetStatusMixedBatch(t *testing.T) {
+	media := &fakeMediaClient{batch: []*mediav1.MediaAssetResult{
+		{Fail: false, Id: "s1", Asset: &mediav1.MediaAsset{Status: mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_ACTIVE}},
+		{Fail: true, Err: errmsg.NotFound, Id: "m1"},
+		{Fail: false, Id: "s2", Asset: &mediav1.MediaAsset{Status: mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_UPLOADING}},
+		{Fail: true, Err: errmsg.InvalidID, Id: "m2"},
+		{Fail: false, Id: "s3", Asset: &mediav1.MediaAsset{Status: mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_FAILED}},
+	}}
+	u := newBFFForTest(&fakeUserClient{}, media)
+
+	ids := []string{"s1", "m1", "s2", "m2", "s3"}
+	r, err := u.GetMediaAssetStatus(context.Background(), &bffv1.GetMediaAssetStatusRequest{Ids: ids})
+	require.NoError(t, err)
+	require.False(t, r.Fail, "整体不失败，逐项表达结果")
+	assert.Equal(t, ids, media.gotBatchIDs, "ids 顺序透传")
+	require.Len(t, r.Statuses, 5)
+
+	// 逐项位置严格对齐（成功/失败交错不串位）
+	assert.Equal(t, "s1", r.Statuses[0].GetAssetId())
+	assert.False(t, r.Statuses[0].GetFail())
+	assert.Equal(t, mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_ACTIVE, r.Statuses[0].GetStatus())
+
+	assert.Equal(t, "m1", r.Statuses[1].GetAssetId())
+	assert.True(t, r.Statuses[1].GetFail())
+	assert.Equal(t, errmsg.NotFound.Code, r.Statuses[1].GetErr().GetCode())
+
+	assert.Equal(t, "s2", r.Statuses[2].GetAssetId())
+	assert.False(t, r.Statuses[2].GetFail())
+	assert.Equal(t, mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_UPLOADING, r.Statuses[2].GetStatus())
+
+	assert.Equal(t, "m2", r.Statuses[3].GetAssetId())
+	assert.True(t, r.Statuses[3].GetFail())
+	assert.Equal(t, errmsg.InvalidID.Code, r.Statuses[3].GetErr().GetCode())
+
+	assert.Equal(t, "s3", r.Statuses[4].GetAssetId())
+	assert.False(t, r.Statuses[4].GetFail())
+	assert.Equal(t, mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_FAILED, r.Statuses[4].GetStatus())
+}

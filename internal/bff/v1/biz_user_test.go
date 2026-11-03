@@ -2,6 +2,7 @@ package v1
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 // refCall 记录一次引用计数变更（对象 + 增量），供断言挂载/卸载顺序
@@ -40,6 +42,15 @@ type fakeUserClient struct {
 
 	avatar    *userv1.UpdateUserAvatarResponse
 	avatarErr *commonv1.Error
+
+	updateProfileRPCErr error
+	gotUpdateProfile    *userv1.UpdateUserProfileRequest
+
+	setFollowErr    *commonv1.Error
+	setFollowRPCErr error
+	setUnFollowErr  *commonv1.Error
+	setUnFollowRPC  error
+	followersRPCErr error
 
 	createUserErr    *commonv1.Error
 	createUserRPCErr error
@@ -88,14 +99,29 @@ func (f *fakeUserClient) UpdateUserAvatar(_ context.Context, req *connect.Reques
 	return connect.NewResponse(&userv1.UpdateUserAvatarResponse{Fail: f.avatarErr != nil, Err: f.avatarErr, Profile: f.avatar.GetProfile(), OldAssetId: f.avatar.GetOldAssetId()}), nil
 }
 
+func (f *fakeUserClient) UpdateUserProfile(_ context.Context, req *connect.Request[userv1.UpdateUserProfileRequest]) (*connect.Response[userv1.UpdateUserProfileResponse], error) {
+	f.gotUpdateProfile = req.Msg
+	if f.updateProfileRPCErr != nil {
+		return nil, f.updateProfileRPCErr
+	}
+	// 复用 profile/profileErr 作为更新后的资料与业务失败注入
+	return connect.NewResponse(&userv1.UpdateUserProfileResponse{Fail: f.profileErr != nil, Err: f.profileErr, Profile: f.profile}), nil
+}
+
 func (f *fakeUserClient) SetFollow(_ context.Context, req *connect.Request[userv1.SetFollowRequest]) (*connect.Response[userv1.SetFollowResponse], error) {
 	f.gotSetFollow = req.Msg
-	return connect.NewResponse(&userv1.SetFollowResponse{}), nil
+	if f.setFollowRPCErr != nil {
+		return nil, f.setFollowRPCErr
+	}
+	return connect.NewResponse(&userv1.SetFollowResponse{Fail: f.setFollowErr != nil, Err: f.setFollowErr}), nil
 }
 
 func (f *fakeUserClient) SetUnFollow(_ context.Context, req *connect.Request[userv1.SetUnFollowRequest]) (*connect.Response[userv1.SetUnFollowResponse], error) {
 	f.gotSetUnFollow = req.Msg
-	return connect.NewResponse(&userv1.SetUnFollowResponse{}), nil
+	if f.setUnFollowRPC != nil {
+		return nil, f.setUnFollowRPC
+	}
+	return connect.NewResponse(&userv1.SetUnFollowResponse{Fail: f.setUnFollowErr != nil, Err: f.setUnFollowErr}), nil
 }
 
 func (f *fakeUserClient) GetFollowings(_ context.Context, req *connect.Request[userv1.GetFollowingsRequest]) (*connect.Response[userv1.GetFollowingsResponse], error) {
@@ -111,6 +137,12 @@ func (f *fakeUserClient) GetFollowings(_ context.Context, req *connect.Request[u
 
 func (f *fakeUserClient) GetFollowers(_ context.Context, req *connect.Request[userv1.GetFollowersRequest]) (*connect.Response[userv1.GetFollowersResponse], error) {
 	f.gotFollowers = req.Msg
+	if f.followersRPCErr != nil {
+		return nil, f.followersRPCErr
+	}
+	if f.followersResp != nil {
+		return connect.NewResponse(f.followersResp), nil
+	}
 	return connect.NewResponse(&userv1.GetFollowersResponse{
 		UserBriefs: []*userv1.UserBrief{{Uid: "u9", Name: "fan"}},
 		Cursor:     &commonv1.Cursor{Str: "fnext", Limit: 10},
@@ -575,4 +607,150 @@ func TestBFFGetFollowerList(t *testing.T) {
 	require.Len(t, resp.UserBriefs, 1)
 	assert.Equal(t, "fan", resp.UserBriefs[0].GetName())
 	assert.Equal(t, "fnext", resp.Cursor.GetStr())
+}
+
+// TestBFFUpdateMyProfile 个人资料更新：uid/字段注入下游 + Profile 全字段回显（G9 补缺）
+func TestBFFUpdateMyProfile(t *testing.T) {
+	fixture := &userv1.UserProfile{
+		Brief:  &userv1.UserBrief{Uid: "u1", Name: "alice-new", Avatar: &mediav1.MediaFile{AssetId: "av1", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_216}},
+		Bio:    "new-bio",
+		Stat:   &userv1.UserStat{Followings: 3, Followers: 5},
+		Status: userv1.UserStatus_USER_STATUS_ACTIVE,
+	}
+
+	t.Run("成功：uid 与三字段注入 + Profile 全字段回显", func(t *testing.T) {
+		user := &fakeUserClient{profile: fixture}
+		u := newBFFForTest(user, &fakeMediaClient{})
+
+		resp, err := u.UpdateMyProfile(ctxWithUID("u1"), &bffv1.UpdateMyProfileRequest{
+			Name:     wrapperspb.String("alice-new"),
+			Bio:      wrapperspb.String("new-bio"),
+			Metadata: &commonv1.JsonStr{Payload: `{"theme":"dark"}`},
+		})
+		require.NoError(t, err)
+		require.False(t, resp.Fail)
+		assert.Nil(t, resp.Err)
+
+		// 注入断言：uid 来自会话、三字段原样透传
+		require.NotNil(t, user.gotUpdateProfile)
+		assert.Equal(t, "u1", user.gotUpdateProfile.GetUid(), "uid 必须来自会话而非请求体")
+		assert.Equal(t, "alice-new", user.gotUpdateProfile.GetName().GetValue())
+		assert.Equal(t, "new-bio", user.gotUpdateProfile.GetBio().GetValue())
+		assert.Equal(t, `{"theme":"dark"}`, user.gotUpdateProfile.GetMetadata().GetPayload())
+
+		// 全字段断言：Profile 逐字段回显
+		p := resp.GetProfile()
+		assert.Equal(t, "u1", p.GetBrief().GetUid())
+		assert.Equal(t, "alice-new", p.GetBrief().GetName())
+		assert.Equal(t, "av1", p.GetBrief().GetAvatar().GetAssetId())
+		assert.Equal(t, mediav1.MediaFileType_MEDIA_FILE_TYPE_216, p.GetBrief().GetAvatar().GetType())
+		assert.Equal(t, "new-bio", p.GetBio())
+		assert.Equal(t, int64(3), p.GetStat().GetFollowings())
+		assert.Equal(t, int64(5), p.GetStat().GetFollowers())
+		assert.Equal(t, userv1.UserStatus_USER_STATUS_ACTIVE, p.GetStatus())
+	})
+
+	t.Run("下游业务失败透传", func(t *testing.T) {
+		user := &fakeUserClient{profileErr: errmsg.NotFound}
+		u := newBFFForTest(user, &fakeMediaClient{})
+
+		resp, err := u.UpdateMyProfile(ctxWithUID("u1"), &bffv1.UpdateMyProfileRequest{Name: wrapperspb.String("x")})
+		require.NoError(t, err)
+		assert.True(t, resp.Fail)
+		assert.Equal(t, errmsg.NotFound.Code, resp.Err.GetCode())
+	})
+
+	t.Run("连接层错误归为 InternalError", func(t *testing.T) {
+		user := &fakeUserClient{updateProfileRPCErr: errors.New("dial fail")}
+		u := newBFFForTest(user, &fakeMediaClient{})
+
+		resp, err := u.UpdateMyProfile(ctxWithUID("u1"), &bffv1.UpdateMyProfileRequest{Name: wrapperspb.String("x")})
+		require.NoError(t, err)
+		assert.True(t, resp.Fail)
+		assert.Equal(t, errmsg.InternalError.Code, resp.Err.GetCode())
+	})
+}
+
+// TestBFFFollowUnfollowErrors 关注/取关错误路径（G10 补缺）
+func TestBFFFollowUnfollowErrors(t *testing.T) {
+	t.Run("Follow 业务失败透传", func(t *testing.T) {
+		user := &fakeUserClient{setFollowErr: errmsg.InvalidArgument}
+		u := newBFFForTest(user, &fakeMediaClient{})
+
+		r, err := u.Follow(ctxWithUID("u1"), &bffv1.FollowRequest{TargetUid: "u1"})
+		require.NoError(t, err)
+		assert.True(t, r.Fail)
+		assert.Equal(t, errmsg.InvalidArgument.Code, r.Err.GetCode(), "自关注等业务拒绝按下游码透传")
+	})
+
+	t.Run("Follow 连接层错误归为 InternalError", func(t *testing.T) {
+		user := &fakeUserClient{setFollowRPCErr: errors.New("dial fail")}
+		u := newBFFForTest(user, &fakeMediaClient{})
+
+		r, err := u.Follow(ctxWithUID("u1"), &bffv1.FollowRequest{TargetUid: "u2"})
+		require.NoError(t, err)
+		assert.True(t, r.Fail)
+		assert.Equal(t, errmsg.InternalError.Code, r.Err.GetCode())
+	})
+
+	t.Run("Unfollow 业务失败透传", func(t *testing.T) {
+		user := &fakeUserClient{setUnFollowErr: errmsg.NotFound}
+		u := newBFFForTest(user, &fakeMediaClient{})
+
+		r, err := u.Unfollow(ctxWithUID("u1"), &bffv1.UnfollowRequest{TargetUid: "u2"})
+		require.NoError(t, err)
+		assert.True(t, r.Fail)
+		assert.Equal(t, errmsg.NotFound.Code, r.Err.GetCode())
+	})
+
+	t.Run("Unfollow 连接层错误归为 InternalError", func(t *testing.T) {
+		user := &fakeUserClient{setUnFollowRPC: errors.New("dial fail")}
+		u := newBFFForTest(user, &fakeMediaClient{})
+
+		r, err := u.Unfollow(ctxWithUID("u1"), &bffv1.UnfollowRequest{TargetUid: "u2"})
+		require.NoError(t, err)
+		assert.True(t, r.Fail)
+		assert.Equal(t, errmsg.InternalError.Code, r.Err.GetCode())
+	})
+
+	t.Run("GetFollowRelation 业务失败透传", func(t *testing.T) {
+		user := &fakeUserClient{relationErr: errmsg.InvalidArgument}
+		u := newBFFForTest(user, &fakeMediaClient{})
+
+		r, err := u.GetFollowRelation(ctxWithUID("u1"), &bffv1.GetFollowRelationRequest{TargetUid: "u2"})
+		require.NoError(t, err)
+		assert.True(t, r.Fail)
+		assert.Equal(t, errmsg.InvalidArgument.Code, r.Err.GetCode())
+	})
+
+	t.Run("GetFollowRelation 目标=自己：BFF 不拦截照发下游（自关注校验归下游）", func(t *testing.T) {
+		user := &fakeUserClient{relation: &userv1.GetFollowingRelationResponse{}}
+		u := newBFFForTest(user, &fakeMediaClient{})
+
+		r, err := u.GetFollowRelation(ctxWithUID("u1"), &bffv1.GetFollowRelationRequest{TargetUid: "u1"})
+		require.NoError(t, err)
+		require.False(t, r.Fail)
+		require.Len(t, user.gotRelationReqs, 1)
+		assert.Equal(t, "u1", user.gotRelationReqs[0].GetTargetUid(), "target=自己照常透传")
+	})
+
+	t.Run("GetFollowerList 业务失败透传", func(t *testing.T) {
+		user := &fakeUserClient{followersResp: &userv1.GetFollowersResponse{Fail: true, Err: errmsg.NotFound}}
+		u := newBFFForTest(user, &fakeMediaClient{})
+
+		r, err := u.GetFollowerList(ctxWithUID("u1"), &bffv1.GetFollowerListRequest{})
+		require.NoError(t, err)
+		assert.True(t, r.Fail)
+		assert.Equal(t, errmsg.NotFound.Code, r.Err.GetCode())
+	})
+
+	t.Run("GetFollowerList 连接层错误归为 InternalError", func(t *testing.T) {
+		user := &fakeUserClient{followersRPCErr: errors.New("dial fail")}
+		u := newBFFForTest(user, &fakeMediaClient{})
+
+		r, err := u.GetFollowerList(ctxWithUID("u1"), &bffv1.GetFollowerListRequest{})
+		require.NoError(t, err)
+		assert.True(t, r.Fail)
+		assert.Equal(t, errmsg.InternalError.Code, r.Err.GetCode())
+	})
 }
