@@ -12,6 +12,7 @@ message MediaMessage {
     ProcessMedia process_media = 4;
     PublishMedia publish_media = 5;
     BanMedia ban_media = 6;
+    DerefMedia deref_media = 7;
   }
 }
 
@@ -52,5 +53,10 @@ message DeleteMedia {
 }
 
 message BanMedia {
+  string asset_id = 1;
+}
+
+// DerefMedia 异步卸载引用计数 -1
+message DerefMedia {
   string asset_id = 1;
 }

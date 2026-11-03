@@ -101,6 +101,8 @@ message MediaFileURL {
 // 批量签发展示 GET URL（纯读，不改引用计数；URL 供前端直接展示媒体）
 message SignMediaFileURLsRequest {
   repeated MediaAssetFileQuery refs = 1 [(buf.validate.field).repeated.min_items = 1];
+  // URL 有效期（秒）：0 = 默认 24h（私有内容）；上限 7d（公开内容），超出报 InvalidArgument
+  int64 ttl_seconds = 2 [(buf.validate.field).int64.gte = 0];
 }
 
 message SignMediaFileURLsResponse {

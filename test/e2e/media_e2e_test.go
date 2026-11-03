@@ -26,6 +26,7 @@ import (
 
 	mediav1 "rednote/gen/go/media/v1"
 	"rednote/gen/go/media/v1/mediav1connect"
+	"rednote/packages/errmsg"
 	"rednote/packages/utils"
 	"rednote/test/testsnowflake"
 
@@ -262,13 +263,50 @@ func TestMediaServiceE2E(t *testing.T) {
 		})
 	}
 
-	// ---- 5. 游标分页 ----
+	// ---- 5. SignMediaFileURLs：签发展示 URL（TTL 分级）+ 签名 URL 真实下载校验 ----
+	file216 := byType[mediav1.MediaFileType_MEDIA_FILE_TYPE_216]
+	sign, err := client.SignMediaFileURLs(context.Background(), connect.NewRequest(&mediav1.SignMediaFileURLsRequest{
+		Refs:       []*mediav1.MediaAssetFileQuery{{Id: assetID, Type: file216.GetType()}},
+		TtlSeconds: 3600, // 显式 1h
+	}))
+	require.NoError(t, err, "SignMediaFileURLs RPC")
+	require.False(t, sign.Msg.GetFail(), "SignMediaFileURLs 业务失败: %v", sign.Msg.GetErr())
+	require.Len(t, sign.Msg.GetUrls(), 1)
+	signed := sign.Msg.GetUrls()[0]
+	require.False(t, signed.GetFail())
+	require.NotEmpty(t, signed.GetSignedUrl(), "应返回预签名展示 URL")
+	assert.Equal(t, assetID, signed.GetAssetId())
+	// TTL 约束：expire_at ≈ now+1h（±2min）
+	signExpire := time.UnixMilli(signed.GetExpireAt())
+	assert.WithinDuration(t, time.Now().Add(time.Hour), signExpire, 2*time.Minute, "显式 TTL 1h")
+
+	// 签名 URL 真实下载：内容与 S3 直下载一致
+	downResp, err := http.Get(signed.GetSignedUrl())
+	require.NoError(t, err, "GET 签名 URL")
+	defer downResp.Body.Close()
+	require.Equal(t, http.StatusOK, downResp.StatusCode)
+	signedData, err := io.ReadAll(downResp.Body)
+	require.NoError(t, err)
+	s3Data, _ := downloadObject(t, mc, bucket, file216.GetObjKey())
+	require.Equal(t, s3Data, signedData, "签名 URL 下载内容应与 S3 直下载一致")
+
+	// TTL 超 7d 上限：InvalidArgument，不签发
+	over, err := client.SignMediaFileURLs(context.Background(), connect.NewRequest(&mediav1.SignMediaFileURLsRequest{
+		Refs:       []*mediav1.MediaAssetFileQuery{{Id: assetID, Type: file216.GetType()}},
+		TtlSeconds: 8 * 24 * 3600,
+	}))
+	require.NoError(t, err)
+	assert.True(t, over.Msg.GetFail())
+	assert.Equal(t, errmsg.InvalidArgument.Code, over.Msg.GetErr().GetCode())
+	assert.Empty(t, over.Msg.GetUrls(), "TTL 非法时不得签发")
+
+	// ---- 6. 游标分页 ----
 	list, err := client.ListMediaAssetsBefore(context.Background(),
 		connect.NewRequest(&mediav1.ListMediaAssetsBeforeRequest{}))
 	require.NoError(t, err, "ListMediaAssetsBefore RPC")
 	assert.NotEmpty(t, list.Msg.GetAssets(), "应能列举到资产")
 
-	// ---- 6. 封禁 ----
+	// ---- 7. 封禁 ----
 	ban, err := client.BanMedia(context.Background(),
 		connect.NewRequest(&mediav1.BanMediaRequest{AssetId: assetID}))
 	require.NoError(t, err, "BanMedia RPC")

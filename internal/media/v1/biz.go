@@ -3,6 +3,7 @@ package v1
 import (
 	"context"
 	"fmt"
+	"time"
 
 	mediav1 "rednote/gen/go/media/v1"
 	models "rednote/internal/media/models"
@@ -279,9 +280,15 @@ func (u *MediaUsecaseImpl) GetMediaAssetFile(ctx context.Context, req *mediav1.G
 	return &mediav1.GetMediaAssetFileResponse{File: files[0].ToProto()}, nil
 }
 
-// SignMediaFileURLs 批量签发展示 GET URL
+// SignMediaFileURLs 批量签发展示 GET URL：TTL 分级（0=默认 24h 私有；公开可传至 7d 上限）
 func (u *MediaUsecaseImpl) SignMediaFileURLs(ctx context.Context, req *mediav1.SignMediaFileURLsRequest) (*mediav1.SignMediaFileURLsResponse, error) {
 	urlTTL := defaults.MediaUrlTTL
+	if ttl := req.GetTtlSeconds(); ttl > 0 {
+		urlTTL = time.Duration(ttl) * time.Second
+		if urlTTL > defaults.MediaUrlMaxTTL {
+			return &mediav1.SignMediaFileURLsResponse{Fail: true, Err: errmsg.InvalidArgument}, nil
+		}
+	}
 
 	urls := make([]*mediav1.MediaFileURL, 0, len(req.GetRefs()))
 	ids := make([]int64, 0, len(req.GetRefs()))

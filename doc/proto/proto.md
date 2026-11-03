@@ -11,6 +11,8 @@ proto 定义位于 `proto/`，生成代码位于 `gen/go/`。命名空间按 `co
 ## 错误约定（fail / err）
 
 - **`err` 必须传递可枚举、有编号的错误**（见 `packages/errmsg`），否则直接使用 gRPC 原始错误（连接层 error）。
+- **BFF 例外（面向前端）**：BFF 不向客户端返回连接层 error——先内部记录日志，再返回 `fail + InternalError`；其余错误按惯例处理（业务可枚举码透传，见 [bff](../internal/bff/bff.md)）。
+- **存储坐标不面客**（与"身份不面客"同一治理）：媒体的 `obj_key`/`bucket` 是内部存储坐标，不得出现在面客契约；面客统一 `bff.v1.MediaView`（含内嵌签发的预签名 URL），请求侧只传 `{asset_id, type}` 引用（见 [bff](../internal/bff/bff.md)）。
 - 批量查询需要标识"部分成功"时，每个结果用 `fail` + `err` 标识该项失败。
 - 异步 / best-effort 调用不在乎结果时，可不返回 `fail`/`err`。
 - **任何情况下不保证返回顺序**，必须使用返回项里的 Key 信息或返回值进行定位。

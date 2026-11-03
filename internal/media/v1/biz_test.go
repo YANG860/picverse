@@ -505,7 +505,7 @@ func TestMediaUsecase_SignMediaFileURLs(t *testing.T) {
 		return &mediav1.SignMediaFileURLsRequest{Refs: refs}
 	}
 
-	t.Run("成功：签发 URL 且 TTL 约 1 小时", func(t *testing.T) {
+	t.Run("成功：默认 TTL 24 小时（私有内容）", func(t *testing.T) {
 		u, db, _, _ := newUsecase(t)
 		asset := seedAsset(t, db, 9100, mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_ACTIVE, 0, oldTS())
 		seedFile(t, db, 9101, asset.ID, mediav1.MediaFileType_MEDIA_FILE_TYPE_216)
@@ -526,7 +526,38 @@ func TestMediaUsecase_SignMediaFileURLs(t *testing.T) {
 		assert.NotEmpty(t, got.GetSignedUrl())
 
 		expire := time.UnixMilli(got.GetExpireAt())
-		assert.WithinDuration(t, before.Add(time.Hour), expire, 2*time.Minute, "展示 URL TTL 1 小时")
+		assert.WithinDuration(t, before.Add(24*time.Hour), expire, 2*time.Minute, "默认 TTL 24h（私有内容）")
+	})
+
+	t.Run("显式 TTL（公开内容长 TTL）", func(t *testing.T) {
+		u, db, _, _ := newUsecase(t)
+		asset := seedAsset(t, db, 9110, mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_ACTIVE, 0, oldTS())
+		seedFile(t, db, 9111, asset.ID, mediav1.MediaFileType_MEDIA_FILE_TYPE_216)
+
+		before := time.Now()
+		resp, err := u.SignMediaFileURLs(context.Background(), &mediav1.SignMediaFileURLsRequest{
+			Refs:       []*mediav1.MediaAssetFileQuery{{Id: strconv.FormatInt(asset.ID, 10), Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_216}},
+			TtlSeconds: int64((7 * 24 * time.Hour) / time.Second), // 7d 上限边界
+		})
+		require.NoError(t, err)
+		require.False(t, resp.Fail)
+		require.Len(t, resp.Urls, 1)
+		assert.False(t, resp.Urls[0].GetFail())
+
+		expire := time.UnixMilli(resp.Urls[0].GetExpireAt())
+		assert.WithinDuration(t, before.Add(7*24*time.Hour), expire, 2*time.Minute, "7d 上限边界应放行")
+	})
+
+	t.Run("TTL 超 7d 上限报 InvalidArgument", func(t *testing.T) {
+		u, _, _, _ := newUsecase(t)
+		resp, err := u.SignMediaFileURLs(context.Background(), &mediav1.SignMediaFileURLsRequest{
+			Refs:       []*mediav1.MediaAssetFileQuery{{Id: "9100", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_216}},
+			TtlSeconds: int64((8 * 24 * time.Hour) / time.Second),
+		})
+		require.NoError(t, err)
+		assert.True(t, resp.Fail)
+		assert.Equal(t, errmsg.InvalidArgument.Code, resp.Err.GetCode())
+		assert.Empty(t, resp.Urls, "TTL 非法时不得签发任何 URL")
 	})
 
 	t.Run("非法 ID 逐项 InvalidID", func(t *testing.T) {
