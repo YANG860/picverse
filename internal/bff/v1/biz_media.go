@@ -82,6 +82,7 @@ func (u *BFFUsecaseImpl) GetAndRefMediaFiles(ctx context.Context, refs []*bffv1.
 	if len(refs) == 0 {
 		return nil, errmsg.InvalidArgument
 	}
+	// 去重后的ID 用于批量查询media_asset
 	ids := make([]string, 0, len(refs))
 	seen := make(map[string]struct{}, len(refs))
 	for _, r := range refs {

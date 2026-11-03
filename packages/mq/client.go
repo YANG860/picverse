@@ -40,8 +40,6 @@ type MQClient interface {
 
 var _ MQClient = (*JetStreamClient)(nil)
 
-
-
 func NewJetStreamClient(cfg *config.Config, lf logger.LoggerFactory) (*JetStreamClient, func()) {
 
 	c := &JetStreamClient{}
@@ -103,7 +101,7 @@ func (m *JetStreamClient) Send(ctx context.Context, msg *MQMessage) (err error) 
 			"subject", msg.Subject,
 			"send_at", msg.SendAt,
 			"trace_id", traceID,
-			"err", err,
+			"error", err,
 		)
 		return fmt.Errorf("failed to publish message: %w", err)
 	}
@@ -151,7 +149,7 @@ func (m *JetStreamClient) SendTX(ctx context.Context, msg *MQMessage, tx *gorm.D
 			"subject", msg.Subject,
 			"send_at", msg.SendAt,
 			"trace_id", traceID,
-			"err", err,
+			"error", err,
 		)
 		return fmt.Errorf("failed to create transactional message: %w", err)
 	}

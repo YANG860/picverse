@@ -221,7 +221,7 @@ func (u *BFFUsecaseImpl) authorViews(ctx context.Context, uids []string) (map[st
 	okUIDs := make([]string, 0, len(dedup))
 	for _, r := range resp.Msg.GetResults() {
 		if r.GetFail() {
-			u.log.Error("user.GetUserBrief item failed", "uid", r.GetUid(), "err_code", r.GetErr().GetCode())
+			u.log.Warn("user.GetUserBrief item failed，降级跳过", "uid", r.GetUid(), "err_code", r.GetErr().GetCode())
 			continue
 		}
 		ok[r.GetUid()] = r.GetBrief()
@@ -292,7 +292,7 @@ func (u *BFFUsecaseImpl) postCards(ctx context.Context, briefs []*postv1.PostBri
 	for i, b := range briefs {
 		author := authors[b.GetAuthorId()]
 		if author == nil {
-			u.log.Error("post card author missing", "post_id", b.GetPostId(), "author_id", b.GetAuthorId())
+			u.log.Warn("post card author missing，降级置空", "post_id", b.GetPostId(), "author_id", b.GetAuthorId())
 		}
 		cards[i] = &bffv1.PostCard{
 			PostId:    b.GetPostId(),
