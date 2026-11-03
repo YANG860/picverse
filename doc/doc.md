@@ -10,7 +10,7 @@ rednote 是一个仿小红书的图片社交论坛后端，基于 Go + ConnectRP
 | 文档 | 说明 |
 | --- | --- |
 | [general.md](general.md) | 全局约定、技术栈、架构总览、目录结构 |
-| [log.md](log.md) | 日志体系（logger 包、trace 关联、目标可观测栈） |
+| [log.md](log.md) | 日志体系（logger 包、trace 关联、分级与记录约定、目标可观测栈） |
 | [proto/proto.md](proto/proto.md) | proto 消息与错误返回规范（Result / fail / err 约定） |
 | [config/config.md](config/config.md) | 配置项参考（config.yaml） |
 
@@ -37,6 +37,12 @@ rednote 是一个仿小红书的图片社交论坛后端，基于 Go + ConnectRP
 | [packages/utils/utils.md](packages/utils/utils.md) | 工具集：雪花 ID、S3 key、协程池、JSON 解析、格式校验 |
 | [packages/defaults/defaults.md](packages/defaults/defaults.md) | 全局默认常量 |
 | [packages/errmsg/err.md](packages/errmsg/err.md) | 可枚举业务错误码 |
+| [packages/cache/cache.md](packages/cache/cache.md) | 缓存层设计（Cache-Aside + MQ 事件失效，**设计定稿待实现**） |
+
+### design — 设计稿（施工中，未实现）
+| 文档 | 说明 |
+| --- | --- |
+| [design/comment.md](design/comment.md) | 评论服务 0→1 设计：两级楼中楼、点赞、删除/封禁回收、帖子计数联动 |
 
 ### test — 测试
 | 文档 | 说明 |
@@ -49,7 +55,8 @@ rednote 是一个仿小红书的图片社交论坛后端，基于 Go + ConnectRP
 
 ## 模块完成度
 
-文档聚焦于**已实现/可用**的模块。以下模块仍在施工中，暂不展开文档：
+文档聚焦于**已实现/可用**的模块（`design/` 下为未实现模块的设计稿）。以下模块仍在施工中，暂不展开文档：
 
 
 - **redis**：仅封装了客户端与健康检查，业务接口待补全。
+- **cache**：缓存层设计已定稿（见 [packages/cache/cache.md](packages/cache/cache.md)），代码尚未实现。
