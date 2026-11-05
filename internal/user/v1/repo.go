@@ -7,6 +7,7 @@ import (
 	"rednote/gen/query"
 	media "rednote/internal/media/models"
 	models "rednote/internal/user/models"
+	"rednote/packages/cache"
 
 	"gorm.io/datatypes"
 	"gorm.io/gen"
@@ -16,7 +17,7 @@ import (
 
 // UserRepository 用户资料存储库接口
 type UserRepository interface {
-	// 使用事务
+	// WithTX 返回绑定事务的实现（事务内读写均走 tx）
 	WithTX(tx *gorm.DB) UserRepository
 
 	// ==================== 用户资料 ====================
@@ -33,6 +34,8 @@ type UserRepository interface {
 	UpdateUserAvatar(ctx context.Context, id int64, avatar *media.MediaFile) (gen.ResultInfo, error)
 	// GetUserProfiles 根据用户ID获取用户资料
 	GetUserProfiles(ctx context.Context, uids []int64) ([]*models.UserProfile, error)
+	// GetUserStat 批量获取用户统计（列裁剪：仅 id/粉丝数/关注数列；不存在的 uid 不返回）
+	GetUserStat(ctx context.Context, uids []int64) ([]*models.UserStat, error)
 	// GetFollowings 根据用户ID获取关注列表
 	GetFollowings(ctx context.Context, uid int64, before int64, limit int64) ([]*models.UserFollow, error)
 	// GetFollowers 根据用户ID获取粉丝列表（关注关系反向）
@@ -51,8 +54,9 @@ var _ UserRepository = (*UserRepoImpl)(nil)
 
 // UserRepoImpl 用户资料存储库实现
 type UserRepoImpl struct {
-	DB *gorm.DB
-	q  *query.Query
+	cache cache.UserEntityCache
+	DB    *gorm.DB
+	q     *query.Query
 }
 
 // NewUserRepo 创建 UserRepoImpl
@@ -60,6 +64,7 @@ func NewUserRepo(db *gorm.DB) *UserRepoImpl {
 	return &UserRepoImpl{DB: db, q: query.Use(db)}
 }
 
+// WithTX 返回绑定事务的实现（事务内读写均走 tx）
 func (r *UserRepoImpl) WithTX(tx *gorm.DB) UserRepository {
 	return &UserRepoImpl{DB: tx, q: query.Use(tx)}
 }
@@ -123,6 +128,32 @@ func (r *UserRepoImpl) GetUserProfiles(ctx context.Context, uids []int64) ([]*mo
 	profiles, err := r.q.UserProfile.WithContext(ctx).
 		Where(r.q.UserProfile.ID.In(uids...)).Find()
 	return profiles, err
+}
+
+// GetUserStat 批量获取用户统计：列裁剪查询（id/粉丝数/关注数），
+// 不加载其余列；不存在的 uid 不返回（与 GetUserProfiles 的部分命中语义一致）
+func (r *UserRepoImpl) GetUserStat(ctx context.Context, uids []int64) ([]*models.UserStat, error) {
+	rows, err := r.q.UserProfile.WithContext(ctx).
+		Select(
+			r.q.UserProfile.ID,
+			r.q.UserProfile.Followers,
+			r.q.UserProfile.Followings,
+		).
+		Where(r.q.UserProfile.ID.In(uids...)).
+		Find()
+	if err != nil {
+		return nil, err
+	}
+
+	stats := make([]*models.UserStat, 0, len(rows))
+	for _, row := range rows {
+		stats = append(stats, &models.UserStat{
+			ID:         row.ID,
+			Followers:  row.Followers,
+			Followings: row.Followings,
+		})
+	}
+	return stats, nil
 }
 
 func (r *UserRepoImpl) SetFollow(ctx context.Context, fanID, followingID int64) (ok bool, err error) {

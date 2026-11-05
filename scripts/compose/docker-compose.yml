@@ -1,4 +1,4 @@
-# rednote 测试容器编排：PostgreSQL + NATS JetStream + MinIO
+# rednote 测试容器编排：PostgreSQL + NATS JetStream + MinIO + Redis
 # 用法见同目录 README.md
 # 凭据从 .env 注入（参考 .env.example，真实 .env 不入库）
 name: rednote-test
@@ -58,6 +58,21 @@ services:
       timeout: 3s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    container_name: rednote-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   # 一次性初始化：创建 JetStream stream（幂等：已存在即跳过），完成后退出
   init-nats:
     image: natsio/nats-box
@@ -95,3 +110,4 @@ volumes:
   pgdata:
   natsdata:
   miniodata:
+  redisdata:

@@ -52,6 +52,23 @@ type UserFollow struct {
 	Fan *UserProfile `gorm:"foreignKey:FanID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
 }
 
+// UserStat 用户统计：统计列子集（轻路径 GetUserStat 的返回）
+type UserStat struct {
+	// ID 用户ID
+	ID int64 `json:"id"`
+	// 粉丝数
+	Followers int64 `json:"followers"`
+	// 关注数
+	Followings int64 `json:"followings"`
+}
+
+func (s *UserStat) ToProto() *userv1.UserStat {
+	if s == nil {
+		return nil
+	}
+	return &userv1.UserStat{Followers: s.Followers, Followings: s.Followings}
+}
+
 func (p *UserProfile) ToProto() *userv1.UserProfile {
 
 	metadata, _ := p.MetaData.MarshalJSON()

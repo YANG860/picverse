@@ -41,9 +41,14 @@ jetstream:
 
 redis:
   addr: "106.53.172.186:6379"
-  password: ""     # 留空——未部署 redis 容器（当前代码未实际使用 redis）
+  password: ""     # 留空；redis 容器见 scripts/compose/docker-compose.yml
   db: 0
   pool_size: 10    # 0 表示使用默认值（10）
+
+cache:
+  enabled: false   # 缓存总开关：部署 redis 容器后置 true；false 时不连接 redis，行为与无缓存一致
+  profile_ttl: 30m # 用户资料缓存 TTL（±10% 抖动防雪崩）
+  null_ttl: 60s    # 空哨兵 TTL（防穿透）
 
 jwt:
   secret: "a8de244a1570e97d9e07f9144c78ca7bfe2ed303c7846c32f1201a2d22e2184e"  # HMAC-SHA256 密钥，必填

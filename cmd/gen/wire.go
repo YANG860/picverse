@@ -20,6 +20,7 @@ import (
 	"rednote/internal/poller"
 	postv1 "rednote/internal/post/v1"
 	userv1 "rednote/internal/user/v1"
+	"rednote/packages/cache"
 	"rednote/packages/db"
 	"rednote/packages/jwt"
 	"rednote/packages/logger"
@@ -41,7 +42,8 @@ var Repos = wire.NewSet(
 	wire.Bind(new(postv1.PostRepository), new(*postv1.PostRepoImpl)),
 
 	userv1.NewUserRepo,
-	wire.Bind(new(userv1.UserRepository), new(*userv1.UserRepoImpl)),
+	userv1.NewCachedUserRepo,
+	wire.Bind(new(userv1.UserRepository), new(*userv1.CachedUserRepo)),
 
 	commonv1.NewOutBoxRepo,
 	wire.Bind(new(commonv1.OutBoxRepository), new(*commonv1.OutBoxRepoImpl)),
@@ -80,6 +82,9 @@ var Usecases = wire.NewSet(
 )
 
 var Middlewares = wire.NewSet(
+	cache.NewCache,
+	cache.NewUserEntityCache,
+	wire.Bind(new(cache.UserEntityCache), new(*cache.UserEntityCacheImpl)),
 	db.NewPG,
 	mq.NewJetStreamClient,
 	wire.Bind(new(mq.MQClient), new(*mq.JetStreamClient)),

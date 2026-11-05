@@ -15,6 +15,7 @@ type Config struct {
 	Logger    LoggerConfig    `mapstructure:"logger"`
 	JWT       JWTConfig       `mapstructure:"jwt"`
 	Redis     RedisConfig     `mapstructure:"redis"`
+	Cache     CacheConfig     `mapstructure:"cache"`
 	Services  ServicesConfig  `mapstructure:"services"`
 }
 
@@ -26,6 +27,16 @@ type ServicesConfig struct {
 	User  string `mapstructure:"user"`
 	Media string `mapstructure:"media"`
 	Post  string `mapstructure:"post"`
+}
+
+// CacheConfig 缓存层配置（packages/cache）
+type CacheConfig struct {
+	// Enabled 总开关：false 时注入 Noop（不连接 redis），行为与无缓存一致
+	Enabled bool `mapstructure:"enabled"`
+	// ProfileTTL 用户资料缓存 TTL（写入时附加 ±10% 抖动），0 使用默认 30m
+	ProfileTTL time.Duration `mapstructure:"profile_ttl"`
+	// NullTTL 空哨兵 TTL（防穿透），0 使用默认 60s
+	NullTTL time.Duration `mapstructure:"null_ttl"`
 }
 
 // RedisConfig Redis 连接配置

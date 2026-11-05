@@ -350,6 +350,68 @@ func TestGetUserProfiles(t *testing.T) {
 	})
 }
 
+// ---------- 轻路径 ----------
+// （简视图无独立查询：与 profile 共用 GetUserProfiles + ToBrief()，见 biz.GetUserBrief）
+
+func TestGetUserStat(t *testing.T) {
+	repo, db := newRepo(t)
+	ctx := context.Background()
+
+	seedProfile(t, db, uid1, "user-1", "bio-1", userv1.UserStatus_USER_STATUS_ACTIVE) // Followers 5 / Followings 7
+	seedProfile(t, db, uid2, "user-2", "bio-2", userv1.UserStatus_USER_STATUS_ACTIVE)
+
+	t.Run("批量命中且仅返回统计列", func(t *testing.T) {
+		stats, err := repo.GetUserStat(ctx, []int64{uid1, uid2})
+		require.NoError(t, err)
+		require.Len(t, stats, 2)
+
+		got := map[int64]*models.UserStat{}
+		for _, s := range stats {
+			got[s.ID] = s
+		}
+		assert.Equal(t, int64(5), got[uid1].Followers)
+		assert.Equal(t, int64(7), got[uid1].Followings)
+		assert.Equal(t, int64(5), got[uid2].Followers)
+	})
+
+	t.Run("关注/取关后计数实时可见", func(t *testing.T) {
+		_, err := repo.SetFollow(ctx, uid1, uid2)
+		require.NoError(t, err)
+
+		stats, err := repo.GetUserStat(ctx, []int64{uid1, uid2})
+		require.NoError(t, err)
+		got := map[int64]*models.UserStat{}
+		for _, s := range stats {
+			got[s.ID] = s
+		}
+		assert.Equal(t, int64(8), got[uid1].Followings, "fan 关注数 +1")
+		assert.Equal(t, int64(6), got[uid2].Followers, "被关注者粉丝数 +1")
+
+		require.NoError(t, repo.SetUnFollow(ctx, uid1, uid2))
+		stats, err = repo.GetUserStat(ctx, []int64{uid1, uid2})
+		require.NoError(t, err)
+		got = map[int64]*models.UserStat{}
+		for _, s := range stats {
+			got[s.ID] = s
+		}
+		assert.Equal(t, int64(7), got[uid1].Followings)
+		assert.Equal(t, int64(5), got[uid2].Followers)
+	})
+
+	t.Run("部分不存在只返回命中的", func(t *testing.T) {
+		stats, err := repo.GetUserStat(ctx, []int64{uid1, 999999})
+		require.NoError(t, err)
+		require.Len(t, stats, 1)
+		assert.Equal(t, uid1, stats[0].ID)
+	})
+
+	t.Run("空入参返回空集", func(t *testing.T) {
+		stats, err := repo.GetUserStat(ctx, []int64{})
+		require.NoError(t, err)
+		assert.Empty(t, stats)
+	})
+}
+
 // ---------- 事务 ----------
 
 func TestWithTX(t *testing.T) {

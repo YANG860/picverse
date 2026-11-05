@@ -311,6 +311,7 @@ func (u *UserUsecaseImpl) GetUserBrief(ctx context.Context, req *userv1.GetUserB
 		}
 	}
 
+	// 简视图与资料共用缓存和查询：走 GetUserProfiles（cache-aside）后由 ToBrief() 派生
 	profiles, err := u.Repo.GetUserProfiles(ctx, uids)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user profiles: %w", err)
