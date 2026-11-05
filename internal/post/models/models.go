@@ -98,6 +98,41 @@ func (PostMedia) TableName() string {
 	return "post_medias"
 }
 
+// PostLike 帖子点赞明细
+// 一行 = 一个用户对一个帖子的点赞；明细为准，like_count = 该帖的行数
+// 同事务维护 posts.like_count（强一致），唯一约束 uk_post_likes_post_user 幂等锚点
+
+type PostLike struct {
+	common.BaseModel
+
+	// PostID 帖子ID
+	PostID int64 `gorm:"type:bigint;not null;uniqueIndex:uk_post_likes_post_user,priority:1;index:idx_post_likes_user;comment:帖子ID" json:"post_id"`
+	// UserID 点赞者ID
+	UserID int64 `gorm:"type:bigint;not null;uniqueIndex:uk_post_likes_post_user,priority:2;comment:点赞者ID" json:"user_id"`
+}
+
+// TableName 指定表名
+func (PostLike) TableName() string {
+	return "post_likes"
+}
+
+// PostFavourite 帖子收藏明细
+// 与 PostLike 同构；明细为准，favourite_count = 该帖的行数
+
+type PostFavourite struct {
+	common.BaseModel
+
+	// PostID 帖子ID
+	PostID int64 `gorm:"type:bigint;not null;uniqueIndex:uk_post_favourites_post_user,priority:1;index:idx_post_favourites_user;comment:帖子ID" json:"post_id"`
+	// UserID 收藏者ID
+	UserID int64 `gorm:"type:bigint;not null;uniqueIndex:uk_post_favourites_post_user,priority:2;comment:收藏者ID" json:"user_id"`
+}
+
+// TableName 指定表名
+func (PostFavourite) TableName() string {
+	return "post_favourites"
+}
+
 func (p *PostDetail) ToBrief() *postv1.PostBrief {
 	if p == nil {
 		return nil
