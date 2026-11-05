@@ -11,7 +11,7 @@
 | 错误约定 | `fail` + `common.v1.Error`（可枚举错误码），连接层错误走原始 gRPC 错误 | `fail` + `common.v1.Error`；**连接层错误不外泄**：内部记录日志后返回 `InternalError`（见下文“错误处理”） |
 | 分页 | 相同：`common.v1.Cursor`，空页返回空列表 + 空游标 | 相同 |
 
-## 接口（BFFService，规划 25 rpc；proto 现定义 23 个，其余待定稿）
+## 接口（BFFService，规划 26 rpc；proto 现定义 24 个，其余待定稿）
 
 | 域 | rpc | 下游调用 | 聚合职责 |
 | --- | --- | --- | --- |
@@ -19,6 +19,7 @@
 | 认证 | Login | auth.Login | 透传 platform |
 | 认证 | RefreshTokens | auth.GetAccessToken（+ 临近过期时 auth.GetRefreshToken） | refresh token 请求体直传；始终换 access，仅剩余寿命 < 1/2 总寿命时才轮换 refresh（响应总是回填当前有效值） |
 | 认证 | Logout | auth.Logout | uid 来自会话；全平台登出（web/mobile 的 refresh 登录态同事务失效） |
+| 认证 | ChangePassword | auth.ChangePassword | uid 来自会话；校验旧密码换写新密码；成功后全端下线（含当前会话，双平台 refresh 登录态同事务失效），响应不签发令牌，客户端跳登录 |
 | 用户 | GetMyProfile | user.GetUserProfile | 透传 |
 | 用户 | GetUserProfile | user.GetUserProfile + user.GetFollowingRelation | 组装 `ProfileView`（含关注关系） |
 | 用户 | UpdateMyProfile | user.UpdateUserProfile | 部分更新透传 |
@@ -91,11 +92,11 @@ BFF 由于面向前端，**不返回连接层 error**：下游连接层错误（
 
 ## 状态
 
-`internal/bff/v1/`（proto 现定义 23 rpc 全部实现：auth 4 + user 9 + media 2 + post 8；单测 `biz_auth_test.go` / `biz_media_test.go` / `biz_user_test.go` / `biz_post_test.go` 覆盖 auth/media/user/post 四域）：
+`internal/bff/v1/`（proto 现定义 24 rpc 全部实现：auth 5 + user 9 + media 2 + post 8；单测 `biz_auth_test.go` / `biz_media_test.go` / `biz_user_test.go` / `biz_post_test.go` 覆盖 auth/media/user/post 四域）：
 
 - `service.go`：BFFServiceHandler 实现全部 rpc 并委托 biz 层
 - `biz.go`：`BFFUsecase` 接口 + `BFFUsecaseImpl`，身份经 `sessionUID`（jwt claims）注入：
-  - 已实现：Register（成功不签发令牌，需另行 Login；后续步骤失败回滚账户与头像计数）、Login、RefreshTokens、Logout、UploadMedia、
+  - 已实现：Register（成功不签发令牌，需另行 Login；后续步骤失败回滚账户与头像计数）、Login、RefreshTokens、Logout、ChangePassword（改密后全端下线）、UploadMedia、
     GetMyProfile、GetUserProfile（并行聚合 ProfileView）、UpdateMyProfile、UpdateMyAvatar
     （归属校验 + 引用计数挂载/卸载/回滚）、Follow、Unfollow、GetFollowingList、GetFollowerList、GetFollowRelation、
     CreateDraft / UpdateDraft / UpdateDraftMedias / PublishDraft / DeletePost

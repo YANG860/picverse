@@ -180,3 +180,104 @@ func TestAuthServiceE2E(t *testing.T) {
 	assertBizErr(t, afterOut.Msg.GetFail(), afterOut.Msg.GetErr(), errmsg.Unauthorized,
 		"登出后 refresh token 应失效")
 }
+
+// TestAuthServiceE2EChangePassword 修改密码黑盒链路：
+//
+//	注册 → 双端登录 → 旧密码错误/新密码弱被拒 → 改密成功 → 双端旧 refresh 失效
+//	→ 旧密码不可登录 → 新密码可登录
+func TestAuthServiceE2EChangePassword(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e: -short 模式跳过依赖外部部署服务的测试")
+	}
+
+	client := newAuthClient(t)
+	email := e2eEmail()
+	ctx := context.Background()
+	newPassword := "ChangedPw0rd!2026"
+
+	// ---- 1. 注册并双端登录 ----
+	reg, err := client.Register(ctx,
+		connect.NewRequest(&authv1.RegisterRequest{
+			Credential: &authv1.Credential{Email: email, Password: e2ePassword},
+			Role:       authv1.Role_ROLE_USER,
+		}))
+	require.NoError(t, err, "Register RPC")
+	require.False(t, reg.Msg.GetFail(), "注册业务失败: %v", reg.Msg.GetErr())
+	uid := reg.Msg.GetAssignedId()
+	require.NotEmpty(t, uid)
+
+	loginWeb, err := client.Login(ctx,
+		connect.NewRequest(&authv1.LoginRequest{
+			Credential: &authv1.Credential{Email: email, Password: e2ePassword},
+			Platform:   authv1.Platform_PLATFORM_WEB,
+		}))
+	require.NoError(t, err, "web 登录 RPC")
+	require.False(t, loginWeb.Msg.GetFail(), "web 登录失败: %v", loginWeb.Msg.GetErr())
+	refreshWeb := loginWeb.Msg.GetRefreshToken().GetValue()
+
+	loginMobile, err := client.Login(ctx,
+		connect.NewRequest(&authv1.LoginRequest{
+			Credential: &authv1.Credential{Email: email, Password: e2ePassword},
+			Platform:   authv1.Platform_PLATFORM_MOBILE,
+		}))
+	require.NoError(t, err, "mobile 登录 RPC")
+	require.False(t, loginMobile.Msg.GetFail(), "mobile 登录失败: %v", loginMobile.Msg.GetErr())
+	refreshMobile := loginMobile.Msg.GetRefreshToken().GetValue()
+
+	// ---- 2. 旧密码错误 → IncorrectCredential ----
+	badOld, err := client.ChangePassword(ctx,
+		connect.NewRequest(&authv1.ChangePasswordRequest{
+			Uid: uid, OldPassword: "WrongPass0rd!", NewPassword: newPassword,
+		}))
+	require.NoError(t, err, "旧密码错误 ChangePassword RPC")
+	assertBizErr(t, badOld.Msg.GetFail(), badOld.Msg.GetErr(), errmsg.IncorrectCredential, "旧密码错误改密")
+
+	// ---- 3. 新密码弱 → InvalidPassword ----
+	weakNew, err := client.ChangePassword(ctx,
+		connect.NewRequest(&authv1.ChangePasswordRequest{
+			Uid: uid, OldPassword: e2ePassword, NewPassword: "weak",
+		}))
+	require.NoError(t, err, "弱新密码 ChangePassword RPC")
+	assertBizErr(t, weakNew.Msg.GetFail(), weakNew.Msg.GetErr(), errmsg.InvalidPassword, "弱新密码改密")
+
+	// ---- 4. 改密成功（身份由请求体直传 uid）----
+	ok, err := client.ChangePassword(ctx,
+		connect.NewRequest(&authv1.ChangePasswordRequest{
+			Uid: uid, OldPassword: e2ePassword, NewPassword: newPassword,
+		}))
+	require.NoError(t, err, "ChangePassword RPC")
+	require.False(t, ok.Msg.GetFail(), "改密业务失败: %v", ok.Msg.GetErr())
+	assert.Nil(t, ok.Msg.GetErr(), "成功响应不应携带错误码")
+
+	// ---- 5. 双端旧 refresh token 全部失效（改密即全端下线）----
+	staleWeb, err := client.GetRefreshToken(ctx,
+		connect.NewRequest(&authv1.GetRefreshTokenRequest{RefreshToken: refreshWeb}))
+	require.NoError(t, err, "改密后 web 轮换 RPC")
+	assertBizErr(t, staleWeb.Msg.GetFail(), staleWeb.Msg.GetErr(), errmsg.Unauthorized,
+		"改密后 web refresh token 应失效")
+
+	staleMobile, err := client.GetRefreshToken(ctx,
+		connect.NewRequest(&authv1.GetRefreshTokenRequest{RefreshToken: refreshMobile}))
+	require.NoError(t, err, "改密后 mobile 轮换 RPC")
+	assertBizErr(t, staleMobile.Msg.GetFail(), staleMobile.Msg.GetErr(), errmsg.Unauthorized,
+		"改密后 mobile refresh token 应失效")
+
+	// ---- 6. 旧密码不可登录 ----
+	oldLogin, err := client.Login(ctx,
+		connect.NewRequest(&authv1.LoginRequest{
+			Credential: &authv1.Credential{Email: email, Password: e2ePassword},
+			Platform:   authv1.Platform_PLATFORM_WEB,
+		}))
+	require.NoError(t, err, "旧密码登录 RPC")
+	assertBizErr(t, oldLogin.Msg.GetFail(), oldLogin.Msg.GetErr(), errmsg.IncorrectCredential, "旧密码登录")
+
+	// ---- 7. 新密码可重新登录 ----
+	newLogin, err := client.Login(ctx,
+		connect.NewRequest(&authv1.LoginRequest{
+			Credential: &authv1.Credential{Email: email, Password: newPassword},
+			Platform:   authv1.Platform_PLATFORM_WEB,
+		}))
+	require.NoError(t, err, "新密码登录 RPC")
+	require.False(t, newLogin.Msg.GetFail(), "新密码应可登录: %v", newLogin.Msg.GetErr())
+	assert.NotEmpty(t, newLogin.Msg.GetRefreshToken().GetValue(), "新密码登录应签发 refresh token")
+}

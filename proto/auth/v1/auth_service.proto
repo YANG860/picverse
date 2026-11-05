@@ -15,6 +15,8 @@ service AuthService {
   rpc GetAccessToken(GetAccessTokenRequest) returns (GetAccessTokenResponse) {}
   // 强制登出
   rpc Logout(LogoutRequest) returns (LogoutResponse) {}
+  // 修改密码（内部接口：uid 由 BFF 从会话解析后注入），成功后失效两平台登录态
+  rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse) {}
 
   // 删除账户（内部接口：BFF 注册编排回滚用，不经 BFF 面客）
   rpc DeleteAccount(DeleteAccountRequest) returns (DeleteAccountResponse) {}

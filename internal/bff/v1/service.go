@@ -51,6 +51,12 @@ func (s *BFFServiceHandler) Logout(ctx context.Context, req *connect.Request[bff
 	return connect.NewResponse(resp), err
 }
 
+// ChangePassword 修改密码（uid 来自会话；成功后全部设备下线，需重新登录）
+func (s *BFFServiceHandler) ChangePassword(ctx context.Context, req *connect.Request[bffv1.ChangePasswordRequest]) (*connect.Response[bffv1.ChangePasswordResponse], error) {
+	resp, err := s.Biz.ChangePassword(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
 func (s *BFFServiceHandler) UploadMedia(ctx context.Context, req *connect.Request[bffv1.UploadMediaRequest]) (*connect.Response[bffv1.UploadMediaResponse], error) {
 	resp, err := s.Biz.UploadMedia(ctx, req.Msg)
 	return connect.NewResponse(resp), err

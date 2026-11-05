@@ -653,6 +653,10 @@ func TestBFFE2EAuthMatrix(t *testing.T) {
 			r, err := client.Logout(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.LogoutRequest{}), tok))
 			return r.Msg.GetFail(), r.Msg.GetErr(), err
 		}},
+		{"ChangePassword", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.ChangePassword(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.ChangePasswordRequest{OldPassword: "OldPassw0rd", NewPassword: "NewPassw0rd"}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
 	}
 
 	t.Run("免会话契约固化：GetMediaAssetStatus 无 token 可查（只读轮询设计）", func(t *testing.T) {
@@ -672,6 +676,67 @@ func TestBFFE2EAuthMatrix(t *testing.T) {
 			})
 		}
 	}
+}
+
+// TestBFFE2EChangePassword E8 补充：修改密码契约——uid 来自会话，成功后全端下线（旧 refresh 失效）
+func TestBFFE2EChangePassword(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e: -short 模式跳过依赖外部部署服务的测试")
+	}
+	client := newBFFClient(t)
+	media := newMediaProbe(t)
+	requireDefaultAvatar(t, media)
+	ctx := context.Background()
+	email := e2eBFFEmail("changepw")
+	newPassword := "ChangedPw0rd!2026"
+
+	reg, err := client.Register(ctx, connect.NewRequest(&bffv1.RegisterRequest{
+		Email: email, Password: e2ePassword, Name: "e2e-changepw",
+	}))
+	require.NoError(t, err, "Register RPC")
+	require.False(t, reg.Msg.GetFail(), "注册应成功: %v", reg.Msg.GetErr())
+
+	login, err := client.Login(ctx, connect.NewRequest(&bffv1.LoginRequest{Email: email, Password: e2ePassword}))
+	require.NoError(t, err, "Login RPC")
+	require.False(t, login.Msg.GetFail(), "登录应成功: %v", login.Msg.GetErr())
+	access := login.Msg.GetAccessToken().GetValue()
+	refresh := login.Msg.GetRefreshToken().GetValue()
+
+	// ---- 旧密码错误 → IncorrectCredential ----
+	badOld, err := client.ChangePassword(ctx, withBearer(connect.NewRequest(&bffv1.ChangePasswordRequest{
+		OldPassword: "WrongPassw0rd!", NewPassword: newPassword,
+	}), access))
+	require.NoError(t, err, "旧密码错误 ChangePassword RPC")
+	assertBizErr(t, badOld.Msg.GetFail(), badOld.Msg.GetErr(), errmsg.IncorrectCredential, "旧密码错误改密")
+
+	// ---- 新密码弱 → InvalidPassword（validate 仅 min_len，强度在业务层）----
+	weakNew, err := client.ChangePassword(ctx, withBearer(connect.NewRequest(&bffv1.ChangePasswordRequest{
+		OldPassword: e2ePassword, NewPassword: "weak",
+	}), access))
+	require.NoError(t, err, "弱新密码 ChangePassword RPC")
+	assertBizErr(t, weakNew.Msg.GetFail(), weakNew.Msg.GetErr(), errmsg.InvalidPassword, "弱新密码改密")
+
+	// ---- 改密成功（uid 来自会话）----
+	ok, err := client.ChangePassword(ctx, withBearer(connect.NewRequest(&bffv1.ChangePasswordRequest{
+		OldPassword: e2ePassword, NewPassword: newPassword,
+	}), access))
+	require.NoError(t, err, "ChangePassword RPC")
+	require.False(t, ok.Msg.GetFail(), "改密应成功: %v", ok.Msg.GetErr())
+	assert.Nil(t, ok.Msg.GetErr(), "成功响应不应携带错误码")
+
+	// ---- 全端下线：旧 refresh 失效 ----
+	after, err := client.RefreshTokens(ctx, withBearer(connect.NewRequest(&bffv1.RefreshTokensRequest{}), refresh))
+	require.NoError(t, err, "改密后 RefreshTokens RPC")
+	assertBizErr(t, after.Msg.GetFail(), after.Msg.GetErr(), errmsg.Unauthorized, "改密后旧 refresh 应失效")
+
+	// ---- 旧密码不可登录，新密码可登录 ----
+	oldLogin, err := client.Login(ctx, connect.NewRequest(&bffv1.LoginRequest{Email: email, Password: e2ePassword}))
+	require.NoError(t, err, "旧密码登录 RPC")
+	assertBizErr(t, oldLogin.Msg.GetFail(), oldLogin.Msg.GetErr(), errmsg.IncorrectCredential, "旧密码登录")
+
+	newLogin, err := client.Login(ctx, connect.NewRequest(&bffv1.LoginRequest{Email: email, Password: newPassword}))
+	require.NoError(t, err, "新密码登录 RPC")
+	require.False(t, newLogin.Msg.GetFail(), "新密码应可登录: %v", newLogin.Msg.GetErr())
 }
 
 // ==================== E9 错误契约矩阵 ====================

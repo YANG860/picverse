@@ -671,3 +671,137 @@ func TestAuthUsecase_DeleteAccount(t *testing.T) {
 		assert.Equal(t, errmsg.NotFound, again.GetErr())
 	})
 }
+
+// ---------- ChangePassword ----------
+
+func TestAuthUsecase_ChangePassword(t *testing.T) {
+	// newTestPassword 合法新密码样本（与 testPassword 不同）
+	const newTestPassword = "NewPassw0rd!"
+
+	changeReq := func(uid int64, oldPw, newPw string) *authv1.ChangePasswordRequest {
+		return &authv1.ChangePasswordRequest{
+			Uid:         strconv.FormatInt(uid, 10),
+			OldPassword: oldPw,
+			NewPassword: newPw,
+		}
+	}
+
+	t.Run("UID 为空/非法返回 InvalidID", func(t *testing.T) {
+		uc, _, _ := newUsecase(t)
+
+		resp, err := uc.ChangePassword(context.Background(), &authv1.ChangePasswordRequest{OldPassword: testPassword, NewPassword: newTestPassword})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
+
+		resp, err = uc.ChangePassword(context.Background(), &authv1.ChangePasswordRequest{Uid: "not-a-number", OldPassword: testPassword, NewPassword: newTestPassword})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidID, resp.GetErr())
+	})
+
+	t.Run("新密码弱返回 InvalidPassword", func(t *testing.T) {
+		uc, db, _ := newUsecase(t)
+		seedUser(t, db, bizUID1, emailOf(bizUID1), testPassword, authv1.Role_ROLE_USER)
+
+		resp, err := uc.ChangePassword(context.Background(), changeReq(bizUID1, testPassword, "weak"))
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InvalidPassword, resp.GetErr())
+	})
+
+	t.Run("账户不存在返回 IncorrectCredential", func(t *testing.T) {
+		uc, _, _ := newUsecase(t)
+
+		resp, err := uc.ChangePassword(context.Background(), changeReq(bizUID1, testPassword, newTestPassword))
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.IncorrectCredential, resp.GetErr())
+	})
+
+	t.Run("旧密码错误返回 IncorrectCredential 且不改密", func(t *testing.T) {
+		uc, db, _ := newUsecase(t)
+		seedUser(t, db, bizUID1, emailOf(bizUID1), testPassword, authv1.Role_ROLE_USER)
+
+		var before auth.UserCredential
+		require.NoError(t, db.Where("id = ?", bizUID1).First(&before).Error)
+
+		resp, err := uc.ChangePassword(context.Background(), changeReq(bizUID1, "WrongPassw0rd", newTestPassword))
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.IncorrectCredential, resp.GetErr())
+
+		var after auth.UserCredential
+		require.NoError(t, db.Where("id = ?", bizUID1).First(&after).Error)
+		assert.Equal(t, before.PasswordHash, after.PasswordHash, "旧密码错误时不应改写哈希")
+	})
+
+	t.Run("改密成功：哈希更新且双端登录态失效", func(t *testing.T) {
+		// Arrange：web 与 mobile 各登录一次
+		uc, db, _ := newUsecase(t)
+		seedUser(t, db, bizUID1, emailOf(bizUID1), testPassword, authv1.Role_ROLE_USER)
+		_, webToken, webClaims := mustLogin(t, uc, bizUID1, authv1.Platform_PLATFORM_WEB)
+		_, mobileToken, mobileClaims := mustLogin(t, uc, bizUID1, authv1.Platform_PLATFORM_MOBILE)
+
+		// Act
+		resp, err := uc.ChangePassword(context.Background(), changeReq(bizUID1, testPassword, newTestPassword))
+		require.NoError(t, err)
+		assert.False(t, resp.GetFail())
+		assert.Nil(t, resp.GetErr())
+
+		// Assert：哈希已换写为新密码
+		var got auth.UserCredential
+		require.NoError(t, db.Where("id = ?", bizUID1).First(&got).Error)
+		assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(got.PasswordHash), []byte(newTestPassword)), "哈希应对应新密码")
+
+		// 双端登录态被置为占位值
+		assert.NotEqual(t, webClaims.ID, got.RefreshTokenIDWeb, "web 登录态应被置为占位值")
+		assert.NotEqual(t, mobileClaims.ID, got.RefreshTokenIDMobile, "mobile 登录态应被置为占位值")
+
+		// 双端旧 refresh token 均无法再刷新
+		webResp, err := uc.GetRefreshToken(context.Background(), &authv1.GetRefreshTokenRequest{RefreshToken: webToken})
+		require.NoError(t, err)
+		assert.True(t, webResp.GetFail())
+		assert.Equal(t, errmsg.Unauthorized, webResp.GetErr())
+
+		mobileResp, err := uc.GetRefreshToken(context.Background(), &authv1.GetRefreshTokenRequest{RefreshToken: mobileToken})
+		require.NoError(t, err)
+		assert.True(t, mobileResp.GetFail())
+		assert.Equal(t, errmsg.Unauthorized, mobileResp.GetErr())
+
+		// 旧密码不可登录
+		oldLogin, err := uc.Login(context.Background(), &authv1.LoginRequest{
+			Credential: &authv1.Credential{Email: emailOf(bizUID1), Password: testPassword},
+			Platform:   authv1.Platform_PLATFORM_WEB,
+		})
+		require.NoError(t, err)
+		assert.True(t, oldLogin.GetFail())
+		assert.Equal(t, errmsg.IncorrectCredential, oldLogin.GetErr())
+
+		// 新密码可重新登录
+		newLogin, err := uc.Login(context.Background(), &authv1.LoginRequest{
+			Credential: &authv1.Credential{Email: emailOf(bizUID1), Password: newTestPassword},
+			Platform:   authv1.Platform_PLATFORM_WEB,
+		})
+		require.NoError(t, err)
+		assert.False(t, newLogin.GetFail(), "新密码应可登录: %v", newLogin.GetErr())
+	})
+
+	t.Run("新旧密码相同允许成功", func(t *testing.T) {
+		uc, db, _ := newUsecase(t)
+		seedUser(t, db, bizUID2, emailOf(bizUID2), testPassword, authv1.Role_ROLE_USER)
+
+		resp, err := uc.ChangePassword(context.Background(), changeReq(bizUID2, testPassword, testPassword))
+		require.NoError(t, err)
+		assert.False(t, resp.GetFail())
+		assert.Nil(t, resp.GetErr())
+
+		// 哈希已重新生成（仍对应同一明文），原密码可继续登录
+		login, err := uc.Login(context.Background(), &authv1.LoginRequest{
+			Credential: &authv1.Credential{Email: emailOf(bizUID2), Password: testPassword},
+			Platform:   authv1.Platform_PLATFORM_WEB,
+		})
+		require.NoError(t, err)
+		assert.False(t, login.GetFail(), "相同密码改密后仍应可登录: %v", login.GetErr())
+	})
+}

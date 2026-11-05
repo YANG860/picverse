@@ -16,6 +16,7 @@ type BFFUsecase interface {
 	Login(ctx context.Context, req *bffv1.LoginRequest) (*bffv1.LoginResponse, error)
 	RefreshTokens(ctx context.Context, req *bffv1.RefreshTokensRequest) (*bffv1.RefreshTokensResponse, error)
 	Logout(ctx context.Context, req *bffv1.LogoutRequest) (*bffv1.LogoutResponse, error)
+	ChangePassword(ctx context.Context, req *bffv1.ChangePasswordRequest) (*bffv1.ChangePasswordResponse, error)
 	// ==================== 用户 ====================
 	GetMyProfile(ctx context.Context, req *bffv1.GetMyProfileRequest) (*bffv1.GetMyProfileResponse, error)
 	GetUserProfile(ctx context.Context, req *bffv1.GetUserProfileRequest) (*bffv1.GetUserProfileResponse, error)

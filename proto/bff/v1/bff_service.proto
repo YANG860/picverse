@@ -26,6 +26,8 @@ service BFFService {
   rpc Logout(LogoutRequest) returns (LogoutResponse);
   // 刷新
   rpc RefreshTokens(RefreshTokensRequest) returns (RefreshTokensResponse);
+  // 修改密码（uid 来自会话；成功后全部设备下线，需重新登录）
+  rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse);
   // ==================== 用户 ====================
 
   // 我的主页资料（uid 来自会话）

@@ -25,6 +25,7 @@
 | `GetRefreshToken` | 无条件换发新 refresh token（请求体直传 refresh token 串，验签 + jti 轮换校验） |
 | `GetAccessToken` | 无条件换发新 access token（同上，不轮换 refresh 登录态） |
 | `Logout` | 强制登出（`uid` 由 BFF 从会话注入；失效两个平台的 refresh token） |
+| `ChangePassword` | 修改密码（内部接口：`uid` 由 BFF 从会话注入；校验旧密码后换写新密码，同事务失效两平台登录态） |
 | `DeleteAccount` | 删除账户（内部接口：BFF 注册编排回滚用，不经 BFF 面客；物理删除注册记录，一并失效两平台登录态） |
 
 ## 关键逻辑
@@ -52,6 +53,13 @@
 - 身份由请求体 `uid` 直传（BFF 从会话解析后注入，内网互信）；面客侧的越权防护由 BFF 会话鉴权保证。
 - 在**同一事务**内把两个平台的 `RefreshTokenID*` 置为占位值（新生成的雪花 ID），立即失效。
 
+### ChangePassword
+- 身份由请求体 `uid` 直传（同 Logout，内网互信）；新旧密码允许相同（不额外校验）。
+1. 校验新密码强度（同 Register：8–32 位含大小写字母与数字），不合规返回 `InvalidPassword`。
+2. `GetCredentialByUID` 查凭据；查无返回 `IncorrectCredential`（与 Login 口径一致，不泄露账号存在性）。
+3. `bcrypt.CompareHashAndPassword` 比对旧密码；不匹配返回 `IncorrectCredential`，且不改写哈希。
+4. 在**同一事务**内换写 `PasswordHash` 并把两个平台的 `RefreshTokenID*` 置为占位值——改密即全端下线（含当前会话），全部设备需重新登录。
+
 ## 依赖
 
 - `jwt.Manager` — 签发/校验 token（见 [packages/jwt/jwt.md](../../packages/jwt/jwt.md)）
@@ -61,4 +69,4 @@
 
 ## 状态
 
-核心功能（注册/登录/换发/登出）**已实现**，含单元测试与 E2E 测试。
+核心功能（注册/登录/换发/登出/改密）**已实现**，含单元测试与 E2E 测试。

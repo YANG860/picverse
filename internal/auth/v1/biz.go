@@ -22,6 +22,7 @@ type AuthUsecase interface {
 	GetRefreshToken(context.Context, *authv1.GetRefreshTokenRequest) (*authv1.GetRefreshTokenResponse, error)
 	GetAccessToken(context.Context, *authv1.GetAccessTokenRequest) (*authv1.GetAccessTokenResponse, error)
 	Logout(context.Context, *authv1.LogoutRequest) (*authv1.LogoutResponse, error)
+	ChangePassword(context.Context, *authv1.ChangePasswordRequest) (*authv1.ChangePasswordResponse, error)
 	DeleteAccount(context.Context, *authv1.DeleteAccountRequest) (*authv1.DeleteAccountResponse, error)
 }
 
@@ -284,6 +285,66 @@ func (u *AuthUsecaseImpl) Logout(ctx context.Context, req *authv1.LogoutRequest)
 	}
 
 	return &authv1.LogoutResponse{}, nil
+}
+
+// ChangePassword 修改密码：校验旧密码后换写新密码，并同事务失效两平台 refresh 登录态
+// （含当前会话，全部设备需重新登录，对齐安全惯例）。
+// 身份由内部 RPC 请求体 uid 直传（BFF 从会话解析后注入，内网互信）；
+// 新旧密码允许相同（不额外校验，仅为换密）。
+func (u *AuthUsecaseImpl) ChangePassword(ctx context.Context, req *authv1.ChangePasswordRequest) (*authv1.ChangePasswordResponse, error) {
+	uid, err := snowflake.ParseString(req.GetUid())
+	if err != nil {
+		return &authv1.ChangePasswordResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+	if !utils.ValidatePassword(req.GetNewPassword()) {
+		return &authv1.ChangePasswordResponse{Fail: true, Err: errmsg.InvalidPassword}, nil
+	}
+
+	credential, err := u.Repo.GetCredentialByUID(ctx, uid.Int64())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get credential: %w", err)
+	}
+	if credential == nil {
+		// 与 Login 口径一致，不泄露账号存在性
+		return &authv1.ChangePasswordResponse{Fail: true, Err: errmsg.IncorrectCredential}, nil
+	}
+
+	// 参数顺序为 (hash, 明文密码)
+	err = bcrypt.CompareHashAndPassword(
+		[]byte(credential.PasswordHash),
+		[]byte(req.GetOldPassword()),
+	)
+	if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+		return &authv1.ChangePasswordResponse{Fail: true, Err: errmsg.IncorrectCredential}, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("failed to compare password: %w", err)
+	}
+
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.GetNewPassword()), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, fmt.Errorf("failed to hash password: %w", err)
+	}
+	placeholder := utils.GenID().String()
+
+	// 同一事务内换写密码并失效两平台登录态：改密即全端下线，避免旧登录态残留
+	err = u.DB.Transaction(func(tx *gorm.DB) error {
+		repo := u.Repo.WithTX(tx)
+		if _, err := repo.UpdatePasswordHash(ctx, credential.ID, string(hashedPassword)); err != nil {
+			return fmt.Errorf("failed to update password hash: %w", err)
+		}
+		if _, err := repo.SetRefreshTokenIDMobile(ctx, credential.ID, placeholder); err != nil {
+			return fmt.Errorf("failed to invalidate mobile refresh token ID: %w", err)
+		}
+		if _, err := repo.SetRefreshTokenIDWeb(ctx, credential.ID, placeholder); err != nil {
+			return fmt.Errorf("failed to invalidate web refresh token ID: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to change password: %w", err)
+	}
+
+	return &authv1.ChangePasswordResponse{}, nil
 }
 
 // DeleteAccount 删除账户：物理删除注册记录，一并失效其 web/mobile refresh 登录态（删行即失效）。

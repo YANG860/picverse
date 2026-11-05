@@ -66,6 +66,22 @@ message LogoutResponse {
   common.v1.Error err = 2;
 }
 
+// ChangePasswordRequest 修改密码（内部接口：uid 由 BFF 从会话解析后注入，内网互信）。
+// 成功后同事务失效 web/mobile 两平台 refresh 登录态（含当前会话），全部设备需重新登录。
+message ChangePasswordRequest {
+  // 会话 uid，由 BFF 从会话解析后注入（内部 RPC 直传）
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  // 旧密码（明文，比对 bcrypt 哈希）
+  string old_password = 2 [(buf.validate.field).string.min_len = 1];
+  // 新密码（明文，强度校验同 Register：8~32 位含大小写字母与数字）
+  string new_password = 3 [(buf.validate.field).string.min_len = 1];
+}
+
+message ChangePasswordResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+}
+
 // DeleteAccountRequest 删除账户（内部接口：BFF 注册编排回滚用，不经 BFF 面客）。
 // 物理删除注册记录，一并失效其 web/mobile refresh 登录态。
 message DeleteAccountRequest {

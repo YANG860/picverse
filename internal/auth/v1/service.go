@@ -84,6 +84,18 @@ func (s *AuthServiceHandler) Logout(
 	return connect.NewResponse(resp), nil
 }
 
+// ChangePassword 修改密码（内部接口：uid 由 BFF 从会话解析后注入）
+func (s *AuthServiceHandler) ChangePassword(
+	ctx context.Context,
+	req *connect.Request[v1.ChangePasswordRequest],
+) (*connect.Response[v1.ChangePasswordResponse], error) {
+	resp, err := s.Biz.ChangePassword(ctx, req.Msg)
+	if err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(resp), nil
+}
+
 // DeleteAccount 删除账户（内部接口：BFF 注册编排回滚用）
 func (s *AuthServiceHandler) DeleteAccount(
 	ctx context.Context,

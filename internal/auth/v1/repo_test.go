@@ -184,6 +184,31 @@ func TestGetCredentialByUID(t *testing.T) {
 	})
 }
 
+// ---------- UpdatePasswordHash ----------
+
+func TestUpdatePasswordHash(t *testing.T) {
+	repo, db := newRepo(t)
+	ctx := context.Background()
+
+	seedCredential(t, db, userID1, "changepw@example.com", "old-hash", authv1.Role_ROLE_USER)
+
+	t.Run("更新成功", func(t *testing.T) {
+		info, err := repo.UpdatePasswordHash(ctx, userID1, "new-hash")
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), info.RowsAffected)
+
+		var got auth.UserCredential
+		require.NoError(t, db.Where("id = ?", userID1).First(&got).Error)
+		assert.Equal(t, "new-hash", got.PasswordHash)
+	})
+
+	t.Run("用户不存在时更新 0 行", func(t *testing.T) {
+		info, err := repo.UpdatePasswordHash(ctx, 999999, "new-hash")
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), info.RowsAffected)
+	})
+}
+
 // ---------- 事务 ----------
 
 func TestWithTX(t *testing.T) {

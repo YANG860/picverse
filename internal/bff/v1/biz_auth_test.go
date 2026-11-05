@@ -36,21 +36,26 @@ type fakeAuthClient struct {
 	refreshErr  *commonv1.Error
 	logoutErr   *commonv1.Error
 
+	changePasswordErr *commonv1.Error
+
 	registerRPCErr error
 	loginRPCErr    error
 	accessRPCErr   error
 	refreshRPCErr  error
 	logoutRPCErr   error
 
+	changePasswordRPCErr error
+
 	deleteAccountErr    *commonv1.Error
 	deleteAccountRPCErr error
 
-	gotRegister      *authv1.RegisterRequest
-	gotLogin         *authv1.LoginRequest
-	gotAccess        *authv1.GetAccessTokenRequest
-	gotRefresh       *authv1.GetRefreshTokenRequest
-	gotLogout        *authv1.LogoutRequest
-	gotDeleteAccount *authv1.DeleteAccountRequest
+	gotRegister       *authv1.RegisterRequest
+	gotLogin          *authv1.LoginRequest
+	gotAccess         *authv1.GetAccessTokenRequest
+	gotRefresh        *authv1.GetRefreshTokenRequest
+	gotLogout         *authv1.LogoutRequest
+	gotChangePassword *authv1.ChangePasswordRequest
+	gotDeleteAccount  *authv1.DeleteAccountRequest
 }
 
 func (f *fakeAuthClient) Register(_ context.Context, req *connect.Request[authv1.RegisterRequest]) (*connect.Response[authv1.RegisterResponse], error) {
@@ -94,6 +99,14 @@ func (f *fakeAuthClient) Logout(_ context.Context, req *connect.Request[authv1.L
 		return nil, f.logoutRPCErr
 	}
 	return connect.NewResponse(&authv1.LogoutResponse{Fail: f.logoutErr != nil, Err: f.logoutErr}), nil
+}
+
+func (f *fakeAuthClient) ChangePassword(_ context.Context, req *connect.Request[authv1.ChangePasswordRequest]) (*connect.Response[authv1.ChangePasswordResponse], error) {
+	f.gotChangePassword = req.Msg
+	if f.changePasswordRPCErr != nil {
+		return nil, f.changePasswordRPCErr
+	}
+	return connect.NewResponse(&authv1.ChangePasswordResponse{Fail: f.changePasswordErr != nil, Err: f.changePasswordErr}), nil
 }
 
 func (f *fakeAuthClient) DeleteAccount(_ context.Context, req *connect.Request[authv1.DeleteAccountRequest]) (*connect.Response[authv1.DeleteAccountResponse], error) {
@@ -410,6 +423,50 @@ func TestBFFLogout(t *testing.T) {
 		u := newBFFForAuthTest(auth, &fakeUserClient{}, &fakeMediaClient{})
 
 		resp, err := u.Logout(ctxWithUID("u1"), &bffv1.LogoutRequest{})
+		require.NoError(t, err, "BFF 统一错误语义：不向客户端返回原始连接层错误")
+		assert.True(t, resp.Fail)
+		assert.Equal(t, errmsg.InternalError.Code, resp.Err.GetCode())
+	})
+}
+
+// TestBFFChangePassword 修改密码：uid 来自会话，新旧密码透传；成功后全端下线（响应不签发令牌）
+func TestBFFChangePassword(t *testing.T) {
+	t.Run("无会话返回 Unauthorized", func(t *testing.T) {
+		u := newBFFForAuthTest(&fakeAuthClient{}, &fakeUserClient{}, &fakeMediaClient{})
+		resp, err := u.ChangePassword(context.Background(), &bffv1.ChangePasswordRequest{OldPassword: "old", NewPassword: "new"})
+		require.NoError(t, err)
+		assert.True(t, resp.Fail)
+		assert.Equal(t, errmsg.Unauthorized.Code, resp.Err.GetCode())
+	})
+
+	t.Run("成功：uid 来自会话，新旧密码透传", func(t *testing.T) {
+		auth := &fakeAuthClient{}
+		u := newBFFForAuthTest(auth, &fakeUserClient{}, &fakeMediaClient{})
+
+		resp, err := u.ChangePassword(ctxWithUID("u1"), &bffv1.ChangePasswordRequest{OldPassword: "OldPassw0rd", NewPassword: "NewPassw0rd"})
+		require.NoError(t, err)
+		require.False(t, resp.Fail)
+		require.NotNil(t, auth.gotChangePassword)
+		assert.Equal(t, "u1", auth.gotChangePassword.GetUid(), "uid 必须来自会话而非请求体")
+		assert.Equal(t, "OldPassw0rd", auth.gotChangePassword.GetOldPassword())
+		assert.Equal(t, "NewPassw0rd", auth.gotChangePassword.GetNewPassword())
+	})
+
+	t.Run("业务失败透传", func(t *testing.T) {
+		auth := &fakeAuthClient{changePasswordErr: errmsg.IncorrectCredential}
+		u := newBFFForAuthTest(auth, &fakeUserClient{}, &fakeMediaClient{})
+
+		resp, err := u.ChangePassword(ctxWithUID("u1"), &bffv1.ChangePasswordRequest{OldPassword: "old", NewPassword: "new"})
+		require.NoError(t, err)
+		assert.True(t, resp.Fail)
+		assert.Equal(t, errmsg.IncorrectCredential.Code, resp.Err.GetCode())
+	})
+
+	t.Run("连接层错误包装为 InternalError", func(t *testing.T) {
+		auth := &fakeAuthClient{changePasswordRPCErr: errors.New("dial fail")}
+		u := newBFFForAuthTest(auth, &fakeUserClient{}, &fakeMediaClient{})
+
+		resp, err := u.ChangePassword(ctxWithUID("u1"), &bffv1.ChangePasswordRequest{OldPassword: "old", NewPassword: "new"})
 		require.NoError(t, err, "BFF 统一错误语义：不向客户端返回原始连接层错误")
 		assert.True(t, resp.Fail)
 		assert.Equal(t, errmsg.InternalError.Code, resp.Err.GetCode())

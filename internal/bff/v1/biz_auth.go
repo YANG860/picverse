@@ -170,6 +170,31 @@ func (u *BFFUsecaseImpl) Logout(ctx context.Context, req *bffv1.LogoutRequest) (
 	return &bffv1.LogoutResponse{}, nil
 }
 
+// ChangePassword 修改密码（uid 来自会话）：校验旧密码后换写新密码。
+// 成功后 auth 侧同事务失效两平台 refresh 登录态（含当前会话），全部设备需重新登录；
+// 响应不签发新令牌，客户端改密成功后跳转登录。
+func (u *BFFUsecaseImpl) ChangePassword(ctx context.Context, req *bffv1.ChangePasswordRequest) (*bffv1.ChangePasswordResponse, error) {
+	claims := jwt.ClaimsFromContext(ctx)
+	if claims == nil {
+		return &bffv1.ChangePasswordResponse{Fail: true, Err: errmsg.Unauthorized}, nil
+	}
+
+	resp, err := u.Repo.Auth.ChangePassword(ctx, connect.NewRequest(&authv1.ChangePasswordRequest{
+		Uid:         claims.UID,
+		OldPassword: req.GetOldPassword(),
+		NewPassword: req.GetNewPassword(),
+	}))
+	if err != nil {
+		u.log.Error("auth.ChangePassword failed", "uid", claims.UID, "error", err)
+		return &bffv1.ChangePasswordResponse{Fail: true, Err: errmsg.InternalError}, nil
+	}
+	if resp.Msg.Fail {
+		return &bffv1.ChangePasswordResponse{Fail: resp.Msg.Fail, Err: resp.Msg.Err}, nil
+	}
+
+	return &bffv1.ChangePasswordResponse{}, nil
+}
+
 // expiringSoon 判断令牌是否临近过期：剩余寿命不足总寿命（exp - iat）的一半；缺 exp/iat 按临近过期保守轮换。
 func expiringSoon(claims *jwt.Claims) bool {
 	if claims.ExpiresAt == nil || claims.IssuedAt == nil {

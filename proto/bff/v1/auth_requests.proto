@@ -60,3 +60,17 @@ message LogoutResponse {
   bool fail = 1;
   common.v1.Error err = 2;
 }
+
+// ChangePasswordRequest 修改密码（uid 来自会话）：校验旧密码后换写新密码。
+// 成功后失效该账号全部平台（含当前会话）的 refresh 登录态，所有设备需重新登录。
+message ChangePasswordRequest {
+  // 旧密码（明文）
+  string old_password = 1 [(buf.validate.field).string.min_len = 1];
+  // 新密码（明文，强度校验同 Register：8~32 位含大小写字母与数字）
+  string new_password = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message ChangePasswordResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+}
