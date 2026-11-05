@@ -35,6 +35,8 @@ type CacheConfig struct {
 	Enabled bool `mapstructure:"enabled"`
 	// ProfileTTL 用户资料缓存 TTL（写入时附加 ±10% 抖动），0 使用默认 30m
 	ProfileTTL time.Duration `mapstructure:"profile_ttl"`
+	// PostTTL 帖子详情缓存 TTL（写入时附加 ±10% 抖动），0 使用默认 30m
+	PostTTL time.Duration `mapstructure:"post_ttl"`
 	// NullTTL 空哨兵 TTL（防穿透），0 使用默认 60s
 	NullTTL time.Duration `mapstructure:"null_ttl"`
 }

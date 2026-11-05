@@ -39,7 +39,8 @@ var Repos = wire.NewSet(
 	wire.Bind(new(authv1.AuthRepository), new(*authv1.AuthRepoImpl)),
 
 	postv1.NewPostRepo,
-	wire.Bind(new(postv1.PostRepository), new(*postv1.PostRepoImpl)),
+	postv1.NewCachedPostRepo,
+	wire.Bind(new(postv1.PostRepository), new(*postv1.CachedPostRepo)),
 
 	userv1.NewUserRepo,
 	userv1.NewCachedUserRepo,
@@ -85,6 +86,8 @@ var Middlewares = wire.NewSet(
 	cache.NewCache,
 	cache.NewUserEntityCache,
 	wire.Bind(new(cache.UserEntityCache), new(*cache.UserEntityCacheImpl)),
+	cache.NewPostEntityCache,
+	wire.Bind(new(cache.PostEntityCache), new(*cache.PostEntityCacheImpl)),
 	db.NewPG,
 	mq.NewJetStreamClient,
 	wire.Bind(new(mq.MQClient), new(*mq.JetStreamClient)),

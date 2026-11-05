@@ -105,7 +105,7 @@ func (u *UserEntityCacheImpl) nullTTL() time.Duration {
 // LoadUserProfiles 批量读用户资料缓存（MGET 对齐，逐 uid 判定 miss/哨兵/命中）。
 // 序列化损坏按错误上抛（调用方降级全量回源并回填，自愈）。
 func (u *UserEntityCacheImpl) LoadUserProfiles(ctx context.Context, ids []int64) (map[int64]*user.UserProfile, error) {
-	vals, err := u.mget(ctx, ids, userProfileKey)
+	vals, err := MGetKeys(ctx, u.c, ids, userProfileKey)
 	if err != nil {
 		return nil, fmt.Errorf("cache user profile mget: %w", err)
 	}
@@ -156,7 +156,7 @@ func (u *UserEntityCacheImpl) StoreUserProfile(ctx context.Context, id int64, pr
 // DelUserProfiles 批量删除用户资料缓存（写后失效：DEL 对应 key，幂等）。
 // 失效失败错误上抛，调用方记 warn 后靠 TTL 兜底即可（陈旧有界），不阻断业务。
 func (u *UserEntityCacheImpl) DelUserProfiles(ctx context.Context, ids []int64) error {
-	if err := u.del(ctx, ids, userProfileKey); err != nil {
+	if err := DelKeys(ctx, u.c, ids, userProfileKey); err != nil {
 		return fmt.Errorf("cache user profile del: %w", err)
 	}
 	return nil
@@ -166,7 +166,7 @@ func (u *UserEntityCacheImpl) DelUserProfiles(ctx context.Context, ids []int64) 
 
 // LoadUserStats 批量读用户统计列缓存，map 语义同 LoadUserProfiles（nil 与 空双标记）。
 func (u *UserEntityCacheImpl) LoadUserStats(ctx context.Context, ids []int64) (map[int64]*user.UserStat, error) {
-	vals, err := u.mget(ctx, ids, userStatKey)
+	vals, err := MGetKeys(ctx, u.c, ids, userStatKey)
 	if err != nil {
 		return nil, fmt.Errorf("cache user stat mget: %w", err)
 	}
@@ -212,35 +212,8 @@ func (u *UserEntityCacheImpl) StoreUserStat(ctx context.Context, id int64, stat 
 // DelUserStats 批量删除用户统计列缓存（写后失效：DEL 对应 key，幂等）。
 // follow/取关等计数变更后登记失效；失效失败同样靠 TTL 兜底。
 func (u *UserEntityCacheImpl) DelUserStats(ctx context.Context, ids []int64) error {
-	if err := u.del(ctx, ids, userStatKey); err != nil {
+	if err := DelKeys(ctx, u.c, ids, userStatKey); err != nil {
 		return fmt.Errorf("cache user stat del: %w", err)
 	}
 	return nil
-}
-
-// ==================== 公共底层 ====================
-
-// mget 批量读底层缓存：keys 由 keyFn 构造，返回值与 ids 等长对齐（miss 元素为 nil）。
-// 空入参不触缓存。
-func (u *UserEntityCacheImpl) mget(ctx context.Context, ids []int64, keyFn func(int64) string) ([][]byte, error) {
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	keys := make([]string, len(ids))
-	for i, id := range ids {
-		keys[i] = keyFn(id)
-	}
-	return u.c.MGet(ctx, keys)
-}
-
-// del 批量删除底层缓存 key（Cache.Del 幂等，缺失静默跳过）；空入参不触缓存。
-func (u *UserEntityCacheImpl) del(ctx context.Context, ids []int64, keyFn func(int64) string) error {
-	if len(ids) == 0 {
-		return nil
-	}
-	keys := make([]string, len(ids))
-	for i, id := range ids {
-		keys[i] = keyFn(id)
-	}
-	return u.c.Del(ctx, keys...)
 }

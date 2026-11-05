@@ -48,6 +48,7 @@ redis:
 cache:
   enabled: false   # 缓存总开关：部署 redis 容器后置 true；false 时不连接 redis，行为与无缓存一致
   profile_ttl: 30m # 用户资料缓存 TTL（±10% 抖动防雪崩）
+  post_ttl: 30m    # 帖子详情缓存 TTL（±10% 抖动防雪崩）
   null_ttl: 60s    # 空哨兵 TTL（防穿透）
 
 jwt:

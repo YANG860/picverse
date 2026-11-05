@@ -56,8 +56,12 @@ func InitializePostConsumer(cfg *config.Config) (*consumer.PostConsumer, func())
 	mediaServiceClient := rpc.NewMediaClient(staticProvider)
 	gormDB, cleanup3 := db.NewPG(cfg, loggerFactoryImpl)
 	postRepoImpl := v1_3.NewPostRepo(gormDB)
-	postConsumer := consumer.NewPostConsumer(jetStreamClient, minioClient, loggerFactoryImpl, cfg, mediaServiceClient, postRepoImpl)
+	cacheCache, cleanup4 := cache.NewCache(cfg, loggerFactoryImpl)
+	postEntityCacheImpl := cache.NewPostEntityCache(cacheCache, cfg)
+	cachedPostRepo := v1_3.NewCachedPostRepo(postRepoImpl, postEntityCacheImpl, loggerFactoryImpl)
+	postConsumer := consumer.NewPostConsumer(jetStreamClient, minioClient, loggerFactoryImpl, cfg, mediaServiceClient, cachedPostRepo)
 	return postConsumer, func() {
+		cleanup4()
 		cleanup3()
 		cleanup2()
 		cleanup()
@@ -109,10 +113,14 @@ func InitializePostServiceHandler(cfg *config.Config) (postv1connect.PostService
 	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
 	gormDB, cleanup2 := db.NewPG(cfg, loggerFactoryImpl)
 	postRepoImpl := v1_3.NewPostRepo(gormDB)
-	jetStreamClient, cleanup3 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
-	postUsecaseImpl := v1_3.NewPostUsecase(postRepoImpl, jetStreamClient)
-	postServiceHandler := v1_3.NewPostServiceHandler(gormDB, loggerFactoryImpl, postUsecaseImpl, postRepoImpl)
+	cacheCache, cleanup3 := cache.NewCache(cfg, loggerFactoryImpl)
+	postEntityCacheImpl := cache.NewPostEntityCache(cacheCache, cfg)
+	cachedPostRepo := v1_3.NewCachedPostRepo(postRepoImpl, postEntityCacheImpl, loggerFactoryImpl)
+	jetStreamClient, cleanup4 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
+	postUsecaseImpl := v1_3.NewPostUsecase(cachedPostRepo, jetStreamClient)
+	postServiceHandler := v1_3.NewPostServiceHandler(gormDB, loggerFactoryImpl, postUsecaseImpl, cachedPostRepo)
 	return postServiceHandler, func() {
+		cleanup4()
 		cleanup3()
 		cleanup2()
 		cleanup()
@@ -162,13 +170,13 @@ func InitializeAuthInterceptor(cfg *config.Config) *jwt.ServerInterceptor {
 
 // wire.go:
 
-var Repos = wire.NewSet(v1.NewMediaRepo, wire.Bind(new(v1.MediaRepository), new(*v1.MediaRepoImpl)), v1_4.NewAuthRepoImpl, wire.Bind(new(v1_4.AuthRepository), new(*v1_4.AuthRepoImpl)), v1_3.NewPostRepo, wire.Bind(new(v1_3.PostRepository), new(*v1_3.PostRepoImpl)), v1_6.NewUserRepo, v1_6.NewCachedUserRepo, wire.Bind(new(v1_6.UserRepository), new(*v1_6.CachedUserRepo)), v1_2.NewOutBoxRepo, wire.Bind(new(v1_2.OutBoxRepository), new(*v1_2.OutBoxRepoImpl)), v1_2.NewProcessedMessageRepo, wire.Bind(new(v1_2.ProcessedMessageRepository), new(*v1_2.ProcessedMessageRepoImpl)))
+var Repos = wire.NewSet(v1.NewMediaRepo, wire.Bind(new(v1.MediaRepository), new(*v1.MediaRepoImpl)), v1_4.NewAuthRepoImpl, wire.Bind(new(v1_4.AuthRepository), new(*v1_4.AuthRepoImpl)), v1_3.NewPostRepo, v1_3.NewCachedPostRepo, wire.Bind(new(v1_3.PostRepository), new(*v1_3.CachedPostRepo)), v1_6.NewUserRepo, v1_6.NewCachedUserRepo, wire.Bind(new(v1_6.UserRepository), new(*v1_6.CachedUserRepo)), v1_2.NewOutBoxRepo, wire.Bind(new(v1_2.OutBoxRepository), new(*v1_2.OutBoxRepoImpl)), v1_2.NewProcessedMessageRepo, wire.Bind(new(v1_2.ProcessedMessageRepository), new(*v1_2.ProcessedMessageRepoImpl)))
 
 var Services = wire.NewSet(v1.NewMediaServiceHandler, wire.Bind(new(mediav1connect.MediaServiceHandler), new(*v1.MediaServiceHandler)), v1_4.NewAuthServiceHandler, wire.Bind(new(authv1connect.AuthServiceHandler), new(*v1_4.AuthServiceHandler)), v1_3.NewPostServiceHandler, wire.Bind(new(postv1connect.PostServiceHandler), new(*v1_3.PostServiceHandler)), v1_6.NewUserServiceHandler, wire.Bind(new(userv1connect.UserServiceHandler), new(*v1_6.UserServiceHandler)))
 
 var Usecases = wire.NewSet(v1.NewMediaUsecase, wire.Bind(new(v1.MediaUsecase), new(*v1.MediaUsecaseImpl)), v1_4.NewAuthUsecaseImpl, wire.Bind(new(v1_4.AuthUsecase), new(*v1_4.AuthUsecaseImpl)), v1_3.NewPostUsecase, wire.Bind(new(v1_3.PostUsecase), new(*v1_3.PostUsecaseImpl)), v1_6.NewUserUsecase, wire.Bind(new(v1_6.UserUsecase), new(*v1_6.UserUsecaseImpl)))
 
-var Middlewares = wire.NewSet(cache.NewCache, cache.NewUserEntityCache, wire.Bind(new(cache.UserEntityCache), new(*cache.UserEntityCacheImpl)), db.NewPG, mq.NewJetStreamClient, wire.Bind(new(mq.MQClient), new(*mq.JetStreamClient)), logger.NewLoggerFactory, wire.Bind(new(logger.LoggerFactory), new(*logger.LoggerFactoryImpl)), oss.NewClient, wire.Bind(new(oss.S3Repo), new(*oss.MinioClient)))
+var Middlewares = wire.NewSet(cache.NewCache, cache.NewUserEntityCache, wire.Bind(new(cache.UserEntityCache), new(*cache.UserEntityCacheImpl)), cache.NewPostEntityCache, wire.Bind(new(cache.PostEntityCache), new(*cache.PostEntityCacheImpl)), db.NewPG, mq.NewJetStreamClient, wire.Bind(new(mq.MQClient), new(*mq.JetStreamClient)), logger.NewLoggerFactory, wire.Bind(new(logger.LoggerFactory), new(*logger.LoggerFactoryImpl)), oss.NewClient, wire.Bind(new(oss.S3Repo), new(*oss.MinioClient)))
 
 var Utils = wire.NewSet(jwt.NewManager, wire.Bind(new(jwt.Manager), new(*jwt.ManagerImpl)), jwt.NewServerInterceptor)
 

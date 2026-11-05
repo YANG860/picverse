@@ -42,3 +42,29 @@ func JitterTTL(base time.Duration, pct float64) time.Duration {
 	f := 1 + pct*(2*rand.Float64()-1)
 	return time.Duration(float64(base) * f)
 }
+
+// MGetKeys 批量读底层缓存：keys 由 keyFn 按 ids 构造，返回值与 ids 等长对齐（miss 元素为 nil）。
+// 空入参不触缓存。供各实体缓存（User/Post/...）共用。
+func MGetKeys(ctx context.Context, c Cache, ids []int64, keyFn func(int64) string) ([][]byte, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	keys := make([]string, len(ids))
+	for i, id := range ids {
+		keys[i] = keyFn(id)
+	}
+	return c.MGet(ctx, keys)
+}
+
+// DelKeys 批量删除底层缓存 key（Cache.Del 幂等，缺失静默跳过）；空入参不触缓存。
+// 供各实体缓存（User/Post/...）共用。
+func DelKeys(ctx context.Context, c Cache, ids []int64, keyFn func(int64) string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	keys := make([]string, len(ids))
+	for i, id := range ids {
+		keys[i] = keyFn(id)
+	}
+	return c.Del(ctx, keys...)
+}

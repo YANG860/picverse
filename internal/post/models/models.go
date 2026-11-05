@@ -52,6 +52,32 @@ type PostStatUpdate struct {
 	Stat   *postv1.PostStat
 }
 
+// PostStat 帖子统计：统计列子集（轻路径 GetPostStat 的返回，缓存层统计块的实体）
+type PostStat struct {
+	// ID 帖子ID
+	ID int64 `json:"id"`
+	// 点赞数
+	LikeCount int64 `json:"like_count"`
+	// 收藏数
+	FavouriteCount int64 `json:"favourite_count"`
+	// 评论数
+	CommentCount int64 `json:"comment_count"`
+	// 浏览数
+	ViewCount int64 `json:"view_count"`
+}
+
+func (s *PostStat) ToProto() *postv1.PostStat {
+	if s == nil {
+		return nil
+	}
+	return &postv1.PostStat{
+		LikeCount:      s.LikeCount,
+		FavouriteCount: s.FavouriteCount,
+		CommentCount:   s.CommentCount,
+		ViewCount:      s.ViewCount,
+	}
+}
+
 // PostMedia 帖子与媒体的关联
 // 关联粒度：媒体文件（MediaFile 嵌入列，前缀 media_）
 type PostMedia struct {

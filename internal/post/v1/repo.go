@@ -58,6 +58,8 @@ type PostRepository interface {
 	GetAuthorID(ctx context.Context, postID int64) (bool, int64, error)
 	// GetPosts 根据ID批量获取帖子
 	GetPosts(ctx context.Context, postIDs []int64) ([]*models.PostDetail, error)
+	// GetPostStat 批量获取帖子统计（列裁剪：仅 id/4 个计数列；不存在的 id 不返回）
+	GetPostStat(ctx context.Context, postIDs []int64) ([]*models.PostStat, error)
 	// GetPostStatus 获取帖子状态；ok 为 false 表示帖子不存在
 	GetPostStatus(ctx context.Context, postID int64) (bool, postv1.PostStatus, error)
 
@@ -255,6 +257,36 @@ func (r *PostRepoImpl) GetPosts(ctx context.Context, postIDs []int64) ([]*models
 		Preload(r.q.PostDetail.Medias.Order(r.q.PostMedia.SortOrder)).
 		Find()
 	return posts, err
+}
+
+// GetPostStat 批量获取帖子统计：列裁剪查询（id/点赞/收藏/评论/浏览）
+// 不加载其余列；不存在的 id 不返回（与 GetPosts 的部分命中语义一致）
+func (r *PostRepoImpl) GetPostStat(ctx context.Context, postIDs []int64) ([]*models.PostStat, error) {
+	rows, err := r.q.PostDetail.WithContext(ctx).
+		Select(
+			r.q.PostDetail.ID,
+			r.q.PostDetail.LikeCount,
+			r.q.PostDetail.FavouriteCount,
+			r.q.PostDetail.CommentCount,
+			r.q.PostDetail.ViewCount,
+		).
+		Where(r.q.PostDetail.ID.In(postIDs...)).
+		Find()
+	if err != nil {
+		return nil, err
+	}
+
+	stats := make([]*models.PostStat, 0, len(rows))
+	for _, row := range rows {
+		stats = append(stats, &models.PostStat{
+			ID:             row.ID,
+			LikeCount:      row.LikeCount,
+			FavouriteCount: row.FavouriteCount,
+			CommentCount:   row.CommentCount,
+			ViewCount:      row.ViewCount,
+		})
+	}
+	return stats, nil
 }
 
 // GetPostStatus 获取帖子状态；ok 为 false 表示帖子不存在
