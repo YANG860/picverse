@@ -16,6 +16,7 @@ poller:      # Outbox Poller
 consumer:    # 消费者
 server:      # 各服务监听地址
 services:    # 下游服务地址（服务发现）
+meili:       # Meilisearch 搜索引擎
 ```
 
 ## 各节详解
@@ -76,6 +77,15 @@ services:    # 下游服务地址（服务发现）
 | `db` | int | 库编号 |
 | `pool_size` | int | 连接池大小，`0` 使用默认（10） |
 
+### meili — Meilisearch 搜索引擎
+
+搜推服务（discover）的索引同步与查询入口（见 [design/discover.md](../design/discover.md)）。
+
+| 键 | 类型 | 说明 |
+| --- | --- | --- |
+| `url` | string | 服务地址，如 `http://127.0.0.1:7700` |
+| `api_key` | string | API 密钥（MEILI_MASTER_KEY），必填，至少 16 字符；启动时连通性校验，失败 fail-fast |
+
 ### jetstream — 消息队列
 | 键 | 类型 | 说明 |
 | --- | --- | --- |
@@ -96,9 +106,10 @@ services:    # 下游服务地址（服务发现）
 | `consumer.media.name` | string | JetStream durable consumer 名称 |
 | `consumer.media.max_retry` | int | 消息最大投递次数（MaxDeliver） |
 | `consumer.media.working_dir` | string | 图片处理工作目录（不存在时自动创建） |
+| `consumer.post.name` / `max_retry` / `working_dir` | — | post 消费者（同构） |
 
 > `config.yaml` 中 `consumer.media.worker_pool_size` 与当前结构体无对应字段，属预留/失效项。
 
 ## 敏感信息
 
-`config.yaml` 内含数据库/对象存储/Redis/JWT 的凭据。**提交前请勿将真实凭据纳入版本库**；生产环境建议改用环境变量或密钥管理方案注入。
+`config.yaml` 内含数据库/对象存储/Redis/Meilisearch/JWT 的凭据。**提交前请勿将真实凭据纳入版本库**；生产环境建议改用环境变量或密钥管理方案注入。

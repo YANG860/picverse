@@ -24,6 +24,7 @@ import (
 	"rednote/packages/db"
 	"rednote/packages/jwt"
 	"rednote/packages/logger"
+	"rednote/packages/meili"
 	"rednote/packages/mq"
 	"rednote/packages/oss"
 	"rednote/packages/rpc"
@@ -96,6 +97,9 @@ var Middlewares = wire.NewSet(
 
 	oss.NewClient,
 	wire.Bind(new(oss.S3Repo), new(*oss.MinioClient)),
+
+	meili.NewClient,
+	wire.Bind(new(meili.MeiliRepo), new(*meili.MeiliClient)),
 )
 
 var Utils = wire.NewSet(

@@ -1,4 +1,4 @@
-# rednote 测试容器编排：PostgreSQL + NATS JetStream + MinIO + Redis
+# rednote 测试容器编排：PostgreSQL + NATS JetStream + MinIO + Redis + Meilisearch
 # 用法见同目录 README.md
 # 凭据从 .env 注入（参考 .env.example，真实 .env 不入库）
 name: rednote-test
@@ -73,6 +73,24 @@ services:
       timeout: 3s
       retries: 10
 
+  meilisearch:
+    image: getmeili/meilisearch:v1.56
+    container_name: rednote-meili
+    restart: unless-stopped
+    environment:
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+      MEILI_ENV: production
+      MEILI_NO_ANALYTICS: "true"
+    ports:
+      - "7700:7700"
+    volumes:
+      - meilidata:/meili_data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:7700/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   # 一次性初始化：创建 JetStream stream（幂等：已存在即跳过），完成后退出
   init-nats:
     image: natsio/nats-box
@@ -111,3 +129,4 @@ volumes:
   natsdata:
   miniodata:
   redisdata:
+  meilidata:

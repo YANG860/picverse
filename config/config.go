@@ -15,6 +15,7 @@ type Config struct {
 	Logger    LoggerConfig    `mapstructure:"logger"`
 	JWT       JWTConfig       `mapstructure:"jwt"`
 	Redis     RedisConfig     `mapstructure:"redis"`
+	Meili     MeiliConfig     `mapstructure:"meili"`
 	Cache     CacheConfig     `mapstructure:"cache"`
 	Services  ServicesConfig  `mapstructure:"services"`
 }
@@ -23,10 +24,10 @@ type Config struct {
 // 上 k8s 后改为 Service DNS 名（如 "post:8082"），接口与调用方零改动
 type ServicesConfig struct {
 	// 服务发现：各下游服务地址，host:port 或 scheme://host:port
-	Auth  string `mapstructure:"auth"`
-	User  string `mapstructure:"user"`
-	Media string `mapstructure:"media"`
-	Post  string `mapstructure:"post"`
+	Auth     string `mapstructure:"auth"`
+	User     string `mapstructure:"user"`
+	Media    string `mapstructure:"media"`
+	Post     string `mapstructure:"post"`
 }
 
 // CacheConfig 缓存层配置（packages/cache）
@@ -53,6 +54,14 @@ type RedisConfig struct {
 	PoolSize int `mapstructure:"pool_size"`
 }
 
+// MeiliConfig Meilisearch 搜索引擎配置（搜推服务的索引同步与查询，见 doc/design/discover.md）
+type MeiliConfig struct {
+	// 服务地址，如 "http://127.0.0.1:7700"
+	URL string `mapstructure:"url"`
+	// API 密钥（MEILI_MASTER_KEY），必填
+	APIKey string `mapstructure:"api_key"`
+}
+
 // JWTConfig JWT 签发配置
 type JWTConfig struct {
 	// HMAC-SHA256 签名密钥，必填
@@ -76,11 +85,11 @@ type SnowFlakeConfig struct {
 
 // ServerConfig 各服务监听地址：多进程共用同一配置文件，各服务取自己的条目
 type ServerConfig struct {
-	Auth  string `mapstructure:"auth"`
-	User  string `mapstructure:"user"`
-	Media string `mapstructure:"media"`
-	Post  string `mapstructure:"post"`
-	Bff   string `mapstructure:"bff"`
+	Auth     string `mapstructure:"auth"`
+	User     string `mapstructure:"user"`
+	Media    string `mapstructure:"media"`
+	Post     string `mapstructure:"post"`
+	Bff      string `mapstructure:"bff"`
 }
 
 // S3Config S3/Minio 对象存储配置
@@ -132,8 +141,8 @@ type PollerConfig struct {
 }
 
 type ConsumerConfig struct {
-	Media MediaConsumerConfig `mapstructure:"media"`
-	Post  PostConsumerConfig  `mapstructure:"post"`
+	Media    MediaConsumerConfig    `mapstructure:"media"`
+	Post     PostConsumerConfig     `mapstructure:"post"`
 }
 
 type MediaConsumerConfig struct {

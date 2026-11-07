@@ -45,6 +45,11 @@ redis:
   db: 0
   pool_size: 10    # 0 表示使用默认值（10）
 
+meili:
+  # Meilisearch 搜索引擎（搜推服务的索引同步与查询）
+  url: "http://106.53.172.186:7700"
+  api_key: "rednote-meili-8f2c1d4a"   # 容器 rednote-meili（MEILI_MASTER_KEY）
+
 cache:
   enabled: false   # 缓存总开关：部署 redis 容器后置 true；false 时不连接 redis，行为与无缓存一致
   profile_ttl: 30m # 用户资料缓存 TTL（±10% 抖动防雪崩）

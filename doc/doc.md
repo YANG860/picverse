@@ -4,6 +4,14 @@ rednote 是一个仿小红书的图片社交论坛后端，基于 Go + ConnectRP
 
 本目录采用与代码镜像的结构组织文档。阅读顺序建议：`general.md`（全局约定与架构）→ 各模块文档。
 
+## 文档规范（全局规定）
+
+1. **只描述现状**：文档只描述、解释说明当下**已实现**的功能与使用方法，定位是辅助理解代码。
+2. **不做设计规划**：不写未实现的设计、路线图、里程碑等任何规划性内容。
+3. **不描述不存在的功能**：没有的功能不得出现在文档中（含“待实现 / 规划中 / TODO”类描述）。
+4. **以代码为准**：文档与代码实现冲突时，一律以具体代码实现为准；发现不符应修正文档。
+5. **同步更新**：功能增删改时同步更新对应文档，不滞后、不超前。
+
 ## 目录
 
 ### 顶层
@@ -38,6 +46,7 @@ rednote 是一个仿小红书的图片社交论坛后端，基于 Go + ConnectRP
 | [packages/defaults/defaults.md](packages/defaults/defaults.md) | 全局默认常量 |
 | [packages/errmsg/err.md](packages/errmsg/err.md) | 可枚举业务错误码 |
 | [packages/cache/cache.md](packages/cache/cache.md) | 缓存层设计（Cache-Aside + MQ 事件失效，**设计定稿待实现**） |
+| [packages/meili/meili.md](packages/meili/meili.md) | Meilisearch 客户端：索引同步封装（EnsureIndex / Upsert / Delete，任务阻塞至生效） |
 
 ### design — 设计稿（施工中，未实现）
 | 文档 | 说明 |

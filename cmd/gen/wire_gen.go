@@ -26,6 +26,7 @@ import (
 	"rednote/packages/db"
 	"rednote/packages/jwt"
 	"rednote/packages/logger"
+	"rednote/packages/meili"
 	"rednote/packages/mq"
 	"rednote/packages/oss"
 	"rednote/packages/rpc"
@@ -176,7 +177,7 @@ var Services = wire.NewSet(v1.NewMediaServiceHandler, wire.Bind(new(mediav1conne
 
 var Usecases = wire.NewSet(v1.NewMediaUsecase, wire.Bind(new(v1.MediaUsecase), new(*v1.MediaUsecaseImpl)), v1_4.NewAuthUsecaseImpl, wire.Bind(new(v1_4.AuthUsecase), new(*v1_4.AuthUsecaseImpl)), v1_3.NewPostUsecase, wire.Bind(new(v1_3.PostUsecase), new(*v1_3.PostUsecaseImpl)), v1_6.NewUserUsecase, wire.Bind(new(v1_6.UserUsecase), new(*v1_6.UserUsecaseImpl)))
 
-var Middlewares = wire.NewSet(cache.NewCache, cache.NewUserEntityCache, wire.Bind(new(cache.UserEntityCache), new(*cache.UserEntityCacheImpl)), cache.NewPostEntityCache, wire.Bind(new(cache.PostEntityCache), new(*cache.PostEntityCacheImpl)), db.NewPG, mq.NewJetStreamClient, wire.Bind(new(mq.MQClient), new(*mq.JetStreamClient)), logger.NewLoggerFactory, wire.Bind(new(logger.LoggerFactory), new(*logger.LoggerFactoryImpl)), oss.NewClient, wire.Bind(new(oss.S3Repo), new(*oss.MinioClient)))
+var Middlewares = wire.NewSet(cache.NewCache, cache.NewUserEntityCache, wire.Bind(new(cache.UserEntityCache), new(*cache.UserEntityCacheImpl)), cache.NewPostEntityCache, wire.Bind(new(cache.PostEntityCache), new(*cache.PostEntityCacheImpl)), db.NewPG, mq.NewJetStreamClient, wire.Bind(new(mq.MQClient), new(*mq.JetStreamClient)), logger.NewLoggerFactory, wire.Bind(new(logger.LoggerFactory), new(*logger.LoggerFactoryImpl)), oss.NewClient, wire.Bind(new(oss.S3Repo), new(*oss.MinioClient)), meili.NewClient, wire.Bind(new(meili.MeiliRepo), new(*meili.MeiliClient)))
 
 var Utils = wire.NewSet(jwt.NewManager, wire.Bind(new(jwt.Manager), new(*jwt.ManagerImpl)), jwt.NewServerInterceptor)
 
