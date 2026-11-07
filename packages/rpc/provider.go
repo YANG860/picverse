@@ -11,10 +11,11 @@ import (
 type ServiceName string
 
 const (
-	ServiceAuth  ServiceName = "auth"
-	ServiceUser  ServiceName = "user"
-	ServiceMedia ServiceName = "media"
-	ServicePost  ServiceName = "post"
+	ServiceAuth     ServiceName = "auth"
+	ServiceUser     ServiceName = "user"
+	ServiceMedia    ServiceName = "media"
+	ServicePost     ServiceName = "post"
+	ServiceDiscover ServiceName = "discover"
 )
 
 // EndpointProvider 服务地址解析接口。
@@ -31,7 +32,7 @@ type StaticProvider struct {
 }
 
 // NewStaticProvider 从配置构造静态地址提供者。
-// 四个下游服务地址均必填，缺失启动即失败（fail-fast，与 packages/redis、
+// 各下游服务地址均必填，缺失启动即失败（fail-fast，与 packages/redis、
 // packages/oss 的配置校验风格一致，避免运行期才发现配置残缺）
 func NewStaticProvider(cfg *config.Config) *StaticProvider {
 	if cfg == nil {
@@ -39,10 +40,11 @@ func NewStaticProvider(cfg *config.Config) *StaticProvider {
 	}
 	p := &StaticProvider{endpoints: map[ServiceName][]string{}}
 	for svc, addr := range map[ServiceName]string{
-		ServiceAuth:  cfg.Services.Auth,
-		ServiceUser:  cfg.Services.User,
-		ServiceMedia: cfg.Services.Media,
-		ServicePost:  cfg.Services.Post,
+		ServiceAuth:     cfg.Services.Auth,
+		ServiceUser:     cfg.Services.User,
+		ServiceMedia:    cfg.Services.Media,
+		ServicePost:     cfg.Services.Post,
+		ServiceDiscover: cfg.Services.Discover,
 	} {
 		if addr == "" {
 			panic(fmt.Errorf("services.%s is required", svc))

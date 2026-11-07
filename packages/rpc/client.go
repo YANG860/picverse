@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	authv1connect "rednote/gen/go/auth/v1/authv1connect"
+	discoverv1connect "rednote/gen/go/discover/v1/discoverv1connect"
 	mediav1connect "rednote/gen/go/media/v1/mediav1connect"
 	postv1connect "rednote/gen/go/post/v1/postv1connect"
 	userv1connect "rednote/gen/go/user/v1/userv1connect"
@@ -54,5 +55,12 @@ func NewMediaClient(provider EndpointProvider) mediav1connect.MediaServiceClient
 func NewPostClient(provider EndpointProvider) postv1connect.PostServiceClient {
 	return postv1connect.NewPostServiceClient(
 		newHTTPClient(provider, ServicePost), "http://post", clientOptions(),
+	)
+}
+
+// NewDiscoverClient 构造 discover（搜推）服务客户端
+func NewDiscoverClient(provider EndpointProvider) discoverv1connect.DiscoverServiceClient {
+	return discoverv1connect.NewDiscoverServiceClient(
+		newHTTPClient(provider, ServiceDiscover), "http://discover", clientOptions(),
 	)
 }

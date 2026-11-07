@@ -12,6 +12,7 @@
 | `ServiceUser` | `"user"` |
 | `ServiceMedia` | `"media"` |
 | `ServicePost` | `"post"` |
+| `ServiceDiscover` | `"discover"` |
 
 调用方按名字解析地址，不感知具体实例。
 
@@ -86,6 +87,7 @@
 | `NewUserClient(provider)` | `userv1connect.UserServiceClient` | `http://user` |
 | `NewMediaClient(provider)` | `mediav1connect.MediaServiceClient` | `http://media` |
 | `NewPostClient(provider)` | `postv1connect.PostServiceClient` | `http://post` |
+| `NewDiscoverClient(provider)` | `discoverv1connect.DiscoverServiceClient` | `http://discover` |
 
 `clientOptions()` 下游调用统一拦截器：
 - **trace**（[trace](../trace/trace.md)）：透传 `trace_id`，串联跨服务调用链；
@@ -96,4 +98,4 @@
 `cmd/gen/wire.go` 的 `Clients` set：
 
 - `NewStaticProvider` → `wire.Bind` 到 `rpc.EndpointProvider`；
-- `NewAuthClient` / `NewUserClient` / `NewMediaClient` / `NewPostClient` 构造四个下游客户端，注入 `v1.NewDownstreamRepo` 等下游调用方。
+- `NewAuthClient` / `NewUserClient` / `NewMediaClient` / `NewPostClient` / `NewDiscoverClient` 构造五个下游客户端，注入 `v1.NewDownstreamRepo` 等下游调用方。

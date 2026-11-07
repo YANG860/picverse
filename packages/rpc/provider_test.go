@@ -55,19 +55,23 @@ func newTestTransport(p EndpointProvider, svc ServiceName, opts ...TransportOpti
 
 func testConfig() *config.Config {
 	return &config.Config{Services: config.ServicesConfig{
-		Auth: "127.0.0.1:8081", User: "127.0.0.1:8083", Media: "127.0.0.1:8080", Post: "127.0.0.1:8082",
+		Auth: "127.0.0.1:8081", User: "127.0.0.1:8083", Media: "127.0.0.1:8080", Post: "127.0.0.1:8082", Discover: "127.0.0.1:8085",
 	}}
 }
 
 // ---------- StaticProvider ----------
 
 func TestStaticProvider(t *testing.T) {
-	t.Run("解析四服务地址", func(t *testing.T) {
+	t.Run("解析各服务地址", func(t *testing.T) {
 		p := NewStaticProvider(testConfig())
 
 		endpoints, err := p.Resolve(context.Background(), ServicePost)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"127.0.0.1:8082"}, endpoints)
+
+		endpoints, err = p.Resolve(context.Background(), ServiceDiscover)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"127.0.0.1:8085"}, endpoints)
 	})
 
 	t.Run("未知服务返回错误", func(t *testing.T) {

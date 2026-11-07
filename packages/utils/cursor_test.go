@@ -106,3 +106,46 @@ func TestNewTimeCursor(t *testing.T) {
 		assert.Equal(t, int64(defaults.MaxLimit), cursor.GetLimit())
 	})
 }
+
+// TestParseOffsetCursor offset 游标解析：非法/负数回退 0，limit 越界回退默认值
+func TestParseOffsetCursor(t *testing.T) {
+	t.Run("nil 游标回退到 0 与默认 limit", func(t *testing.T) {
+		offset, limit := ParseOffsetCursor(nil)
+		assert.Equal(t, int64(0), offset)
+		assert.Equal(t, int64(defaults.CursorLimit), limit)
+	})
+
+	t.Run("合法偏移被解析", func(t *testing.T) {
+		offset, limit := ParseOffsetCursor(&commonv1.Cursor{Str: "40", Limit: 10})
+		assert.Equal(t, int64(40), offset)
+		assert.Equal(t, int64(10), limit)
+	})
+
+	t.Run("非法串/负数回退到 0", func(t *testing.T) {
+		offset, _ := ParseOffsetCursor(&commonv1.Cursor{Str: "not-a-number"})
+		assert.Equal(t, int64(0), offset)
+
+		offset, _ = ParseOffsetCursor(&commonv1.Cursor{Str: "-5"})
+		assert.Equal(t, int64(0), offset)
+	})
+}
+
+// TestNewOffsetCursor offset 游标构造：往返一致 + 负偏移/limit 越界回退
+func TestNewOffsetCursor(t *testing.T) {
+	t.Run("构造与解析往返一致", func(t *testing.T) {
+		cursor := NewOffsetCursor(40, 10)
+		offset, limit := ParseOffsetCursor(cursor)
+		assert.Equal(t, int64(40), offset)
+		assert.Equal(t, int64(10), limit)
+	})
+
+	t.Run("负偏移回退 0", func(t *testing.T) {
+		cursor := NewOffsetCursor(-1, 10)
+		assert.Equal(t, "0", cursor.GetStr())
+	})
+
+	t.Run("limit 越界回退默认值", func(t *testing.T) {
+		cursor := NewOffsetCursor(0, 0)
+		assert.Equal(t, int64(defaults.CursorLimit), cursor.GetLimit())
+	})
+}

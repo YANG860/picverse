@@ -10,6 +10,15 @@
 
 ID 是全局基础约定，DB 主键、消息 ID、`jti` 等都用它生成。
 
+## 游标（cursor.go）
+
+`common.v1.Cursor` 的编码/解析工具，两种游标语义（见 [design/discover.md](../../design/discover.md) §6）：
+
+| 函数 | 说明 |
+| --- | --- |
+| `ParseTimeCursor(cursor)` / `NewTimeCursor(stamp, limit)` | 时间游标：`str` 编码末条 `created_at` 毫秒；非法串回退当前时间（首页），limit 越界回退默认 20（上限 1000） |
+| `ParseOffsetCursor(cursor)` / `NewOffsetCursor(nextOffset, limit)` | offset 游标（搜索/推荐流）：`str` 编码偏移量；非法/负数回退 0（首页），limit 口径同上 |
+
 ## S3 对象键（s3.go）
 
 | 函数 | 说明 |

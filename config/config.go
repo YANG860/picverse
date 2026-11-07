@@ -28,6 +28,7 @@ type ServicesConfig struct {
 	User     string `mapstructure:"user"`
 	Media    string `mapstructure:"media"`
 	Post     string `mapstructure:"post"`
+	Discover string `mapstructure:"discover"`
 }
 
 // CacheConfig 缓存层配置（packages/cache）
@@ -90,6 +91,7 @@ type ServerConfig struct {
 	Media    string `mapstructure:"media"`
 	Post     string `mapstructure:"post"`
 	Bff      string `mapstructure:"bff"`
+	Discover string `mapstructure:"discover"`
 }
 
 // S3Config S3/Minio 对象存储配置
