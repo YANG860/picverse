@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	bffv1 "rednote/gen/go/bff/v1"
+	"rednote/packages/cache"
 	"rednote/packages/logger"
 	"rednote/packages/mq"
 )
@@ -68,16 +69,18 @@ type BFFUsecase interface {
 
 // BFFUsecaseImpl BFFUsecase 实现
 type BFFUsecaseImpl struct {
-	Repo *DownstreamRepo
-	MQ   mq.MQClient
-	log  *slog.Logger
+	Repo      *DownstreamRepo
+	MQ        mq.MQClient
+	PostCache cache.PostEntityCache // 浏览计数埋点（PV 近似）用
+	log       *slog.Logger
 }
 
 // NewBFFUsecase 创建 BFF 聚合业务
-func NewBFFUsecase(repo *DownstreamRepo, mqClient mq.MQClient, lf logger.LoggerFactory) *BFFUsecaseImpl {
+func NewBFFUsecase(repo *DownstreamRepo, mqClient mq.MQClient, pcache cache.PostEntityCache, lf logger.LoggerFactory) *BFFUsecaseImpl {
 	return &BFFUsecaseImpl{
-		Repo: repo,
-		MQ:   mqClient,
-		log:  lf.GetLoggerOf("bff"),
+		Repo:      repo,
+		MQ:        mqClient,
+		PostCache: pcache,
+		log:       lf.GetLoggerOf("bff"),
 	}
 }

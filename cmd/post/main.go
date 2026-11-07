@@ -27,6 +27,7 @@ func main() {
 	cfg := config.Init(cfgPath)
 
 	svc, cleanup := gen.InitializePostServiceHandler(cfg)
+
 	path, handler := postv1connect.NewPostServiceHandler(
 		svc,
 		connect.WithInterceptors(trace.NewServerInterceptor(), validate.NewInterceptor()),

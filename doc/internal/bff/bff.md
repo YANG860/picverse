@@ -36,7 +36,7 @@
 | 帖子 | UpdateDraftMedias | post.UpdateDraftMedias + media.ModifyMediaAssetRefCount | 下游返回的 `old_asset_ids` 在 BFF 消化：旧资产 -1、新资产 +1 |
 | 帖子 | PublishDraft | post.PublishDraft | 两步发布的第二步 |
 | 帖子 | DeletePost | post.DeletePost | 软删；资产计数由删帖消息链路回收（consumer 逐槽位发 deref 消息，见待定项 3） |
-| 帖子 | GetPost | post.ViewPost + user.GetUserBrief + user.GetFollowingRelation | 组装 `PostDetail` |
+| 帖子 | GetPost | post.ViewPost + user.GetUserBrief + user.GetFollowingRelation | 组装 `PostDetail`；他人访问埋浏览计数（PostEntityCache 计数器 INCR，PV 近似） |
 | 帖子 | GetMyPosts | post.ViewPostByAuthor（viewer=author） | 含草稿/审核中（状态随 `PostBrief` 返回），组装 `PostCard`（封面按状态分级签发）|
 | 帖子 | GetUserPosts | post.ViewPostByAuthor（viewer=会话用户） | 仅已发布，组装 `PostCard` |
 | 帖子 | LikePost / UnlikePost / FavouritePost / UnfavouritePost | post 同名透传 | uid 来自会话；幂等写（前端可重复动作收敛）；响应带最新计数 + `liked/favourited` 态位（前端同步本地集合）；收藏超容量返回 `FavouriteLimitExceeded` |
@@ -95,7 +95,7 @@ BFF 由于面向前端，**不返回连接层 error**：下游连接层错误（
 ## 依赖
 
 - auth / user / media / post 服务（connectrpc 客户端，`packages/rpc` 统一构造：服务发现传输层 + trace/jwt 拦截器，地址源 `config.services`，见 [rpc](../../packages/rpc/rpc.md)）
-- `packages/redis`（会话/缓存，TODO）
+- `packages/cache`（浏览计数计数器：GetPost 埋点 IncrPostViewCount，RedisPoller 定时批量写回）
 
 ## 状态
 

@@ -12,6 +12,7 @@ import (
 	postv1 "rednote/gen/go/post/v1"
 	"rednote/gen/go/post/v1/postv1connect"
 	userv1 "rednote/gen/go/user/v1"
+	"rednote/packages/cache"
 	"rednote/packages/errmsg"
 
 	"connectrpc.com/connect"
@@ -123,10 +124,16 @@ func (f *fakePostClient) ViewPostByAuthor(_ context.Context, req *connect.Reques
 
 // newBFFForPostTest 组装带 post 域 fake 的 BFFUsecaseImpl
 func newBFFForPostTest(user *fakeUserClient, media *fakeMediaClient, post *fakePostClient) *BFFUsecaseImpl {
+	return newBFFForPostTestWithCache(user, media, post, &fakePostCache{})
+}
+
+// newBFFForPostTestWithCache 同 newBFFForPostTest，可注入浏览计数替身（GetPost 埋点断言用）
+func newBFFForPostTestWithCache(user *fakeUserClient, media *fakeMediaClient, post *fakePostClient, pc *fakePostCache) *BFFUsecaseImpl {
 	return &BFFUsecaseImpl{
-		Repo: &DownstreamRepo{User: user, Media: media, Post: post},
-		MQ:   &fakeMQClient{},
-		log:  slog.Default(),
+		Repo:      &DownstreamRepo{User: user, Media: media, Post: post},
+		MQ:        &fakeMQClient{},
+		PostCache: pc,
+		log:       slog.Default(),
 	}
 }
 
@@ -851,5 +858,69 @@ func TestBFFInteractions(t *testing.T) {
 		assert.Equal(t, []string{"2003"}, resp.GetPostIds())
 		require.NotNil(t, post.gotListFav)
 		assert.Equal(t, "u1", post.gotListFav.GetUid())
+	})
+}
+
+// ==================== 浏览计数埋点（PV 近似） ====================
+
+// fakePostCache 浏览计数替身：记录 IncrPostViewCount 调用，可注入错误
+type fakePostCache struct {
+	cache.PostEntityCache
+	gotIncr []int64
+	incrErr error
+}
+
+func (f *fakePostCache) IncrPostViewCount(_ context.Context, id int64) error {
+	f.gotIncr = append(f.gotIncr, id)
+	return f.incrErr
+}
+
+// TestBFFGetPostViewCount 埋点口径：他人访问 +1、作者自访不计、Redis 故障降级不打挂详情页
+func TestBFFGetPostViewCount(t *testing.T) {
+	newPost := func() *postv1.Post {
+		return &postv1.Post{
+			PostId:   "42",
+			Title:    "t",
+			FullText: "body",
+			AuthorId: "u2",
+			Status:   postv1.PostStatus_POST_STATUS_PUBLISHED,
+		}
+	}
+	newUser := func() *fakeUserClient {
+		return &fakeUserClient{
+			briefResults: []*userv1.UserBriefResult{{Uid: "u2", Brief: &userv1.UserBrief{
+				Uid: "u2", Avatar: &mediav1.MediaFile{AssetId: "av1", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_216},
+			}}},
+			relation: &userv1.GetFollowingRelationResponse{},
+		}
+	}
+
+	t.Run("他人访问：计数 +1（post_id 解析透传）", func(t *testing.T) {
+		pc := &fakePostCache{}
+		u := newBFFForPostTestWithCache(newUser(), &fakeMediaClient{}, &fakePostClient{viewPost: newPost()}, pc)
+
+		resp, err := u.GetPost(ctxWithUID("u1"), &bffv1.GetPostRequest{PostId: "42"})
+		require.NoError(t, err)
+		require.False(t, resp.GetFail())
+		assert.Equal(t, []int64{42}, pc.gotIncr)
+	})
+
+	t.Run("作者自访：不计", func(t *testing.T) {
+		pc := &fakePostCache{}
+		u := newBFFForPostTestWithCache(newUser(), &fakeMediaClient{}, &fakePostClient{viewPost: newPost()}, pc)
+
+		_, err := u.GetPost(ctxWithUID("u2"), &bffv1.GetPostRequest{PostId: "42"})
+		require.NoError(t, err)
+		assert.Empty(t, pc.gotIncr, "作者访问自己的帖子不计浏览")
+	})
+
+	t.Run("Redis 故障降级：仅 Warn，详情正常返回", func(t *testing.T) {
+		pc := &fakePostCache{incrErr: errors.New("redis down")}
+		u := newBFFForPostTestWithCache(newUser(), &fakeMediaClient{}, &fakePostClient{viewPost: newPost()}, pc)
+
+		resp, err := u.GetPost(ctxWithUID("u1"), &bffv1.GetPostRequest{PostId: "42"})
+		require.NoError(t, err)
+		assert.False(t, resp.GetFail(), "埋点失败不得打挂详情页")
+		assert.Equal(t, []int64{42}, pc.gotIncr)
 	})
 }

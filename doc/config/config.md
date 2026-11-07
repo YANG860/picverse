@@ -17,6 +17,7 @@ consumer:    # 消费者
 server:      # 各服务监听地址
 services:    # 下游服务地址（服务发现）
 meili:       # Meilisearch 搜索引擎
+post:        # 帖子服务运行参数
 ```
 
 ## 各节详解
@@ -110,6 +111,11 @@ meili:       # Meilisearch 搜索引擎
 | `consumer.discover.name` / `max_retry` | — | 搜推消费者（索引同步/扇出，跑在 cmd/discover 进程内，无工作目录） |
 
 > `config.yaml` 中 `consumer.media.worker_pool_size` 与当前结构体无对应字段，属预留/失效项。
+
+### post — 帖子服务运行参数
+| 键 | 类型 | 说明 |
+| --- | --- | --- |
+| `view_flush_interval` | duration | 浏览计数刷回周期（RedisPoller：计数器增量 → `posts.view_count`），`0` 使用默认（30s） |
 
 ## 敏感信息
 

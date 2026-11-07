@@ -17,6 +17,7 @@ type Config struct {
 	Redis     RedisConfig     `mapstructure:"redis"`
 	Meili     MeiliConfig     `mapstructure:"meili"`
 	Cache     CacheConfig     `mapstructure:"cache"`
+	Post      PostConfig      `mapstructure:"post"`
 	Services  ServicesConfig  `mapstructure:"services"`
 }
 
@@ -41,6 +42,12 @@ type CacheConfig struct {
 	PostTTL time.Duration `mapstructure:"post_ttl"`
 	// NullTTL 空哨兵 TTL（防穿透），0 使用默认 60s
 	NullTTL time.Duration `mapstructure:"null_ttl"`
+}
+
+// PostConfig 帖子服务运行参数
+type PostConfig struct {
+	// ViewFlushInterval 浏览计数刷回周期（Redis → posts.view_count），0 使用默认 30s
+	ViewFlushInterval time.Duration `mapstructure:"view_flush_interval"`
 }
 
 // RedisConfig Redis 连接配置

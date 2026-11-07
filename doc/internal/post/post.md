@@ -72,6 +72,7 @@
 - **幂等口径**：重复点赞/收藏返回成功且不重复计数——前端可重复动作收敛（互动态前端预取判态的容错基础）。
 - **状态裁决**：仅 PUBLISHED 可互动；非 PUBLISHED/不存在一律 `NotFound`，不泄露帖子状态。
 - **收藏夹容量**：`defaults.FavouriteCap`（1000）；仅新增收藏校验（同事务计数含自身，超限回滚插入）；已藏重复调用幂等成功不报满。
+- **浏览计数 PV 近似（Redis 批量写回）**：BFF `GetPost` 他人访问时经 `PostEntityCache.IncrPostViewCount` 计数 +1（作者自访不计，失败仅 Warn 不打挂详情）；`internal/poller.RedisPoller`（cmd/poller 常驻）定时（`config.post.view_flush_interval`，默认 30s）原子取走（GETDEL）增量写回 `posts.view_count`。只丢不重：取走在前写库在后，失败丢该批增量；不建 view 明细表，`view_count` 为近似值（计数器约定见 [packages/cache/cache.md](../../packages/cache/cache.md)）。
 - **判态列表**：`ListLikedPostIDs`/`ListFavouritePostIDs` 供前端预取 post_ids 本地判态（赞态近似、藏态精确）；时间游标严格小于边界，同毫秒并列行在页边界可能落页外（与现有列表翻页同口径）。
 
 ## 依赖

@@ -209,6 +209,16 @@ func InitializeAuthServiceHandler(cfg *config.Config) (authv1connect.AuthService
 	return nil, func() {}
 }
 
+// InitializeRedisPoller 浏览计数刷回器装配（cmd/poller 内常驻：Redis 增量 → posts.view_count）
+func InitializeRedisPoller(cfg *config.Config) (*poller.RedisPoller, func()) {
+	wire.Build(
+		poller.NewRedisPoller,
+		Middlewares,
+		Repos,
+	)
+	return nil, func() {}
+}
+
 func InitializePostServiceHandler(cfg *config.Config) (postv1connect.PostServiceHandler, func()) {
 	wire.Build(
 		Services,

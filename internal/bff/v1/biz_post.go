@@ -2,6 +2,7 @@ package v1
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	bffv1 "rednote/gen/go/bff/v1"
@@ -375,6 +376,16 @@ func (u *BFFUsecaseImpl) GetPost(ctx context.Context, req *bffv1.GetPostRequest)
 	detail, mapErr := u.postDetail(ctx, p, views[0], relation)
 	if mapErr != nil {
 		return &bffv1.GetPostResponse{Fail: true, Err: mapErr}, nil
+	}
+
+	// 浏览计数埋点（PV 近似）：他人打开详情计数 +1，作者自访不计；
+	// best-effort，失败仅 Warn 不打挂详情页；RedisPoller 定时批量写回 posts.view_count
+	if uid != p.GetAuthorId() {
+		if postID, err := strconv.ParseInt(p.GetPostId(), 10, 64); err != nil {
+			u.log.Warn("skip view count: invalid post id", "uid", uid, "post_id", p.GetPostId())
+		} else if err := u.PostCache.IncrPostViewCount(ctx, postID); err != nil {
+			u.log.Warn("incr view count failed (best-effort)", "uid", uid, "post_id", postID, "error", err)
+		}
 	}
 
 	return &bffv1.GetPostResponse{Post: detail}, nil

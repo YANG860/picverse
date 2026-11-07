@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
 	"os/signal"
@@ -16,12 +17,21 @@ func main() {
 	flag.Parse()
 	cfg := config.Init(cfgPath)
 
-	poller, cleanup := gen.InitializePoller(cfg)
-	go poller.Start()
+	// Outbox 轮询：待发消息 → NATS JetStream（事务性消息最终一致性的执行者）
+	outboxPoller, cleanupOutbox := gen.InitializePoller(cfg)
+	go outboxPoller.Start()
+
+	// Redis 浏览计数刷回轮询：增量 → posts.view_count（PV 近似，只丢不重）
+	redisPoller, cleanupRedis := gen.InitializeRedisPoller(cfg)
+	pollerCtx, cancelPoller := context.WithCancel(context.Background())
+	go redisPoller.Run(pollerCtx)
 
 	term := make(chan os.Signal, 1)
 	signal.Notify(term, syscall.SIGINT, syscall.SIGTERM)
 	<-term
-	poller.Close()
-	cleanup()
+
+	cancelPoller() // RedisPoller 退出前自行冲刷残留增量
+	outboxPoller.Close()
+	cleanupRedis()
+	cleanupOutbox()
 }

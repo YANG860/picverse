@@ -873,6 +873,18 @@ func TestInteractionDetailCRUD(t *testing.T) {
 	cnt, err := repo.CountFavouritesByUser(ctx, uid)
 	require.NoError(t, err)
 	assert.Zero(t, cnt)
+
+	// 浏览增量（seedPost 起点 view_count=4）：+3 → 7
+	info, err = repo.IncPostViewCount(ctx, postID1, 3)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), info.RowsAffected)
+	require.NoError(t, db.First(&got, postID1).Error)
+	assert.Equal(t, int64(7), got.ViewCount)
+
+	// 帖子不存在：条件更新 0 行
+	info, err = repo.IncPostViewCount(ctx, 999999, 1)
+	require.NoError(t, err)
+	assert.Zero(t, info.RowsAffected)
 }
 
 // TestListLikedFavouritePostIDs 判态列表：(created_at DESC, id DESC) 序 + 游标翻页 + 用户隔离

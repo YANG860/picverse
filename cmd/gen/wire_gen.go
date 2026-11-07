@@ -140,6 +140,22 @@ func InitializeAuthServiceHandler(cfg *config.Config) (authv1connect.AuthService
 	}
 }
 
+// InitializeRedisPoller 浏览计数刷回器装配（cmd/poller 内常驻：Redis 增量 → posts.view_count）
+func InitializeRedisPoller(cfg *config.Config) (*poller.RedisPoller, func()) {
+	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
+	gormDB, cleanup2 := db.NewPG(cfg, loggerFactoryImpl)
+	postRepoImpl := v1_3.NewPostRepo(gormDB)
+	cacheCache, cleanup3 := cache.NewCache(cfg, loggerFactoryImpl)
+	postEntityCacheImpl := cache.NewPostEntityCache(cacheCache, cfg, loggerFactoryImpl)
+	cachedPostRepo := v1_3.NewCachedPostRepo(postRepoImpl, postEntityCacheImpl, loggerFactoryImpl)
+	redisPoller := poller.NewRedisPoller(cachedPostRepo, postEntityCacheImpl, cfg, loggerFactoryImpl)
+	return redisPoller, func() {
+		cleanup3()
+		cleanup2()
+		cleanup()
+	}
+}
+
 func InitializePostServiceHandler(cfg *config.Config) (postv1connect.PostServiceHandler, func()) {
 	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
 	gormDB, cleanup2 := db.NewPG(cfg, loggerFactoryImpl)
@@ -168,9 +184,12 @@ func InitializeBFFServiceHandler(cfg *config.Config) (bffv1connect.BFFServiceHan
 	discoverServiceClient := rpc.NewDiscoverClient(staticProvider)
 	downstreamRepo := v1_6.NewDownstreamRepo(authServiceClient, userServiceClient, mediaServiceClient, postServiceClient, discoverServiceClient)
 	jetStreamClient, cleanup2 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
-	bffUsecaseImpl := v1_6.NewBFFUsecase(downstreamRepo, jetStreamClient, loggerFactoryImpl)
+	cacheCache, cleanup3 := cache.NewCache(cfg, loggerFactoryImpl)
+	postEntityCacheImpl := cache.NewPostEntityCache(cacheCache, cfg, loggerFactoryImpl)
+	bffUsecaseImpl := v1_6.NewBFFUsecase(downstreamRepo, jetStreamClient, postEntityCacheImpl, loggerFactoryImpl)
 	bffServiceHandler := v1_6.NewBFFServiceHandler(loggerFactoryImpl, bffUsecaseImpl)
 	return bffServiceHandler, func() {
+		cleanup3()
 		cleanup2()
 		cleanup()
 	}

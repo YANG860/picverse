@@ -46,6 +46,7 @@ rednote 是一个仿小红书的图片社交论坛后端，基于 Go + ConnectRP
 | [packages/defaults/defaults.md](packages/defaults/defaults.md) | 全局默认常量 |
 | [packages/errmsg/err.md](packages/errmsg/err.md) | 可枚举业务错误码 |
 | [packages/cache/cache.md](packages/cache/cache.md) | 缓存层（Cache-Aside）：通用原语 + 帖子/用户实体缓存 + 浏览计数器 |
+| [packages/redis/redis.md](packages/redis/redis.md) | Redis 客户端（连接工厂） |
 | [packages/meili/meili.md](packages/meili/meili.md) | Meilisearch 客户端：索引同步封装（EnsureIndex / Upsert / Delete，任务阻塞至生效） |
 
 ### test — 测试

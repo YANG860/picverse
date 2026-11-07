@@ -11,15 +11,9 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 )
 
-// RedisRepo Redis 工具仓库
-// TODO: 具体方法稍后补全
-type RedisRepo interface {
-	// HealthCheck 健康检查
-	HealthCheck(ctx context.Context) error
-}
-
-// RedisClient go-redis 客户端封装
-// 内嵌 *goredis.Client，底层命令可直接调用（如 r.Get / r.SetNX）
+// RedisClient go-redis 客户端封装（连接工厂）
+// 内嵌 *goredis.Client，底层命令可直接调用（如 r.Get / r.SetNX）；
+// 业务语义（缓存存取、计数器聚合）见 packages/cache，本包只负责建连
 type RedisClient struct {
 	*goredis.Client
 	log *slog.Logger
@@ -49,16 +43,9 @@ func NewClient(cfg *config.Config, lf logger.LoggerFactory) (*RedisClient, func(
 		Client: client,
 		log:    lf.GetLoggerOf("redis"),
 	}
+	rc.log.Info("redis connected", "addr", cfg.Redis.Addr, "db", cfg.Redis.DB)
 
 	return rc, func() {
 		_ = rc.Close()
 	}
-}
-
-// HealthCheck 健康检查
-func (r *RedisClient) HealthCheck(ctx context.Context) error {
-	if err := r.Ping(ctx).Err(); err != nil {
-		return fmt.Errorf("redis health check failed: %w", err)
-	}
-	return nil
 }

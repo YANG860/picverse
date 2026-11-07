@@ -468,3 +468,8 @@ func (r *CachedPostRepo) ListLikedPostIDs(ctx context.Context, userID int64, bef
 func (r *CachedPostRepo) ListFavouritePostIDs(ctx context.Context, userID int64, before int64, limit int64) ([]*models.PostFavourite, error) {
 	return r.inner.ListFavouritePostIDs(ctx, userID, before, limit)
 }
+
+// IncPostViewCount 直通
+func (r *CachedPostRepo) IncPostViewCount(ctx context.Context, postID int64, delta int64) (gen.ResultInfo, error) {
+	return r.inner.IncPostViewCount(ctx, postID, delta)
+}

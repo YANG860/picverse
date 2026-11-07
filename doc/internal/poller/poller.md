@@ -1,8 +1,11 @@
-# poller — Outbox Poller
+# poller — 后台轮询作业
 
-代码：`internal/poller/poller.go`，进程：`cmd/poller`。
+代码：`internal/poller/`，进程：`cmd/poller`。常驻轮询类后台作业的统一归属：
 
-轮询 [Outbox 发件箱](../common/common.md)，把待发消息投递到 NATS JetStream，是"事务性消息"最终一致性的执行者。
+- `OutBoxPoller`（poller.go）：outbox → NATS JetStream；
+- `RedisPoller`（redis_poller.go）：浏览计数刷回（Redis → posts.view_count）。
+
+## OutBoxPoller
 
 ## 结构
 
@@ -38,3 +41,12 @@
 | `retry_count` + 部分索引 | 失败可重试，热路径高效 |
 
 消息体为 protobuf 序列化的 `MediaMessage` 等，投递到 `media` 流后由 [consumer](../consumer/consumer.md) 消费。
+
+## RedisPoller（浏览计数刷回：Redis → posts.view_count）
+
+`RedisPoller` 定时把 Redis 累积的浏览增量原子取走后批量写回 `posts.view_count`（PV 近似，口径见 [packages/cache/cache.md](../../packages/cache/cache.md)）：
+
+- **生命周期**：`Run(ctx)` 阻塞 ticker 循环；ctx 取消即尽力冲刷残留后退出。刷回统一用脱离循环取消的短超时上下文（10s）——关停瞬间在途批次照常完成，不因取消而丢弃。
+- **单轮刷回（flushOnce）**：`Cache.TakePostViewDeltas` 取走增量（GETDEL，取走在前）→ 逐帖 `Repo.IncPostViewCount` 写库。
+- **只丢不重**：取走失败增量留在 Redis 下轮再试（不丢）；写库失败丢弃不回填（回填有双计风险，宁丢不重）；帖子不存在（RowsAffected=0）丢弃。
+- **配置**：`config.post.view_flush_interval`（默认 30s）。

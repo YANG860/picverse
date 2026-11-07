@@ -2,6 +2,7 @@ package v1
 
 import (
 	"context"
+	"fmt"
 
 	postv1 "rednote/gen/go/post/v1"
 	"rednote/gen/query"
@@ -110,6 +111,8 @@ type PostRepository interface {
 	ListLikedPostIDs(ctx context.Context, userID int64, before int64, limit int64) ([]*models.PostLike, error)
 	// ListFavouritePostIDs 用户收藏的帖子明细（同构）
 	ListFavouritePostIDs(ctx context.Context, userID int64, before int64, limit int64) ([]*models.PostFavourite, error)
+	// IncPostViewCount 浏览数增量累加（不校验帖子状态，计数尽力而为）
+	IncPostViewCount(ctx context.Context, postID int64, delta int64) (gen.ResultInfo, error)
 }
 
 var _ PostRepository = (*PostRepoImpl)(nil)
@@ -606,4 +609,14 @@ func (r *PostRepoImpl) ListFavouritePostIDs(ctx context.Context, userID int64, b
 		Order(r.q.PostFavourite.CreatedAt.Desc(), r.q.PostFavourite.ID.Desc()).
 		Limit(int(limit)).
 		Find()
+}
+
+// IncPostViewCount 浏览数增量累加（不校验帖子状态，计数尽力而为）
+func (r *PostRepoImpl) IncPostViewCount(ctx context.Context, postID int64, delta int64) (gen.ResultInfo, error) {
+	q := query.PostDetail
+	info, err := q.WithContext(ctx).Where(q.ID.Eq(postID)).UpdateSimple(q.ViewCount.Add(delta))
+	if err != nil {
+		return gen.ResultInfo{}, fmt.Errorf("repo inc post view count %d: %w", postID, err)
+	}
+	return gen.ResultInfo{RowsAffected: info.RowsAffected}, nil
 }

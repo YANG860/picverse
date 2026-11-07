@@ -58,6 +58,9 @@ cache:
   post_ttl: 30m    # 帖子详情缓存 TTL（±10% 抖动防雪崩）
   null_ttl: 60s    # 空哨兵 TTL（防穿透）
 
+post:
+  view_flush_interval: 30s # 浏览计数刷回周期（Redis 计数器 → posts.view_count）
+
 jwt:
   secret: "a8de244a1570e97d9e07f9144c78ca7bfe2ed303c7846c32f1201a2d22e2184e"  # HMAC-SHA256 密钥，必填
   issuer: "rednote"
