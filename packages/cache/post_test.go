@@ -3,8 +3,11 @@ package cache_test
 import (
 	"context"
 	"errors"
+	"io"
 	"testing"
 	"time"
+
+	"log/slog"
 
 	"rednote/config"
 	postv1 "rednote/gen/go/post/v1"
@@ -18,6 +21,14 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/datatypes"
 )
+
+// testLF 日志工厂测试替身（丢弃式：断言不依赖日志输出）
+type testLF struct{}
+
+func (testLF) GetLoggerOf(string) *slog.Logger { return slog.Default() }
+func (testLF) GetWriter() io.Writer            { return io.Discard }
+func (testLF) Default() *slog.Logger           { return slog.Default() }
+func (testLF) Close()                          {}
 
 // newPostDetail 构造全字段帖子（统计列非零，验证入缓存时被清零；含 2 条媒体关联，
 // 乱序插入验证 sort_order 往返不丢序）
@@ -71,7 +82,7 @@ func newCacheTestMedia(id int64) *media.MediaFile {
 
 func TestStoreLoadPostDetail_全字段往返_统计列清零(t *testing.T) {
 	tc := testredis.New()
-	ec := cache.NewPostEntityCache(tc, nil)
+	ec := cache.NewPostEntityCache(tc, nil, testLF{})
 	ctx := context.Background()
 	detail := newPostDetail(2001)
 
@@ -103,7 +114,7 @@ func TestStoreLoadPostDetail_全字段往返_统计列清零(t *testing.T) {
 
 func TestStorePostDetail_Nil写空哨兵_与实体互相覆盖(t *testing.T) {
 	tc := testredis.New()
-	ec := cache.NewPostEntityCache(tc, nil)
+	ec := cache.NewPostEntityCache(tc, nil, testLF{})
 	ctx := context.Background()
 	const id int64 = 2001
 
@@ -125,7 +136,7 @@ func TestStorePostDetail_Nil写空哨兵_与实体互相覆盖(t *testing.T) {
 
 func TestLoadPostDetails_Miss空入参与去重(t *testing.T) {
 	tc := testredis.New()
-	ec := cache.NewPostEntityCache(tc, nil)
+	ec := cache.NewPostEntityCache(tc, nil, testLF{})
 	ctx := context.Background()
 
 	t.Run("未缓存的 id 不在返回 map 中（miss）", func(t *testing.T) {
@@ -165,7 +176,7 @@ func TestLoadPostDetails_Miss空入参与去重(t *testing.T) {
 
 func TestStoreLoadPostStat_全字段往返与哨兵(t *testing.T) {
 	tc := testredis.New()
-	ec := cache.NewPostEntityCache(tc, nil)
+	ec := cache.NewPostEntityCache(tc, nil, testLF{})
 	ctx := context.Background()
 	stat := &post.PostStat{ID: 2001, LikeCount: 1, FavouriteCount: 2, CommentCount: 3, ViewCount: 4}
 
@@ -189,7 +200,7 @@ func TestStoreLoadPostStat_全字段往返与哨兵(t *testing.T) {
 
 func TestDelPost_失效独立且幂等(t *testing.T) {
 	tc := testredis.New()
-	ec := cache.NewPostEntityCache(tc, nil)
+	ec := cache.NewPostEntityCache(tc, nil, testLF{})
 	ctx := context.Background()
 	const id int64 = 2001
 
@@ -230,7 +241,7 @@ func TestPostCache错误上抛_可降级(t *testing.T) {
 	sentinel := errors.New("redis down")
 
 	t.Run("批量读错误上抛", func(t *testing.T) {
-		ec := cache.NewPostEntityCache(&flakyCache{Client: testredis.New(), mgetErr: sentinel}, nil)
+		ec := cache.NewPostEntityCache(&flakyCache{Client: testredis.New(), mgetErr: sentinel}, nil, testLF{})
 		_, err := ec.LoadPostDetails(ctx, []int64{2001})
 		require.ErrorIs(t, err, sentinel)
 		assert.ErrorContains(t, err, "cache post detail mget")
@@ -241,7 +252,7 @@ func TestPostCache错误上抛_可降级(t *testing.T) {
 	})
 
 	t.Run("写错误上抛（实体与空哨兵）", func(t *testing.T) {
-		ec := cache.NewPostEntityCache(&flakyCache{Client: testredis.New(), setErr: sentinel}, nil)
+		ec := cache.NewPostEntityCache(&flakyCache{Client: testredis.New(), setErr: sentinel}, nil, testLF{})
 		err := ec.StorePostDetail(ctx, 2001, newPostDetail(2001))
 		require.ErrorIs(t, err, sentinel)
 		assert.ErrorContains(t, err, "cache post detail set")
@@ -256,7 +267,7 @@ func TestPostCache错误上抛_可降级(t *testing.T) {
 	})
 
 	t.Run("删除错误上抛", func(t *testing.T) {
-		ec := cache.NewPostEntityCache(&flakyCache{Client: testredis.New(), delErr: sentinel}, nil)
+		ec := cache.NewPostEntityCache(&flakyCache{Client: testredis.New(), delErr: sentinel}, nil, testLF{})
 		err := ec.DelPostDetails(ctx, []int64{2001})
 		require.ErrorIs(t, err, sentinel)
 		assert.ErrorContains(t, err, "cache post detail del")
@@ -273,7 +284,7 @@ func TestPost损坏值按错误上抛(t *testing.T) {
 		Client:  testredis.New(),
 		corrupt: func(val []byte) []byte { return []byte("not-json") },
 	}
-	ec := cache.NewPostEntityCache(fc, nil)
+	ec := cache.NewPostEntityCache(fc, nil, testLF{})
 
 	require.NoError(t, ec.StorePostDetail(ctx, 2001, newPostDetail(2001)))
 	_, err := ec.LoadPostDetails(ctx, []int64{2001})
@@ -294,7 +305,7 @@ func TestPostTTL_配置生效与默认回退(t *testing.T) {
 	t.Run("PostTTL 到期后按 miss 处理", func(t *testing.T) {
 		ec := cache.NewPostEntityCache(testredis.New(), &config.Config{
 			Cache: config.CacheConfig{PostTTL: 20 * time.Millisecond},
-		})
+		}, testLF{})
 		require.NoError(t, ec.StorePostDetail(ctx, 2001, newPostDetail(2001)))
 
 		require.Eventually(t, func() bool {
@@ -306,7 +317,7 @@ func TestPostTTL_配置生效与默认回退(t *testing.T) {
 	t.Run("空哨兵按 NullTTL 到期", func(t *testing.T) {
 		ec := cache.NewPostEntityCache(testredis.New(), &config.Config{
 			Cache: config.CacheConfig{NullTTL: 20 * time.Millisecond},
-		})
+		}, testLF{})
 		require.NoError(t, ec.StorePostDetail(ctx, 2001, nil))
 
 		require.Eventually(t, func() bool {
@@ -316,7 +327,7 @@ func TestPostTTL_配置生效与默认回退(t *testing.T) {
 	})
 
 	t.Run("cfg 为 nil 时回退默认 TTL 且往返可用", func(t *testing.T) {
-		ec := cache.NewPostEntityCache(testredis.New(), nil)
+		ec := cache.NewPostEntityCache(testredis.New(), nil, testLF{})
 		require.NoError(t, ec.StorePostDetail(ctx, 2001, newPostDetail(2001)))
 		got, err := ec.LoadPostDetails(ctx, []int64{2001})
 		require.NoError(t, err)
@@ -327,6 +338,49 @@ func TestPostTTL_配置生效与默认回退(t *testing.T) {
 // ---------- 构造校验 ----------
 
 func TestNewPostEntityCache_依赖校验(t *testing.T) {
-	require.Panics(t, func() { cache.NewPostEntityCache(nil, nil) }, "Cache 缺失应 fail-fast")
-	require.NotPanics(t, func() { cache.NewPostEntityCache(testredis.New(), nil) }, "cfg 可为 nil（TTL 回退 defaults）")
+	require.Panics(t, func() { cache.NewPostEntityCache(nil, nil, testLF{}) }, "Cache 缺失应 fail-fast")
+	require.Panics(t, func() { cache.NewPostEntityCache(testredis.New(), nil, nil) }, "LoggerFactory 缺失应 fail-fast")
+	require.NotPanics(t, func() { cache.NewPostEntityCache(testredis.New(), nil, testLF{}) }, "cfg 可为 nil（TTL 回退 defaults）")
+}
+
+// ==================== 浏览计数器（PV 近似，只丢不重） ====================
+
+// TestPostViewCounter_IncrTake 取走：多次 +1 聚合取走、取走即清、脏 key/值丢弃、再取为空
+func TestPostViewCounter_IncrTake(t *testing.T) {
+	tc := testredis.New()
+	ec := cache.NewPostEntityCache(tc, nil, testLF{})
+	ctx := context.Background()
+
+	// 计数累加（3 次 → delta 3）
+	for range 3 {
+		require.NoError(t, ec.IncrPostViewCount(ctx, 2001))
+	}
+	got, ok := tc.Raw("rn:v1:post:view:2001")
+	require.True(t, ok, "计数器 key 应存在")
+	assert.Equal(t, "3", string(got))
+
+	// 结构性垃圾：非法 id key 与非法值（正常写入路径不存在）
+	require.NoError(t, tc.Set(ctx, "rn:v1:post:view:abc", []byte("1"), 0))
+	require.NoError(t, tc.Set(ctx, "rn:v1:post:view:2002", []byte("notnum"), 0))
+
+	deltas, err := ec.TakePostViewDeltas(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, map[int64]int64{2001: 3}, deltas, "脏 key/值取走即弃，只留合法增量")
+
+	// 取走即清（GETDEL 语义）
+	_, ok = tc.Raw("rn:v1:post:view:2001")
+	assert.False(t, ok, "取走后计数器应清空")
+
+	again, err := ec.TakePostViewDeltas(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, again, "无增量时返回空 map")
+}
+
+// TestPostViewCounter_错误上抛 IncrCounter 失败上抛由调用方降级（fail-open）
+func TestPostViewCounter_错误上抛(t *testing.T) {
+	sentinel := errors.New("redis down")
+	ec := cache.NewPostEntityCache(&flakyCache{Client: testredis.New(), incrErr: sentinel}, nil, testLF{})
+
+	err := ec.IncrPostViewCount(context.Background(), 2001)
+	assert.ErrorIs(t, err, sentinel)
 }

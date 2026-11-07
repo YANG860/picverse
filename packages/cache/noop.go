@@ -36,3 +36,13 @@ func (Noop) Set(ctx context.Context, key string, val []byte, ttl time.Duration) 
 func (Noop) Del(ctx context.Context, keys ...string) error {
 	return nil
 }
+
+// IncrCounter 空转（无缓存时计数不累积，浏览计数等聚合降级为不计）
+func (Noop) IncrCounter(ctx context.Context, key string, ttl time.Duration) error {
+	return nil
+}
+
+// TakeCounters 恒空（无可取增量）
+func (Noop) TakeCounters(ctx context.Context, prefix string) (map[string]string, error) {
+	return map[string]string{}, nil
+}

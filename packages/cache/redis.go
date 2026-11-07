@@ -95,3 +95,43 @@ func (r *RedisCache) Del(ctx context.Context, keys ...string) error {
 	}
 	return nil
 }
+
+// IncrCounter 原子递增并刷新 TTL（INCR + EXPIRE 管道提交）
+func (r *RedisCache) IncrCounter(ctx context.Context, key string, ttl time.Duration) error {
+	pipe := r.rc.Pipeline()
+	pipe.Incr(ctx, key)
+	if ttl > 0 {
+		pipe.Expire(ctx, key, ttl)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("cache incr counter %s: %w", key, err)
+	}
+	return nil
+}
+
+// TakeCounters SCAN 逐 key GETDEL 原子取走（多消费者互斥：取走者独得增量）。
+// 取走即清除，Redis 是增量的唯一事实源；脏值原样上交，由调用方裁决。
+func (r *RedisCache) TakeCounters(ctx context.Context, prefix string) (map[string]string, error) {
+	out := make(map[string]string)
+	var cursor uint64
+	for {
+		keys, next, err := r.rc.Scan(ctx, cursor, prefix+"*", 200).Result()
+		if err != nil {
+			return nil, fmt.Errorf("cache take counters scan %s: %w", prefix, err)
+		}
+		for _, key := range keys {
+			val, err := r.rc.GetDel(ctx, key).Result()
+			if errors.Is(err, goredis.Nil) {
+				continue // 竞态：已被其他取走者清掉
+			}
+			if err != nil {
+				return nil, fmt.Errorf("cache take counters getdel %s: %w", key, err)
+			}
+			out[key] = val
+		}
+		cursor = next
+		if cursor == 0 {
+			return out, nil
+		}
+	}
+}

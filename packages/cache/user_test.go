@@ -27,6 +27,7 @@ type flakyCache struct {
 	mgetErr error
 	setErr  error
 	delErr  error
+	incrErr error
 	corrupt func(val []byte) []byte
 }
 
@@ -60,6 +61,13 @@ func (f *flakyCache) Del(ctx context.Context, keys ...string) error {
 		return f.delErr
 	}
 	return f.Client.Del(ctx, keys...)
+}
+
+func (f *flakyCache) IncrCounter(ctx context.Context, key string, ttl time.Duration) error {
+	if f.incrErr != nil {
+		return f.incrErr
+	}
+	return f.Client.IncrCounter(ctx, key, ttl)
 }
 
 // newProfile 构造全字段用户资料（统计列非零，验证入缓存时被清零）

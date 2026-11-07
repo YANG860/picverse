@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"context"
 	"math/rand"
+	"strconv"
+	"strings"
 	"time"
 )
-
 
 type Cache interface {
 	// Get 读取单 key；val 不存在（miss）返回 ok=false
@@ -17,11 +18,41 @@ type Cache interface {
 	Set(ctx context.Context, key string, val []byte, ttl time.Duration) error
 	// Del 删除 keys；不存在的 key 静默跳过（幂等）
 	Del(ctx context.Context, keys ...string) error
+
+	// ==================== 计数器原语（多写者并发累加） ====================
+
+	// IncrCounter 计数器 +1 并刷新 TTL（原子；key 不存在从 1 起）。
+	// 独立于 Get/Set 的读-改-写：多写者并发安全的增量累加（如浏览计数聚合），
+	// ttl <= 0 表示不过期。
+	IncrCounter(ctx context.Context, key string, ttl time.Duration) error
+	// TakeCounters 按前缀原子取走计数器增量（取走即清除，多消费者互斥：取走者独得）。
+	// 返回 key → 原始值（十进制字符串）；前缀下无键返回空 map，值的合法性由调用方裁决。
+	TakeCounters(ctx context.Context, prefix string) (map[string]string, error)
 }
 
 // KeyPrefix 缓存 key 前缀。v1 为序列化 schema 版本：
 // 发版修改缓存值结构且不兼容时升版本号，整体切换 key 空间，不做兼容读。
 const KeyPrefix = "rn:v1"
+
+// 实体/计数器 key 前缀集中声明（key 空间全览：构造、SCAN、回读解析共用一处，防双源漂移）
+const (
+	postDetailPrefix  = KeyPrefix + ":post:detail:"
+	postStatPrefix    = KeyPrefix + ":post:stat:"
+	postViewPrefix    = KeyPrefix + ":post:view:"
+	userProfilePrefix = KeyPrefix + ":user:profile:"
+	userStatPrefix    = KeyPrefix + ":user:stat:"
+)
+
+// idKey 实体/计数器 key 的唯一构造点：prefix + 十进制 id
+func idKey(prefix string, id int64) string {
+	return prefix + strconv.FormatInt(id, 10)
+}
+
+// idFromKey idKey 的逆运算：剥前缀解析 id（构造/回读同源配对，
+// round-trip 不变式见 keys_test.go；非法 key 按错误上抛）
+func idFromKey(prefix, key string) (int64, error) {
+	return strconv.ParseInt(strings.TrimPrefix(key, prefix), 10, 64)
+}
 
 // NullSentinel 空哨兵值：缓存"查询结果为空"，防缓存穿透（恶意/误用的不存在 ID 打穿到 DB）。
 // 真实缓存值均为 JSON 对象（以 '{' 开头），与哨兵天然可区分。

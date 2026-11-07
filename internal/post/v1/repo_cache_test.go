@@ -49,7 +49,7 @@ func newCachedPostRepoEnv(t *testing.T) *cachedPostRepoEnv {
 			PostTTL: time.Hour,
 			NullTTL: time.Minute,
 		},
-	})
+	}, lf)
 	return &cachedPostRepoEnv{
 		repo:  NewCachedPostRepo(inner, ec, lf),
 		inner: inner,

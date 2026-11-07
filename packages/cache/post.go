@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 
 	"rednote/config"
 	post "rednote/internal/post/models"
 	"rednote/packages/defaults"
+	"rednote/packages/logger"
 )
 
 // PostEntityCache 帖子实体缓存（cache-aside 存取层）：以 post_id 为粒度缓存帖子实体，
@@ -40,6 +42,15 @@ type PostEntityCache interface {
 	StorePostStat(ctx context.Context, id int64, stat *post.PostStat) error
 	// DelPostStats 批量删除帖子统计列缓存
 	DelPostStats(ctx context.Context, ids []int64) error
+
+	// ---- 浏览计数器（PV 近似，只丢不重）----
+
+	// IncrPostViewCount 浏览计数 +1（PV 近似，调用方 fire-and-forget 降级）。
+	// 计数累加在独立计数器 key（不与缓存实体混写，避免缓存失效误伤计数）
+	IncrPostViewCount(ctx context.Context, id int64) error
+	// TakePostViewDeltas 原子取走全部待刷回的浏览增量（id → delta，取走即清除，只丢不重）；
+	// 非法 key/值（结构性垃圾，正常写入路径不存在）取走即弃并留 Warn
+	TakePostViewDeltas(ctx context.Context) (map[int64]int64, error)
 }
 
 // PostEntityCacheImpl PostEntityCache 的 Cache 实现：key 构造 + JSON 序列化 +
@@ -47,34 +58,52 @@ type PostEntityCache interface {
 type PostEntityCacheImpl struct {
 	c   Cache
 	cfg config.CacheConfig // TTL 来源：字段 > 0 取配置，否则回退 defaults
+	log *slog.Logger       // 结构性垃圾丢弃留痕（可操作上下文）
 }
 
 var _ PostEntityCache = (*PostEntityCacheImpl)(nil)
 
 // NewPostEntityCache 创建帖子实体缓存。cfg 可为 nil（全部 TTL 回退 defaults）；
-// cfg 字段为 0 时同样回退 defaults（"config 其次 defaults"）。
-func NewPostEntityCache(c Cache, cfg *config.Config) *PostEntityCacheImpl {
+// cfg 字段为 0 时同样回退 defaults（"config 其次 defaults"）。lf 用于垃圾丢弃 Warn 留痕。
+func NewPostEntityCache(c Cache, cfg *config.Config, lf logger.LoggerFactory) *PostEntityCacheImpl {
 	if c == nil {
 		panic(fmt.Errorf("cache: cache client is required"))
+	}
+	if lf == nil {
+		panic(fmt.Errorf("cache: logger factory is required"))
 	}
 	var cc config.CacheConfig
 	if cfg != nil {
 		cc = cfg.Cache
 	}
-	return &PostEntityCacheImpl{c: c, cfg: cc}
+	return &PostEntityCacheImpl{c: c, cfg: cc, log: lf.GetLoggerOf("post_cache")}
 }
 
 // ==================== key 与 TTL ====================
 
 // postDetailKey 帖子详情缓存 key（KeyPrefix 的 v1 为序列化 schema 版本）
 func postDetailKey(id int64) string {
-	return KeyPrefix + ":post:detail:" + strconv.FormatInt(id, 10)
+	return idKey(postDetailPrefix, id)
 }
 
 // postStatKey 帖子统计列缓存 key
 func postStatKey(id int64) string {
-	return KeyPrefix + ":post:stat:" + strconv.FormatInt(id, 10)
+	return idKey(postStatPrefix, id)
 }
+
+// postViewKey 浏览计数器 key（独立于实体缓存 key 空间，TTL 到期自动清空）
+func postViewKey(id int64) string {
+	return idKey(postViewPrefix, id)
+}
+
+// postViewID postViewKey 的逆运算（构造/回读同源配对）
+func postViewID(key string) (int64, error) {
+	return idFromKey(postViewPrefix, key)
+}
+
+// viewCounterTTL 计数器 TTL 安全网：正常每刷回周期（默认 30s）即被取走，
+// TTL 只防刷回长期停摆时计数器无界堆积（过期丢失符合近似口径），每次 +1 刷新
+const viewCounterTTL = 24 * time.Hour
 
 // detailTTL 详情缓存 TTL：config 其次 defaults
 func (u *PostEntityCacheImpl) detailTTL() time.Duration {
@@ -215,4 +244,40 @@ func (u *PostEntityCacheImpl) DelPostStats(ctx context.Context, ids []int64) err
 		return fmt.Errorf("cache post stat del: %w", err)
 	}
 	return nil
+}
+
+// ==================== 浏览计数器（PV 近似，只丢不重） ====================
+
+// IncrPostViewCount 浏览计数 +1（PV 近似，调用方 fire-and-forget 降级，失败不影响主流程）。
+// 计数累加在独立计数器 key（不与缓存实体混写，避免缓存失效误伤计数）；
+// TTL 为安全网（viewCounterTTL），每次 +1 刷新。
+func (u *PostEntityCacheImpl) IncrPostViewCount(ctx context.Context, id int64) error {
+	if err := u.c.IncrCounter(ctx, postViewKey(id), viewCounterTTL); err != nil {
+		return fmt.Errorf("cache incr post view %d: %w", id, err)
+	}
+	return nil
+}
+
+// TakePostViewDeltas 原子取走全部待刷回的浏览增量（id → delta，取走即清除，只丢不重）。
+// 非法 key/值（结构性垃圾，正常写入路径不存在）取走即弃并留 Warn（不静默吞掉）。
+func (u *PostEntityCacheImpl) TakePostViewDeltas(ctx context.Context) (map[int64]int64, error) {
+	vals, err := u.c.TakeCounters(ctx, postViewPrefix)
+	if err != nil {
+		return nil, fmt.Errorf("cache take post view deltas: %w", err)
+	}
+	deltas := make(map[int64]int64, len(vals))
+	for key, val := range vals {
+		id, err := postViewID(key)
+		if err != nil {
+			u.log.Warn("view counter dropped: invalid key", "key", key)
+			continue
+		}
+		delta, err := strconv.ParseInt(val, 10, 64)
+		if err != nil {
+			u.log.Warn("view counter dropped: invalid value", "key", key, "value", val)
+			continue
+		}
+		deltas[id] = delta
+	}
+	return deltas, nil
 }

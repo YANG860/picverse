@@ -4,6 +4,8 @@ package testredis
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -117,4 +119,40 @@ func (c *Client) Raw(key string) ([]byte, bool) {
 
 func (c *Client) expired(e entry) bool {
 	return !e.expiresAt.IsZero() && time.Now().After(e.expiresAt)
+}
+
+// IncrCounter 原子递增并刷新 TTL（值存十进制字符串；存量脏值按 0 起）
+func (c *Client) IncrCounter(ctx context.Context, key string, ttl time.Duration) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := int64(0)
+	if e, ok := c.m[key]; ok && !c.expired(e) {
+		n, _ = strconv.ParseInt(string(e.val), 10, 64)
+	}
+	n++
+	e := entry{val: []byte(strconv.FormatInt(n, 10))}
+	if ttl > 0 {
+		e.expiresAt = time.Now().Add(ttl)
+	}
+	c.m[key] = e
+	return nil
+}
+
+// TakeCounters 按前缀取走（取走即删；过期条目跳过并清理）
+func (c *Client) TakeCounters(ctx context.Context, prefix string) (map[string]string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make(map[string]string)
+	for key, e := range c.m {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		if c.expired(e) {
+			delete(c.m, key)
+			continue
+		}
+		out[key] = string(e.val)
+		delete(c.m, key)
+	}
+	return out, nil
 }

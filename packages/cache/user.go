@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"time"
 
 	"rednote/config"
@@ -71,12 +70,12 @@ func NewUserEntityCache(c Cache, cfg *config.Config) *UserEntityCacheImpl {
 
 // userProfileKey 用户资料缓存 key（KeyPrefix 的 v1 为序列化 schema 版本）
 func userProfileKey(id int64) string {
-	return KeyPrefix + ":user:profile:" + strconv.FormatInt(id, 10)
+	return idKey(userProfilePrefix, id)
 }
 
 // userStatKey 用户统计列缓存 key
 func userStatKey(id int64) string {
-	return KeyPrefix + ":user:stat:" + strconv.FormatInt(id, 10)
+	return idKey(userStatPrefix, id)
 }
 
 // profileTTL 资料缓存 TTL：config 其次 defaults
