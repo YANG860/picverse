@@ -86,6 +86,30 @@ type PostRepository interface {
 	GetPostCover(ctx context.Context, postIDs []int64) ([]*models.PostMedia, error)
 	// DeletePostMedias 删除帖子与媒体的关联，返回被删关联的媒体资产 ID（供调用方回收引用计数）
 	DeletePostMedias(ctx context.Context, postID int64) ([]int64, error)
+
+	// ==================== 互动（点赞/收藏明细） ====================
+	// CreateLike 点赞明细（OnConflict DoNothing 幂等）；ok=false 表示已赞过（未新增）
+	CreateLike(ctx context.Context, postID int64, userID int64) (bool, error)
+	// DeleteLike 删除点赞明细；ok=true 表示确有删除（未赞时 false，幂等）
+	DeleteLike(ctx context.Context, postID int64, userID int64) (bool, error)
+	// CreateFavourite 收藏明细（幂等）；ok=false 表示已收藏
+	CreateFavourite(ctx context.Context, postID int64, userID int64) (bool, error)
+	// DeleteFavourite 删除收藏明细；ok=true 表示确有删除
+	DeleteFavourite(ctx context.Context, postID int64, userID int64) (bool, error)
+	// CountFavouritesByUser 用户收藏总数（收藏夹容量校验用）
+	CountFavouritesByUser(ctx context.Context, userID int64) (int64, error)
+	// IncPostLikeCount 点赞数 +1（条件增量；RowsAffected=0 即帖子不存在，下层同库事务内调用）
+	IncPostLikeCount(ctx context.Context, postID int64) (gen.ResultInfo, error)
+	// DecPostLikeCount 点赞数 -1（防负条件更新：仅 like_count > 0 才减；计数已 0 时按存在性回报）
+	DecPostLikeCount(ctx context.Context, postID int64) (gen.ResultInfo, error)
+	// IncPostFavouriteCount 收藏数 +1（条件增量）
+	IncPostFavouriteCount(ctx context.Context, postID int64) (gen.ResultInfo, error)
+	// DecPostFavouriteCount 收藏数 -1（防负条件更新：仅计数 > 0 才减）
+	DecPostFavouriteCount(ctx context.Context, postID int64) (gen.ResultInfo, error)
+	// ListLikedPostIDs 用户点赞的帖子明细（created_at DESC, id DESC；返回行供游标取 stamp）
+	ListLikedPostIDs(ctx context.Context, userID int64, before int64, limit int64) ([]*models.PostLike, error)
+	// ListFavouritePostIDs 用户收藏的帖子明细（同构）
+	ListFavouritePostIDs(ctx context.Context, userID int64, before int64, limit int64) ([]*models.PostFavourite, error)
 }
 
 var _ PostRepository = (*PostRepoImpl)(nil)
@@ -452,4 +476,134 @@ func (r *PostRepoImpl) DeletePostMedias(ctx context.Context, postID int64) ([]in
 		}
 	}
 	return assetIDs, nil
+}
+
+// ==================== 互动（点赞/收藏明细） ====================
+
+// CreateLike 点赞明细（OnConflict DoNothing 幂等：重复点赞不报错、不新增）；
+// 经 gen WithResult 取回 RowsAffected 判定是否实际插入
+func (r *PostRepoImpl) CreateLike(ctx context.Context, postID int64, userID int64) (bool, error) {
+	var createErr error
+	res := r.q.PostLike.WithContext(ctx).
+		Clauses(clause.OnConflict{DoNothing: true}).
+		WithResult(func(tx gen.Dao) {
+			createErr = tx.Create(&models.PostLike{PostID: postID, UserID: userID})
+		})
+	if createErr != nil {
+		return false, createErr
+	}
+	return res.RowsAffected > 0, nil
+}
+
+// DeleteLike 删除点赞明细（未赞时 0 行，幂等）
+func (r *PostRepoImpl) DeleteLike(ctx context.Context, postID int64, userID int64) (bool, error) {
+	info, err := r.q.PostLike.WithContext(ctx).
+		Where(r.q.PostLike.PostID.Eq(postID), r.q.PostLike.UserID.Eq(userID)).
+		Delete()
+	if err != nil {
+		return false, err
+	}
+	return info.RowsAffected > 0, nil
+}
+
+// CreateFavourite 收藏明细（幂等；同 CreateLike，WithResult 判定是否实际插入）
+func (r *PostRepoImpl) CreateFavourite(ctx context.Context, postID int64, userID int64) (bool, error) {
+	var createErr error
+	res := r.q.PostFavourite.WithContext(ctx).
+		Clauses(clause.OnConflict{DoNothing: true}).
+		WithResult(func(tx gen.Dao) {
+			createErr = tx.Create(&models.PostFavourite{PostID: postID, UserID: userID})
+		})
+	if createErr != nil {
+		return false, createErr
+	}
+	return res.RowsAffected > 0, nil
+}
+
+// DeleteFavourite 删除收藏明细（幂等）
+func (r *PostRepoImpl) DeleteFavourite(ctx context.Context, postID int64, userID int64) (bool, error) {
+	info, err := r.q.PostFavourite.WithContext(ctx).
+		Where(r.q.PostFavourite.PostID.Eq(postID), r.q.PostFavourite.UserID.Eq(userID)).
+		Delete()
+	if err != nil {
+		return false, err
+	}
+	return info.RowsAffected > 0, nil
+}
+
+// CountFavouritesByUser 用户收藏总数（收藏夹容量校验）
+func (r *PostRepoImpl) CountFavouritesByUser(ctx context.Context, userID int64) (int64, error) {
+	return r.q.PostFavourite.WithContext(ctx).
+		Where(r.q.PostFavourite.UserID.Eq(userID)).
+		Count()
+}
+
+// IncPostLikeCount 点赞数 +1（条件增量；PG 匹配行即计数，RowsAffected=0 即帖子不存在）
+func (r *PostRepoImpl) IncPostLikeCount(ctx context.Context, postID int64) (gen.ResultInfo, error) {
+	return r.q.PostDetail.WithContext(ctx).
+		Where(r.q.PostDetail.ID.Eq(postID)).
+		UpdateSimple(r.q.PostDetail.LikeCount.Add(1))
+}
+
+// DecPostLikeCount 点赞数 -1（防负条件更新：仅 like_count > 0 才减，等价 GREATEST(…, 0) 语义；
+// 计数已 0 时不减但按帖子存在性回报 RowsAffected，保持"匹配行即计数"口径）
+func (r *PostRepoImpl) DecPostLikeCount(ctx context.Context, postID int64) (gen.ResultInfo, error) {
+	info, err := r.q.PostDetail.WithContext(ctx).
+		Where(r.q.PostDetail.ID.Eq(postID), r.q.PostDetail.LikeCount.Gt(0)).
+		UpdateSimple(r.q.PostDetail.LikeCount.Sub(1))
+	if err != nil || info.RowsAffected > 0 {
+		return info, err
+	}
+	// 0 行两可：帖子不存在（→0）或计数已 0（防负不减，存在 →1）
+	n, err := r.q.PostDetail.WithContext(ctx).Where(r.q.PostDetail.ID.Eq(postID)).Count()
+	if err != nil {
+		return gen.ResultInfo{}, err
+	}
+	return gen.ResultInfo{RowsAffected: n}, nil
+}
+
+// IncPostFavouriteCount 收藏数 +1（条件增量）
+func (r *PostRepoImpl) IncPostFavouriteCount(ctx context.Context, postID int64) (gen.ResultInfo, error) {
+	return r.q.PostDetail.WithContext(ctx).
+		Where(r.q.PostDetail.ID.Eq(postID)).
+		UpdateSimple(r.q.PostDetail.FavouriteCount.Add(1))
+}
+
+// DecPostFavouriteCount 收藏数 -1（防负条件更新，同 DecPostLikeCount）
+func (r *PostRepoImpl) DecPostFavouriteCount(ctx context.Context, postID int64) (gen.ResultInfo, error) {
+	info, err := r.q.PostDetail.WithContext(ctx).
+		Where(r.q.PostDetail.ID.Eq(postID), r.q.PostDetail.FavouriteCount.Gt(0)).
+		UpdateSimple(r.q.PostDetail.FavouriteCount.Sub(1))
+	if err != nil || info.RowsAffected > 0 {
+		return info, err
+	}
+	n, err := r.q.PostDetail.WithContext(ctx).Where(r.q.PostDetail.ID.Eq(postID)).Count()
+	if err != nil {
+		return gen.ResultInfo{}, err
+	}
+	return gen.ResultInfo{RowsAffected: n}, nil
+}
+
+// ListLikedPostIDs 用户点赞的帖子明细（created_at DESC, id DESC 游标翻页）
+func (r *PostRepoImpl) ListLikedPostIDs(ctx context.Context, userID int64, before int64, limit int64) ([]*models.PostLike, error) {
+	return r.q.PostLike.WithContext(ctx).
+		Where(
+			r.q.PostLike.UserID.Eq(userID),
+			r.q.PostLike.CreatedAt.Lt(before),
+		).
+		Order(r.q.PostLike.CreatedAt.Desc(), r.q.PostLike.ID.Desc()).
+		Limit(int(limit)).
+		Find()
+}
+
+// ListFavouritePostIDs 用户收藏的帖子明细（同构）
+func (r *PostRepoImpl) ListFavouritePostIDs(ctx context.Context, userID int64, before int64, limit int64) ([]*models.PostFavourite, error) {
+	return r.q.PostFavourite.WithContext(ctx).
+		Where(
+			r.q.PostFavourite.UserID.Eq(userID),
+			r.q.PostFavourite.CreatedAt.Lt(before),
+		).
+		Order(r.q.PostFavourite.CreatedAt.Desc(), r.q.PostFavourite.ID.Desc()).
+		Limit(int(limit)).
+		Find()
 }

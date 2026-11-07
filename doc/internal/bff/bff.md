@@ -11,7 +11,7 @@
 | 错误约定 | `fail` + `common.v1.Error`（可枚举错误码），连接层错误走原始 gRPC 错误 | `fail` + `common.v1.Error`；**连接层错误不外泄**：内部记录日志后返回 `InternalError`（见下文“错误处理”） |
 | 分页 | 相同：`common.v1.Cursor`，空页返回空列表 + 空游标 | 相同 |
 
-## 接口（BFFService，proto 现定义 25 rpc）
+## 接口（BFFService，proto 现定义 31 rpc）
 
 | 域 | rpc | 下游调用 | 聚合职责 |
 | --- | --- | --- | --- |
@@ -39,6 +39,8 @@
 | 帖子 | GetPost | post.ViewPost + user.GetUserBrief + user.GetFollowingRelation | 组装 `PostDetail` |
 | 帖子 | GetMyPosts | post.ViewPostByAuthor（viewer=author） | 含草稿/审核中（状态随 `PostBrief` 返回），组装 `PostCard`（封面按状态分级签发）|
 | 帖子 | GetUserPosts | post.ViewPostByAuthor（viewer=会话用户） | 仅已发布，组装 `PostCard` |
+| 帖子 | LikePost / UnlikePost / FavouritePost / UnfavouritePost | post 同名透传 | uid 来自会话；幂等写（前端可重复动作收敛）；响应带最新计数 + `liked/favourited` 态位（前端同步本地集合）；收藏超容量返回 `FavouriteLimitExceeded` |
+| 帖子 | GetMyLikedPostIDs / GetMyFavouritePostIDs | post.ListLikedPostIDs / ListFavouritePostIDs | uid 来自会话；返回 post_ids 供前端预取本地判态（赞态近似、藏态精确），游标透传 |
 | 搜索 | SearchPosts | discover.SearchPosts + post.GetPostsByIDs | 关键词命中（综合/最新双排序），按命中序回查组装 `PostCard`，过滤非 PUBLISHED 兑底同步窗口 |
 | 信息流 | GetFollowingFeed | user.GetFollowings + post.ViewPostByAuthor（逐作者） | 关注的人的已发布帖子按发布时间归并 |
 
@@ -97,7 +99,7 @@ BFF 由于面向前端，**不返回连接层 error**：下游连接层错误（
 
 ## 状态
 
-`internal/bff/v1/`（proto 现定义 25 rpc 全部实现：auth 5 + user 9 + media 2 + post 8 + search 1；单测 `biz_auth_test.go` / `biz_media_test.go` / `biz_user_test.go` / `biz_post_test.go` / `biz_search_test.go` 覆盖 auth/media/user/post/search 五域）：
+`internal/bff/v1/`（proto 现定义 31 rpc 全部实现：auth 5 + user 9 + media 2 + post 14 + search 1；单测 `biz_auth_test.go` / `biz_media_test.go` / `biz_user_test.go` / `biz_post_test.go` / `biz_search_test.go` 覆盖 auth/media/user/post/search 五域）：
 
 - `service.go`：BFFServiceHandler 实现全部 rpc 并委托 biz 层
 - `biz.go`：`BFFUsecase` 接口 + `BFFUsecaseImpl`，身份经 `sessionUID`（jwt claims）注入：

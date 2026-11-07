@@ -97,3 +97,35 @@ func (s *PostServiceHandler) SyncPostStat(ctx context.Context, req *connect.Requ
 	resp, err := s.Biz.SyncPostStat(ctx, req.Msg)
 	return connect.NewResponse(resp), err
 }
+
+// ==================== 互动（点赞/收藏） ====================
+
+func (s *PostServiceHandler) LikePost(ctx context.Context, req *connect.Request[postv1.LikePostRequest]) (*connect.Response[postv1.LikePostResponse], error) {
+	resp, err := s.Biz.LikePost(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+func (s *PostServiceHandler) UnlikePost(ctx context.Context, req *connect.Request[postv1.UnlikePostRequest]) (*connect.Response[postv1.UnlikePostResponse], error) {
+	resp, err := s.Biz.UnlikePost(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+func (s *PostServiceHandler) FavouritePost(ctx context.Context, req *connect.Request[postv1.FavouritePostRequest]) (*connect.Response[postv1.FavouritePostResponse], error) {
+	resp, err := s.Biz.FavouritePost(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+func (s *PostServiceHandler) UnfavouritePost(ctx context.Context, req *connect.Request[postv1.UnfavouritePostRequest]) (*connect.Response[postv1.UnfavouritePostResponse], error) {
+	resp, err := s.Biz.UnfavouritePost(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+func (s *PostServiceHandler) ListLikedPostIDs(ctx context.Context, req *connect.Request[postv1.ListLikedPostIDsRequest]) (*connect.Response[postv1.ListLikedPostIDsResponse], error) {
+	resp, err := s.Biz.ListLikedPostIDs(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+func (s *PostServiceHandler) ListFavouritePostIDs(ctx context.Context, req *connect.Request[postv1.ListFavouritePostIDsRequest]) (*connect.Response[postv1.ListFavouritePostIDsResponse], error) {
+	resp, err := s.Biz.ListFavouritePostIDs(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}

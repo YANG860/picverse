@@ -44,6 +44,20 @@ type BFFUsecase interface {
 	GetMyPosts(ctx context.Context, req *bffv1.GetMyPostsRequest) (*bffv1.GetMyPostsResponse, error)
 	GetUserPosts(ctx context.Context, req *bffv1.GetUserPostsRequest) (*bffv1.GetUserPostsResponse, error)
 
+	// ==================== 互动（点赞/收藏） ====================
+
+	// LikePost 点赞（幂等；uid 来自会话；响应带最新计数 + 态）
+	LikePost(ctx context.Context, req *bffv1.LikePostRequest) (*bffv1.LikePostResponse, error)
+	// UnlikePost 取消点赞（幂等）
+	UnlikePost(ctx context.Context, req *bffv1.UnlikePostRequest) (*bffv1.UnlikePostResponse, error)
+	// FavouritePost 收藏（幂等；超收藏夹容量上限 FavouriteLimitExceeded）
+	FavouritePost(ctx context.Context, req *bffv1.FavouritePostRequest) (*bffv1.FavouritePostResponse, error)
+	// UnfavouritePost 取消收藏（幂等）
+	UnfavouritePost(ctx context.Context, req *bffv1.UnfavouritePostRequest) (*bffv1.UnfavouritePostResponse, error)
+	// GetMyLikedPostIDs 我最近点赞的帖子 ID（前端预取判态）
+	GetMyLikedPostIDs(ctx context.Context, req *bffv1.GetMyLikedPostIDsRequest) (*bffv1.GetMyLikedPostIDsResponse, error)
+	// GetMyFavouritePostIDs 我收藏的帖子 ID（全量预取判态）
+	GetMyFavouritePostIDs(ctx context.Context, req *bffv1.GetMyFavouritePostIDsRequest) (*bffv1.GetMyFavouritePostIDsResponse, error)
 	// SearchPosts 帖子搜索（关键词 + 综合/最新双排序 + offset 游标）
 	SearchPosts(ctx context.Context, req *bffv1.SearchPostsRequest) (*bffv1.SearchPostsResponse, error)
 

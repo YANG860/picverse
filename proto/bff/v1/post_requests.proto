@@ -118,3 +118,89 @@ message GetUserPostsResponse {
   repeated PostCard posts = 3;
   common.v1.Cursor cursor = 4;
 }
+
+// ==================== 互动（点赞/收藏） ====================
+// 口径：幂等写入（前端可重复动作收敛）；
+// 互动态由前端预取 post_ids 列表本地判态，视图不回填 liked/favourited
+
+// LikePostRequest 点赞（幂等：重复点赞返回成功，计数不重复增加）
+message LikePostRequest {
+  string post_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message LikePostResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 最新点赞数
+  int64 like_count = 3;
+  // 动作后的确定态（true=已赞），前端据此同步本地集合
+  bool liked = 4;
+}
+
+// UnlikePostRequest 取消点赞（幂等）
+message UnlikePostRequest {
+  string post_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message UnlikePostResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  int64 like_count = 3;
+  bool liked = 4;
+}
+
+// FavouritePostRequest 收藏（幂等；超收藏夹容量上限返回 FavouriteLimitExceeded）
+message FavouritePostRequest {
+  string post_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message FavouritePostResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  int64 favourite_count = 3;
+  bool favourited = 4;
+}
+
+// UnfavouritePostRequest 取消收藏（幂等）
+message UnfavouritePostRequest {
+  string post_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message UnfavouritePostResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  int64 favourite_count = 3;
+  bool favourited = 4;
+}
+
+// GetMyLikedPostIDsRequest 我最近点赞的帖子 ID（前端批量预取判态；created_at DESC 游标）
+message GetMyLikedPostIDsRequest {
+  common.v1.Cursor cursor = 1;
+}
+
+message GetMyLikedPostIDsResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 翻页到底/暂无内容：列表为空且 cursor 为空
+  repeated string post_ids = 3;
+  common.v1.Cursor cursor = 4;
+}
+
+// GetMyFavouritePostIDsRequest 我收藏的帖子 ID（全量预取判态；收藏夹容量上限内一页可拉全）
+message GetMyFavouritePostIDsRequest {
+  common.v1.Cursor cursor = 1;
+}
+
+message GetMyFavouritePostIDsResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 翻页到底/暂无内容：列表为空且 cursor 为空
+  repeated string post_ids = 3;
+  common.v1.Cursor cursor = 4;
+}

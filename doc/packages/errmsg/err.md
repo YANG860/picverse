@@ -48,6 +48,7 @@
 | 1303 | `InvalidMedia` | 帖子媒体非法 |
 | 1304 | `NotEditable` | 帖子不可编辑（非 DRAFT / 已流转，对外不区分） |
 | 1305 | `Banned` | 帖子已被封禁 |
+| 1306 | `FavouriteLimitExceeded` | 收藏夹容量上限（`defaults.FavouriteCap`，仅新增收藏校验） |
 
 ### user
 | code | 变量 | 含义 |

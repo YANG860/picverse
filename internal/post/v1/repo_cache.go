@@ -410,3 +410,61 @@ func (r *CachedPostRepo) GetPostMedias(ctx context.Context, postIDs []int64) ([]
 func (r *CachedPostRepo) GetPostCover(ctx context.Context, postIDs []int64) ([]*models.PostMedia, error) {
 	return r.inner.GetPostCover(ctx, postIDs)
 }
+
+// ==================== 互动（点赞/收藏明细） ====================
+// 全部直通转发：明细行不入缓存，计数列不缓存（同 UpdatePostLikeCount 口径），无失效需求
+
+// CreateLike 直通（幂等插入）
+func (r *CachedPostRepo) CreateLike(ctx context.Context, postID int64, userID int64) (bool, error) {
+	return r.inner.CreateLike(ctx, postID, userID)
+}
+
+// DeleteLike 直通
+func (r *CachedPostRepo) DeleteLike(ctx context.Context, postID int64, userID int64) (bool, error) {
+	return r.inner.DeleteLike(ctx, postID, userID)
+}
+
+// CreateFavourite 直通（幂等插入）
+func (r *CachedPostRepo) CreateFavourite(ctx context.Context, postID int64, userID int64) (bool, error) {
+	return r.inner.CreateFavourite(ctx, postID, userID)
+}
+
+// DeleteFavourite 直通
+func (r *CachedPostRepo) DeleteFavourite(ctx context.Context, postID int64, userID int64) (bool, error) {
+	return r.inner.DeleteFavourite(ctx, postID, userID)
+}
+
+// CountFavouritesByUser 直通
+func (r *CachedPostRepo) CountFavouritesByUser(ctx context.Context, userID int64) (int64, error) {
+	return r.inner.CountFavouritesByUser(ctx, userID)
+}
+
+// IncPostLikeCount 直通（同 UpdatePostLikeCount：计数不触碰缓存）
+func (r *CachedPostRepo) IncPostLikeCount(ctx context.Context, postID int64) (gen.ResultInfo, error) {
+	return r.inner.IncPostLikeCount(ctx, postID)
+}
+
+// DecPostLikeCount 直通
+func (r *CachedPostRepo) DecPostLikeCount(ctx context.Context, postID int64) (gen.ResultInfo, error) {
+	return r.inner.DecPostLikeCount(ctx, postID)
+}
+
+// IncPostFavouriteCount 直通
+func (r *CachedPostRepo) IncPostFavouriteCount(ctx context.Context, postID int64) (gen.ResultInfo, error) {
+	return r.inner.IncPostFavouriteCount(ctx, postID)
+}
+
+// DecPostFavouriteCount 直通
+func (r *CachedPostRepo) DecPostFavouriteCount(ctx context.Context, postID int64) (gen.ResultInfo, error) {
+	return r.inner.DecPostFavouriteCount(ctx, postID)
+}
+
+// ListLikedPostIDs 直通（明细不在缓存范围）
+func (r *CachedPostRepo) ListLikedPostIDs(ctx context.Context, userID int64, before int64, limit int64) ([]*models.PostLike, error) {
+	return r.inner.ListLikedPostIDs(ctx, userID, before, limit)
+}
+
+// ListFavouritePostIDs 直通
+func (r *CachedPostRepo) ListFavouritePostIDs(ctx context.Context, userID int64, before int64, limit int64) ([]*models.PostFavourite, error) {
+	return r.inner.ListFavouritePostIDs(ctx, userID, before, limit)
+}

@@ -376,6 +376,7 @@ func (u *BFFUsecaseImpl) GetPost(ctx context.Context, req *bffv1.GetPostRequest)
 	if mapErr != nil {
 		return &bffv1.GetPostResponse{Fail: true, Err: mapErr}, nil
 	}
+
 	return &bffv1.GetPostResponse{Post: detail}, nil
 }
 
@@ -461,4 +462,122 @@ func (u *BFFUsecaseImpl) DeletePost(ctx context.Context, req *bffv1.DeletePostRe
 		return &bffv1.DeletePostResponse{Fail: true, Err: resp.Msg.GetErr()}, nil
 	}
 	return &bffv1.DeletePostResponse{}, nil
+}
+
+// ==================== 互动（点赞/收藏） ====================
+// 口径：薄透传（可见性由 post 下游裁决）；
+// 响应回传最新计数 + 状态位，前端据此同步本地判态集合
+
+// LikePost 点赞（uid 来自会话；幂等透传）
+func (u *BFFUsecaseImpl) LikePost(ctx context.Context, req *bffv1.LikePostRequest) (*bffv1.LikePostResponse, error) {
+	uid, errCode := u.sessionUID(ctx)
+	if errCode != nil {
+		return &bffv1.LikePostResponse{Fail: true, Err: errCode}, nil
+	}
+
+	resp, err := u.Repo.Post.LikePost(ctx, connect.NewRequest(&postv1.LikePostRequest{Uid: uid, PostId: req.GetPostId()}))
+	if err != nil {
+		u.log.Error("post.LikePost failed", "uid", uid, "post_id", req.GetPostId(), "error", err)
+		return &bffv1.LikePostResponse{Fail: true, Err: errmsg.InternalError}, nil
+	}
+	if resp.Msg.GetFail() {
+		return &bffv1.LikePostResponse{Fail: true, Err: resp.Msg.GetErr()}, nil
+	}
+
+	return &bffv1.LikePostResponse{LikeCount: resp.Msg.GetLikeCount(), Liked: resp.Msg.GetLiked()}, nil
+}
+
+// UnlikePost 取消点赞（幂等透传）
+func (u *BFFUsecaseImpl) UnlikePost(ctx context.Context, req *bffv1.UnlikePostRequest) (*bffv1.UnlikePostResponse, error) {
+	uid, errCode := u.sessionUID(ctx)
+	if errCode != nil {
+		return &bffv1.UnlikePostResponse{Fail: true, Err: errCode}, nil
+	}
+
+	resp, err := u.Repo.Post.UnlikePost(ctx, connect.NewRequest(&postv1.UnlikePostRequest{Uid: uid, PostId: req.GetPostId()}))
+	if err != nil {
+		u.log.Error("post.UnlikePost failed", "uid", uid, "post_id", req.GetPostId(), "error", err)
+		return &bffv1.UnlikePostResponse{Fail: true, Err: errmsg.InternalError}, nil
+	}
+	if resp.Msg.GetFail() {
+		return &bffv1.UnlikePostResponse{Fail: true, Err: resp.Msg.GetErr()}, nil
+	}
+
+	return &bffv1.UnlikePostResponse{LikeCount: resp.Msg.GetLikeCount(), Liked: resp.Msg.GetLiked()}, nil
+}
+
+// FavouritePost 收藏（幂等透传；容量超限业务码透传）
+func (u *BFFUsecaseImpl) FavouritePost(ctx context.Context, req *bffv1.FavouritePostRequest) (*bffv1.FavouritePostResponse, error) {
+	uid, errCode := u.sessionUID(ctx)
+	if errCode != nil {
+		return &bffv1.FavouritePostResponse{Fail: true, Err: errCode}, nil
+	}
+
+	resp, err := u.Repo.Post.FavouritePost(ctx, connect.NewRequest(&postv1.FavouritePostRequest{Uid: uid, PostId: req.GetPostId()}))
+	if err != nil {
+		u.log.Error("post.FavouritePost failed", "uid", uid, "post_id", req.GetPostId(), "error", err)
+		return &bffv1.FavouritePostResponse{Fail: true, Err: errmsg.InternalError}, nil
+	}
+	if resp.Msg.GetFail() {
+		return &bffv1.FavouritePostResponse{Fail: true, Err: resp.Msg.GetErr()}, nil
+	}
+
+	return &bffv1.FavouritePostResponse{FavouriteCount: resp.Msg.GetFavouriteCount(), Favourited: resp.Msg.GetFavourited()}, nil
+}
+
+// UnfavouritePost 取消收藏（幂等透传）
+func (u *BFFUsecaseImpl) UnfavouritePost(ctx context.Context, req *bffv1.UnfavouritePostRequest) (*bffv1.UnfavouritePostResponse, error) {
+	uid, errCode := u.sessionUID(ctx)
+	if errCode != nil {
+		return &bffv1.UnfavouritePostResponse{Fail: true, Err: errCode}, nil
+	}
+
+	resp, err := u.Repo.Post.UnfavouritePost(ctx, connect.NewRequest(&postv1.UnfavouritePostRequest{Uid: uid, PostId: req.GetPostId()}))
+	if err != nil {
+		u.log.Error("post.UnfavouritePost failed", "uid", uid, "post_id", req.GetPostId(), "error", err)
+		return &bffv1.UnfavouritePostResponse{Fail: true, Err: errmsg.InternalError}, nil
+	}
+	if resp.Msg.GetFail() {
+		return &bffv1.UnfavouritePostResponse{Fail: true, Err: resp.Msg.GetErr()}, nil
+	}
+
+	return &bffv1.UnfavouritePostResponse{FavouriteCount: resp.Msg.GetFavouriteCount(), Favourited: resp.Msg.GetFavourited()}, nil
+}
+
+// GetMyLikedPostIDs 我最近点赞的帖子 ID（uid 来自会话；游标透传，前端预取判态）
+func (u *BFFUsecaseImpl) GetMyLikedPostIDs(ctx context.Context, req *bffv1.GetMyLikedPostIDsRequest) (*bffv1.GetMyLikedPostIDsResponse, error) {
+	uid, errCode := u.sessionUID(ctx)
+	if errCode != nil {
+		return &bffv1.GetMyLikedPostIDsResponse{Fail: true, Err: errCode}, nil
+	}
+
+	resp, err := u.Repo.Post.ListLikedPostIDs(ctx, connect.NewRequest(&postv1.ListLikedPostIDsRequest{Uid: uid, Cursor: req.GetCursor()}))
+	if err != nil {
+		u.log.Error("post.ListLikedPostIDs failed", "uid", uid, "error", err)
+		return &bffv1.GetMyLikedPostIDsResponse{Fail: true, Err: errmsg.InternalError}, nil
+	}
+	if resp.Msg.GetFail() {
+		return &bffv1.GetMyLikedPostIDsResponse{Fail: true, Err: resp.Msg.GetErr()}, nil
+	}
+
+	return &bffv1.GetMyLikedPostIDsResponse{PostIds: resp.Msg.GetPostIds(), Cursor: resp.Msg.GetCursor()}, nil
+}
+
+// GetMyFavouritePostIDs 我收藏的帖子 ID（同构；收藏夹容量上限内一页可拉全）
+func (u *BFFUsecaseImpl) GetMyFavouritePostIDs(ctx context.Context, req *bffv1.GetMyFavouritePostIDsRequest) (*bffv1.GetMyFavouritePostIDsResponse, error) {
+	uid, errCode := u.sessionUID(ctx)
+	if errCode != nil {
+		return &bffv1.GetMyFavouritePostIDsResponse{Fail: true, Err: errCode}, nil
+	}
+
+	resp, err := u.Repo.Post.ListFavouritePostIDs(ctx, connect.NewRequest(&postv1.ListFavouritePostIDsRequest{Uid: uid, Cursor: req.GetCursor()}))
+	if err != nil {
+		u.log.Error("post.ListFavouritePostIDs failed", "uid", uid, "error", err)
+		return &bffv1.GetMyFavouritePostIDsResponse{Fail: true, Err: errmsg.InternalError}, nil
+	}
+	if resp.Msg.GetFail() {
+		return &bffv1.GetMyFavouritePostIDsResponse{Fail: true, Err: resp.Msg.GetErr()}, nil
+	}
+
+	return &bffv1.GetMyFavouritePostIDsResponse{PostIds: resp.Msg.GetPostIds(), Cursor: resp.Msg.GetCursor()}, nil
 }

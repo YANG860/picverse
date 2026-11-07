@@ -816,3 +816,112 @@ func TestTransaction(t *testing.T) {
 		}))
 	})
 }
+
+// ---------- 互动（点赞/收藏明细与条件计数） ----------
+
+// TestInteractionDetailCRUD 明细幂等锚点（OnConflict DoNothing）+ 条件计数（GREATEST 防负）+ 浏览增量
+func TestInteractionDetailCRUD(t *testing.T) {
+	repo, db := newRepo(t)
+	ctx := context.Background()
+	seedPost(t, db, postID1, authorID1, postv1.PostStatus_POST_STATUS_PUBLISHED, 1000)
+	const uid = int64(5001)
+
+	// CreateLike：首次 true，重复 false（幂等锚点）
+	inserted, err := repo.CreateLike(ctx, postID1, uid)
+	require.NoError(t, err)
+	assert.True(t, inserted)
+	inserted, err = repo.CreateLike(ctx, postID1, uid)
+	require.NoError(t, err)
+	assert.False(t, inserted, "重复点赞不应新增明细")
+
+	// DeleteLike：首次 true，重复 false
+	deleted, err := repo.DeleteLike(ctx, postID1, uid)
+	require.NoError(t, err)
+	assert.True(t, deleted)
+	deleted, err = repo.DeleteLike(ctx, postID1, uid)
+	require.NoError(t, err)
+	assert.False(t, deleted, "未赞时删除为 no-op")
+
+	// 条件计数（seedPost 起点 like_count=1）：+1 → 2，-1 → 1
+	info, err := repo.IncPostLikeCount(ctx, postID1)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), info.RowsAffected, "PG 匹配行即计数")
+	info, err = repo.DecPostLikeCount(ctx, postID1)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), info.RowsAffected)
+
+	// 防负条件更新：计数清 0 后再 -1 仍是 0
+	require.NoError(t, db.Model(&models.PostDetail{}).Where("id = ?", postID1).Update("like_count", 0).Error)
+	_, err = repo.DecPostLikeCount(ctx, postID1)
+	require.NoError(t, err)
+	var got models.PostDetail
+	require.NoError(t, db.First(&got, postID1).Error)
+	assert.Zero(t, got.LikeCount, "GREATEST 防负兜底")
+
+	// 收藏明细同构
+	inserted, err = repo.CreateFavourite(ctx, postID1, uid)
+	require.NoError(t, err)
+	assert.True(t, inserted)
+	inserted, err = repo.CreateFavourite(ctx, postID1, uid)
+	require.NoError(t, err)
+	assert.False(t, inserted)
+	deleted, err = repo.DeleteFavourite(ctx, postID1, uid)
+	require.NoError(t, err)
+	assert.True(t, deleted)
+
+	// 容量计数：只数明细行
+	cnt, err := repo.CountFavouritesByUser(ctx, uid)
+	require.NoError(t, err)
+	assert.Zero(t, cnt)
+}
+
+// TestListLikedFavouritePostIDs 判态列表：(created_at DESC, id DESC) 序 + 游标翻页 + 用户隔离
+func TestListLikedFavouritePostIDs(t *testing.T) {
+	repo, db := newRepo(t)
+	ctx := context.Background()
+	const uid = int64(5002)
+	const other = int64(5003)
+
+	// 显式 created_at/id：两条同毫秒由 id 决序（雪花口径：id 大者新）
+	rows := []*models.PostLike{
+		{BaseModel: common.BaseModel{ID: 9101, CreatedAt: 2000}, PostID: postID1, UserID: uid},
+		{BaseModel: common.BaseModel{ID: 9102, CreatedAt: 1000}, PostID: postID2, UserID: uid},
+		{BaseModel: common.BaseModel{ID: 9103, CreatedAt: 1000}, PostID: postID3, UserID: uid},
+		{BaseModel: common.BaseModel{ID: 9105, CreatedAt: 500}, PostID: 2005, UserID: uid},
+		{BaseModel: common.BaseModel{ID: 9104, CreatedAt: 3000}, PostID: postID4, UserID: other},
+	}
+	require.NoError(t, db.Create(rows).Error)
+
+	got, err := repo.ListLikedPostIDs(ctx, uid, 99999, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 4, "不串用户")
+	assert.Equal(t, []int64{postID1, postID3, postID2, 2005},
+		[]int64{got[0].PostID, got[1].PostID, got[2].PostID, got[3].PostID}, "created_at DESC，并列按 id DESC")
+
+	// limit 翻页：首页 2 条，用末条 created_at 作 before 续翻。
+	// 时间游标口径为严格小于边界（与 GetPostBriefsByAuthor 现状一致）：
+	// 与页边界同毫秒的并列行（9102）落页外，判态场景可接受（见 comment 设计风险#4 同款口径）
+	got, err = repo.ListLikedPostIDs(ctx, uid, 99999, 2)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, postID1, got[0].PostID)
+	assert.Equal(t, postID3, got[1].PostID)
+	next, err := repo.ListLikedPostIDs(ctx, uid, got[1].CreatedAt, 2)
+	require.NoError(t, err)
+	require.Len(t, next, 1)
+	assert.Equal(t, int64(2005), next[0].PostID)
+
+	// 收藏列表同构
+	require.NoError(t, db.Create(&models.PostFavourite{
+		BaseModel: common.BaseModel{ID: 9201, CreatedAt: 5000}, PostID: postID1, UserID: uid,
+	}).Error)
+	favs, err := repo.ListFavouritePostIDs(ctx, uid, 99999, 10)
+	require.NoError(t, err)
+	require.Len(t, favs, 1)
+	assert.Equal(t, postID1, favs[0].PostID)
+
+	// 空页
+	empty, err := repo.ListLikedPostIDs(ctx, 999999, 99999, 10)
+	require.NoError(t, err)
+	assert.Empty(t, empty)
+}

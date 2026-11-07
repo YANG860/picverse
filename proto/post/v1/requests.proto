@@ -187,3 +187,94 @@ message SyncPostStatResponse {
   bool fail = 1;
   common.v1.Error err = 2;
 }
+
+// ==================== 互动（点赞/收藏） ====================
+// 口径：幂等（重复操作返回成功，计数不重复增减）；
+// 仅 PUBLISHED 可互动（非 PUBLISHED 一律 NotFound，不泄露帖子状态）；
+// 响应带最新计数（同事务返回）+ 状态位（动作后确定态，调用方同步本地集合）
+
+// 点赞
+message LikePostRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  string post_id = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message LikePostResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  int64 like_count = 3;
+  bool liked = 4;
+}
+
+// 取消点赞（幂等：未赞时返回成功，计数不变）
+message UnlikePostRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  string post_id = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message UnlikePostResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  int64 like_count = 3;
+  bool liked = 4;
+}
+
+// 收藏（幂等；新增收藏校验容量上限 FavouriteCap，超限 FavouriteLimitExceeded 1306）
+message FavouritePostRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  string post_id = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message FavouritePostResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  int64 favourite_count = 3;
+  bool favourited = 4;
+}
+
+// 取消收藏（幂等）
+message UnfavouritePostRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  string post_id = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message UnfavouritePostResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  int64 favourite_count = 3;
+  bool favourited = 4;
+}
+
+// 最近点赞的帖子 ID（内部接口：前端批量预取判"已赞"态；created_at DESC 游标）
+message ListLikedPostIDsRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  common.v1.Cursor cursor = 2;
+}
+
+message ListLikedPostIDsResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 翻页到底/暂无内容：列表为空且 cursor 为空
+  repeated string post_ids = 3;
+  common.v1.Cursor cursor = 4;
+}
+
+// 收藏的帖子 ID（内部接口：全量收藏预取判"已藏"态；FavouriteCap 内一页可拉全，created_at DESC 游标）
+message ListFavouritePostIDsRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  common.v1.Cursor cursor = 2;
+}
+
+message ListFavouritePostIDsResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 翻页到底/暂无内容：列表为空且 cursor 为空
+  repeated string post_ids = 3;
+  common.v1.Cursor cursor = 4;
+}

@@ -26,6 +26,8 @@ var ErrNotImplemented = errors.New("post: not implemented")
 var (
 	// errNotFound 目标帖子不存在
 	errNotFound = errors.New("post not found")
+	// errFavLimit 收藏夹容量上限（默认 defaults.FavouriteCap，超限回滚新增）
+	errFavLimit = errors.New("favourite limit exceeded")
 	// errNotAuthor 操作者非帖子作者
 	errNotAuthor = errors.New("user is not the author of the post")
 	// errNotEditable 更新目标帖子不可编辑（非 DRAFT）
@@ -67,6 +69,21 @@ type PostUsecase interface {
 
 	// SyncPostStat 同步帖子统计信息（内部管理，异步链路调用；逐字段部分更新：nil 字段不修改，设置则覆盖该统计列（含 0）；仅统计不改状态）
 	SyncPostStat(ctx context.Context, req *postv1.SyncPostStatRequest) (*postv1.SyncPostStatResponse, error)
+
+	// ==================== 互动（点赞/收藏） ====================
+
+	// LikePost 点赞（幂等：重复点赞成功且不重复计数；仅 PUBLISHED 可互动，非 PUBLISHED → NotFound）
+	LikePost(ctx context.Context, req *postv1.LikePostRequest) (*postv1.LikePostResponse, error)
+	// UnlikePost 取消点赞（幂等：未赞时成功且计数不变）
+	UnlikePost(ctx context.Context, req *postv1.UnlikePostRequest) (*postv1.UnlikePostResponse, error)
+	// FavouritePost 收藏（幂等；新增收藏校验容量上限 FavouriteCap，超限 FavouriteLimitExceeded）
+	FavouritePost(ctx context.Context, req *postv1.FavouritePostRequest) (*postv1.FavouritePostResponse, error)
+	// UnfavouritePost 取消收藏（幂等）
+	UnfavouritePost(ctx context.Context, req *postv1.UnfavouritePostRequest) (*postv1.UnfavouritePostResponse, error)
+	// ListLikedPostIDs 最近点赞的帖子 ID（created_at DESC 游标；前端预取判态，空页 = 空列表 + 空游标）
+	ListLikedPostIDs(ctx context.Context, req *postv1.ListLikedPostIDsRequest) (*postv1.ListLikedPostIDsResponse, error)
+	// ListFavouritePostIDs 收藏的帖子 ID（同构；FavouriteCap 内一页可拉全）
+	ListFavouritePostIDs(ctx context.Context, req *postv1.ListFavouritePostIDsRequest) (*postv1.ListFavouritePostIDsResponse, error)
 }
 
 // PostUsecaseImpl 帖子业务逻辑实现
@@ -799,4 +816,264 @@ func (u *PostUsecaseImpl) SyncPostStat(ctx context.Context, req *postv1.SyncPost
 	}
 
 	return &postv1.SyncPostStatResponse{}, nil
+}
+
+// ==================== 互动（点赞/收藏） ====================
+
+// assertInteractable 校验帖子可互动：存在且 PUBLISHED，否则 errNotFound（口径：非 PUBLISHED 一律 NotFound，不泄露状态）
+func assertInteractable(ctx context.Context, repo PostRepository, postID int64) error {
+	ok, status, err := repo.GetPostStatus(ctx, postID)
+	if err != nil {
+		return err
+	}
+	if !ok || status != postv1.PostStatus_POST_STATUS_PUBLISHED {
+		return errNotFound
+	}
+	return nil
+}
+
+// interactionStat 取帖子最新计数（事务内读自身写入，同事务返回免二次查询）
+func interactionStat(ctx context.Context, repo PostRepository, postID int64) (*post.PostStat, error) {
+	stats, err := repo.GetPostStat(ctx, []int64{postID})
+	if err != nil {
+		return nil, err
+	}
+	if len(stats) == 0 {
+		return nil, errNotFound
+	}
+	return stats[0], nil
+}
+
+// LikePost 点赞（幂等：重复点赞返回成功且不重复计数；明细为准 + 同事务条件计数，强一致）
+func (u *PostUsecaseImpl) LikePost(ctx context.Context, req *postv1.LikePostRequest) (*postv1.LikePostResponse, error) {
+	uid, err := snowflake.ParseString(req.GetUid())
+	if err != nil {
+		return &postv1.LikePostResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+	postID, err := snowflake.ParseString(req.GetPostId())
+	if err != nil {
+		return &postv1.LikePostResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+
+	var stat *post.PostStat
+	err = u.Repo.Transaction(func(repo PostRepository) error {
+		if err := assertInteractable(ctx, repo, postID.Int64()); err != nil {
+			return err
+		}
+		inserted, err := repo.CreateLike(ctx, postID.Int64(), uid.Int64())
+		if err != nil {
+			return err
+		}
+		// 明细为准：仅实际插入才 +1（OnConflict DoNothing 幂等锚点）
+		if inserted {
+			info, err := repo.IncPostLikeCount(ctx, postID.Int64())
+			if err != nil {
+				return err
+			}
+			if info.RowsAffected == 0 {
+				return errNotFound
+			}
+		}
+		stat, err = interactionStat(ctx, repo, postID.Int64())
+		return err
+	})
+	if errors.Is(err, errNotFound) {
+		return &postv1.LikePostResponse{Fail: true, Err: errmsg.NotFound}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to like post: %w", err)
+	}
+
+	return &postv1.LikePostResponse{LikeCount: stat.LikeCount, Liked: true}, nil
+}
+
+// UnlikePost 取消点赞（幂等：未赞时成功且计数不变；GREATEST 防负兑底）
+func (u *PostUsecaseImpl) UnlikePost(ctx context.Context, req *postv1.UnlikePostRequest) (*postv1.UnlikePostResponse, error) {
+	uid, err := snowflake.ParseString(req.GetUid())
+	if err != nil {
+		return &postv1.UnlikePostResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+	postID, err := snowflake.ParseString(req.GetPostId())
+	if err != nil {
+		return &postv1.UnlikePostResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+
+	var stat *post.PostStat
+	err = u.Repo.Transaction(func(repo PostRepository) error {
+		if err := assertInteractable(ctx, repo, postID.Int64()); err != nil {
+			return err
+		}
+		deleted, err := repo.DeleteLike(ctx, postID.Int64(), uid.Int64())
+		if err != nil {
+			return err
+		}
+		if deleted {
+			info, err := repo.DecPostLikeCount(ctx, postID.Int64())
+			if err != nil {
+				return err
+			}
+			if info.RowsAffected == 0 {
+				return errNotFound
+			}
+		}
+		stat, err = interactionStat(ctx, repo, postID.Int64())
+		return err
+	})
+	if errors.Is(err, errNotFound) {
+		return &postv1.UnlikePostResponse{Fail: true, Err: errmsg.NotFound}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to unlike post: %w", err)
+	}
+
+	return &postv1.UnlikePostResponse{LikeCount: stat.LikeCount, Liked: false}, nil
+}
+
+// FavouritePost 收藏（幂等：已藏返回成功不重复计数；新增收藏同事务校验容量上限，超限整体回滚）
+func (u *PostUsecaseImpl) FavouritePost(ctx context.Context, req *postv1.FavouritePostRequest) (*postv1.FavouritePostResponse, error) {
+	uid, err := snowflake.ParseString(req.GetUid())
+	if err != nil {
+		return &postv1.FavouritePostResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+	postID, err := snowflake.ParseString(req.GetPostId())
+	if err != nil {
+		return &postv1.FavouritePostResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+
+	var stat *post.PostStat
+	err = u.Repo.Transaction(func(repo PostRepository) error {
+		if err := assertInteractable(ctx, repo, postID.Int64()); err != nil {
+			return err
+		}
+		inserted, err := repo.CreateFavourite(ctx, postID.Int64(), uid.Int64())
+		if err != nil {
+			return err
+		}
+		if !inserted {
+			// 幂等命中：已收藏，不占容量、不报满
+			stat, err = interactionStat(ctx, repo, postID.Int64())
+			return err
+		}
+		// 新增收藏：容量校验（计数含自身，超上限回滚本事务，插入一并撤销）
+		count, err := repo.CountFavouritesByUser(ctx, uid.Int64())
+		if err != nil {
+			return err
+		}
+		if count > int64(defaults.FavouriteCap) {
+			return errFavLimit
+		}
+		info, err := repo.IncPostFavouriteCount(ctx, postID.Int64())
+		if err != nil {
+			return err
+		}
+		if info.RowsAffected == 0 {
+			return errNotFound
+		}
+		stat, err = interactionStat(ctx, repo, postID.Int64())
+		return err
+	})
+	if errors.Is(err, errFavLimit) {
+		return &postv1.FavouritePostResponse{Fail: true, Err: errmsg.FavouriteLimitExceeded}, nil
+	}
+	if errors.Is(err, errNotFound) {
+		return &postv1.FavouritePostResponse{Fail: true, Err: errmsg.NotFound}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to favourite post: %w", err)
+	}
+
+	return &postv1.FavouritePostResponse{FavouriteCount: stat.FavouriteCount, Favourited: true}, nil
+}
+
+// UnfavouritePost 取消收藏（幂等）
+func (u *PostUsecaseImpl) UnfavouritePost(ctx context.Context, req *postv1.UnfavouritePostRequest) (*postv1.UnfavouritePostResponse, error) {
+	uid, err := snowflake.ParseString(req.GetUid())
+	if err != nil {
+		return &postv1.UnfavouritePostResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+	postID, err := snowflake.ParseString(req.GetPostId())
+	if err != nil {
+		return &postv1.UnfavouritePostResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+
+	var stat *post.PostStat
+	err = u.Repo.Transaction(func(repo PostRepository) error {
+		if err := assertInteractable(ctx, repo, postID.Int64()); err != nil {
+			return err
+		}
+		deleted, err := repo.DeleteFavourite(ctx, postID.Int64(), uid.Int64())
+		if err != nil {
+			return err
+		}
+		if deleted {
+			info, err := repo.DecPostFavouriteCount(ctx, postID.Int64())
+			if err != nil {
+				return err
+			}
+			if info.RowsAffected == 0 {
+				return errNotFound
+			}
+		}
+		stat, err = interactionStat(ctx, repo, postID.Int64())
+		return err
+	})
+	if errors.Is(err, errNotFound) {
+		return &postv1.UnfavouritePostResponse{Fail: true, Err: errmsg.NotFound}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to unfavourite post: %w", err)
+	}
+
+	return &postv1.UnfavouritePostResponse{FavouriteCount: stat.FavouriteCount, Favourited: false}, nil
+}
+
+// ListLikedPostIDs 最近点赞的帖子 ID（created_at DESC 游标；前端预取判态）
+func (u *PostUsecaseImpl) ListLikedPostIDs(ctx context.Context, req *postv1.ListLikedPostIDsRequest) (*postv1.ListLikedPostIDsResponse, error) {
+	uid, err := snowflake.ParseString(req.GetUid())
+	if err != nil {
+		return &postv1.ListLikedPostIDsResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+
+	before, limit := utils.ParseTimeCursor(req.GetCursor())
+	rows, err := u.Repo.ListLikedPostIDs(ctx, uid.Int64(), before, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list liked post IDs: %w", err)
+	}
+
+	// 空页语义（与 ViewPostByAuthor 一致）：列表为空且 cursor 为空，调用方按空列表终止翻页
+	ids := make([]string, 0, len(rows))
+	for _, v := range rows {
+		ids = append(ids, snowflake.ParseInt64(v.PostID).String())
+	}
+	var cursor *commonv1.Cursor
+	if len(rows) > 0 {
+		cursor = utils.NewTimeCursor(rows[len(rows)-1].CreatedAt, limit)
+	}
+
+	return &postv1.ListLikedPostIDsResponse{PostIds: ids, Cursor: cursor}, nil
+}
+
+// ListFavouritePostIDs 收藏的帖子 ID（同构；FavouriteCap 内一页可拉全）
+func (u *PostUsecaseImpl) ListFavouritePostIDs(ctx context.Context, req *postv1.ListFavouritePostIDsRequest) (*postv1.ListFavouritePostIDsResponse, error) {
+	uid, err := snowflake.ParseString(req.GetUid())
+	if err != nil {
+		return &postv1.ListFavouritePostIDsResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+
+	before, limit := utils.ParseTimeCursor(req.GetCursor())
+	rows, err := u.Repo.ListFavouritePostIDs(ctx, uid.Int64(), before, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list favourite post IDs: %w", err)
+	}
+
+	ids := make([]string, 0, len(rows))
+	for _, v := range rows {
+		ids = append(ids, snowflake.ParseInt64(v.PostID).String())
+	}
+	var cursor *commonv1.Cursor
+	if len(rows) > 0 {
+		cursor = utils.NewTimeCursor(rows[len(rows)-1].CreatedAt, limit)
+	}
+
+	return &postv1.ListFavouritePostIDsResponse{PostIds: ids, Cursor: cursor}, nil
 }

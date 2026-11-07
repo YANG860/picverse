@@ -45,6 +45,21 @@ type fakePostClient struct {
 	byAuthorErr    *commonv1.Error
 	byAuthorRPCErr error
 	gotByAuthor    []*postv1.ViewPostByAuthorRequest
+
+	// 互动透传路径：共享错误注入 + 逐方法捕获入参
+	interactFail   *commonv1.Error
+	interactRPCErr error
+	likeCount      int64
+	favCount       int64
+	listIDs        []string
+	listCursor     *commonv1.Cursor
+
+	gotLikePost   *postv1.LikePostRequest
+	gotUnlikePost *postv1.UnlikePostRequest
+	gotFavPost    *postv1.FavouritePostRequest
+	gotUnfavPost  *postv1.UnfavouritePostRequest
+	gotListLiked  *postv1.ListLikedPostIDsRequest
+	gotListFav    *postv1.ListFavouritePostIDsRequest
 }
 
 func (f *fakePostClient) CreateDraft(_ context.Context, req *connect.Request[postv1.CreateDraftRequest]) (*connect.Response[postv1.CreateDraftResponse], error) {
@@ -711,5 +726,130 @@ func TestBFFGetUserPosts(t *testing.T) {
 		require.False(t, resp.Fail)
 		assert.Empty(t, resp.GetPosts())
 		assert.Empty(t, p.gotByAuthor, "不调下游")
+	})
+}
+
+// ==================== 互动（点赞/收藏） ====================
+
+// 互动透传 fake：uid 由 BFF 会话注入，响应回传计数 + 态位
+
+func (f *fakePostClient) LikePost(_ context.Context, req *connect.Request[postv1.LikePostRequest]) (*connect.Response[postv1.LikePostResponse], error) {
+	f.gotLikePost = req.Msg
+	if f.interactRPCErr != nil {
+		return nil, f.interactRPCErr
+	}
+	return connect.NewResponse(&postv1.LikePostResponse{Fail: f.interactFail != nil, Err: f.interactFail, LikeCount: f.likeCount, Liked: true}), nil
+}
+
+func (f *fakePostClient) UnlikePost(_ context.Context, req *connect.Request[postv1.UnlikePostRequest]) (*connect.Response[postv1.UnlikePostResponse], error) {
+	f.gotUnlikePost = req.Msg
+	if f.interactRPCErr != nil {
+		return nil, f.interactRPCErr
+	}
+	return connect.NewResponse(&postv1.UnlikePostResponse{Fail: f.interactFail != nil, Err: f.interactFail, LikeCount: f.likeCount, Liked: false}), nil
+}
+
+func (f *fakePostClient) FavouritePost(_ context.Context, req *connect.Request[postv1.FavouritePostRequest]) (*connect.Response[postv1.FavouritePostResponse], error) {
+	f.gotFavPost = req.Msg
+	if f.interactRPCErr != nil {
+		return nil, f.interactRPCErr
+	}
+	return connect.NewResponse(&postv1.FavouritePostResponse{Fail: f.interactFail != nil, Err: f.interactFail, FavouriteCount: f.favCount, Favourited: true}), nil
+}
+
+func (f *fakePostClient) UnfavouritePost(_ context.Context, req *connect.Request[postv1.UnfavouritePostRequest]) (*connect.Response[postv1.UnfavouritePostResponse], error) {
+	f.gotUnfavPost = req.Msg
+	if f.interactRPCErr != nil {
+		return nil, f.interactRPCErr
+	}
+	return connect.NewResponse(&postv1.UnfavouritePostResponse{Fail: f.interactFail != nil, Err: f.interactFail, FavouriteCount: f.favCount, Favourited: false}), nil
+}
+
+func (f *fakePostClient) ListLikedPostIDs(_ context.Context, req *connect.Request[postv1.ListLikedPostIDsRequest]) (*connect.Response[postv1.ListLikedPostIDsResponse], error) {
+	f.gotListLiked = req.Msg
+	if f.interactRPCErr != nil {
+		return nil, f.interactRPCErr
+	}
+	return connect.NewResponse(&postv1.ListLikedPostIDsResponse{Fail: f.interactFail != nil, Err: f.interactFail, PostIds: f.listIDs, Cursor: f.listCursor}), nil
+}
+
+func (f *fakePostClient) ListFavouritePostIDs(_ context.Context, req *connect.Request[postv1.ListFavouritePostIDsRequest]) (*connect.Response[postv1.ListFavouritePostIDsResponse], error) {
+	f.gotListFav = req.Msg
+	if f.interactRPCErr != nil {
+		return nil, f.interactRPCErr
+	}
+	return connect.NewResponse(&postv1.ListFavouritePostIDsResponse{Fail: f.interactFail != nil, Err: f.interactFail, PostIds: f.listIDs, Cursor: f.listCursor}), nil
+}
+
+// TestBFFInteractions 互动透传：uid 会话注入 + 计数/态位回传 + 错误映射 + 判态列表透传
+func TestBFFInteractions(t *testing.T) {
+	t.Run("LikePost：uid 来自会话，计数/态位透传", func(t *testing.T) {
+		post := &fakePostClient{likeCount: 8}
+		bff := newBFFForPostTest(&fakeUserClient{}, &fakeMediaClient{}, post)
+
+		resp, err := bff.LikePost(ctxWithUID("u1"), &bffv1.LikePostRequest{PostId: "2001"})
+		require.NoError(t, err)
+		require.False(t, resp.GetFail())
+		assert.Equal(t, int64(8), resp.GetLikeCount())
+		assert.True(t, resp.GetLiked())
+		require.NotNil(t, post.gotLikePost)
+		assert.Equal(t, "u1", post.gotLikePost.GetUid(), "uid 必须来自会话注入，请求体不带 uid")
+		assert.Equal(t, "2001", post.gotLikePost.GetPostId())
+	})
+
+	t.Run("无会话 → Unauthorized", func(t *testing.T) {
+		bff := newBFFForPostTest(&fakeUserClient{}, &fakeMediaClient{}, &fakePostClient{})
+		resp, err := bff.FavouritePost(context.Background(), &bffv1.FavouritePostRequest{PostId: "2001"})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.Unauthorized.Code, resp.GetErr().GetCode())
+	})
+
+	t.Run("业务失败透传（FavouriteLimitExceeded）", func(t *testing.T) {
+		post := &fakePostClient{interactFail: errmsg.FavouriteLimitExceeded}
+		bff := newBFFForPostTest(&fakeUserClient{}, &fakeMediaClient{}, post)
+
+		resp, err := bff.FavouritePost(ctxWithUID("u1"), &bffv1.FavouritePostRequest{PostId: "2001"})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.FavouriteLimitExceeded.Code, resp.GetErr().GetCode())
+	})
+
+	t.Run("连接层错误 → InternalError（不外泄）", func(t *testing.T) {
+		post := &fakePostClient{interactRPCErr: errors.New("boom")}
+		bff := newBFFForPostTest(&fakeUserClient{}, &fakeMediaClient{}, post)
+
+		resp, err := bff.UnlikePost(ctxWithUID("u1"), &bffv1.UnlikePostRequest{PostId: "2001"})
+		require.NoError(t, err)
+		assert.True(t, resp.GetFail())
+		assert.Equal(t, errmsg.InternalError.Code, resp.GetErr().GetCode())
+	})
+
+	t.Run("GetMyLikedPostIDs：uid 注入 + 列表/游标透传", func(t *testing.T) {
+		post := &fakePostClient{
+			listIDs:    []string{"2001", "2002"},
+			listCursor: &commonv1.Cursor{Str: "1000", Limit: 20},
+		}
+		bff := newBFFForPostTest(&fakeUserClient{}, &fakeMediaClient{}, post)
+
+		resp, err := bff.GetMyLikedPostIDs(ctxWithUID("u1"), &bffv1.GetMyLikedPostIDsRequest{})
+		require.NoError(t, err)
+		require.False(t, resp.GetFail())
+		assert.Equal(t, []string{"2001", "2002"}, resp.GetPostIds())
+		assert.Equal(t, "1000", resp.GetCursor().GetStr())
+		require.NotNil(t, post.gotListLiked)
+		assert.Equal(t, "u1", post.gotListLiked.GetUid())
+	})
+
+	t.Run("GetMyFavouritePostIDs：同构透传", func(t *testing.T) {
+		post := &fakePostClient{listIDs: []string{"2003"}}
+		bff := newBFFForPostTest(&fakeUserClient{}, &fakeMediaClient{}, post)
+
+		resp, err := bff.GetMyFavouritePostIDs(ctxWithUID("u1"), &bffv1.GetMyFavouritePostIDsRequest{})
+		require.NoError(t, err)
+		require.False(t, resp.GetFail())
+		assert.Equal(t, []string{"2003"}, resp.GetPostIds())
+		require.NotNil(t, post.gotListFav)
+		assert.Equal(t, "u1", post.gotListFav.GetUid())
 	})
 }

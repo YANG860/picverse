@@ -38,6 +38,8 @@ var (
 	InvalidMedia   = New(1303, errors.New("invalid media"))
 	NotEditable    = New(1304, errors.New("not editable"))
 	Banned         = New(1305, errors.New("post banned"))
+	// FavouriteLimitExceeded 收藏夹容量上限（默认 1000，见 defaults.FavouriteCap）
+	FavouriteLimitExceeded = New(1306, errors.New("favourite limit exceeded"))
 )
 
 // user

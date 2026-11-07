@@ -27,4 +27,13 @@ service PostService {
   rpc BanPost(BanPostRequest) returns (BanPostResponse);
   // 同步帖子统计信息（内部管理，异步链路调用；逐字段部分更新，nil 不修改，仅统计不改状态）
   rpc SyncPostStat(SyncPostStatRequest) returns (SyncPostStatResponse);
+  // 点赞/取消赞（幂等；仅 PUBLISHED；响应带最新计数 + 态）
+  rpc LikePost(LikePostRequest) returns (LikePostResponse);
+  rpc UnlikePost(UnlikePostRequest) returns (UnlikePostResponse);
+  // 收藏/取消收藏（幂等；新增收藏校验容量上限 FavouriteCap）
+  rpc FavouritePost(FavouritePostRequest) returns (FavouritePostResponse);
+  rpc UnfavouritePost(UnfavouritePostRequest) returns (UnfavouritePostResponse);
+  // 最近点赞/收藏的帖子 ID（内部接口，BFF 会话注入 uid 转发；前端预取判态）
+  rpc ListLikedPostIDs(ListLikedPostIDsRequest) returns (ListLikedPostIDsResponse);
+  rpc ListFavouritePostIDs(ListFavouritePostIDsRequest) returns (ListFavouritePostIDsResponse);
 }

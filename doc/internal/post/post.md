@@ -20,7 +20,7 @@
 
 `models.PostMedia`（表 `post_medias`）：帖子↔媒体关联，嵌入 `media.MediaFile`（列前缀 `media_`），`SortOrder` 为展示顺序，**首张即封面**。
 
-## 接口（PostService，13 rpc）
+## 接口（PostService，19 rpc）
 
 | RPC | 状态 | 说明 |
 | --- | --- | --- |
@@ -36,6 +36,10 @@
 | `DeletePost` | ✅ | 用户删帖（软删 → DELETED，事务内发 `DeletePost` 消息，consumer 物理回收） |
 | `BanPost` | ✅ | 封禁帖子（管理侧，无 uid 校验；软封禁 → BANNED + outbox 发 `BanPost` 消息） |
 | `SyncPostStat` | ✅ | 统计列同步（异步链路；逐字段部分更新，nil 不修改，设置则覆盖该列（含 0），仅统计不改状态） |
+| `LikePost` / `UnlikePost` | ✅ | 点赞/取消（幂等；仅 PUBLISHED，非 PUBLISHED 一律 `NotFound`）；明细为准 + 同事务条件计数，响应 `{like_count, liked}` |
+| `FavouritePost` / `UnfavouritePost` | ✅ | 收藏/取消（幂等；新增收藏校验 `FavouriteCap`，超限 `FavouriteLimitExceeded(1306)` 整体回滚）；响应 `{favourite_count, favourited}` |
+| `ListLikedPostIDs` | ✅ | 最近点赞的帖子 ID（内部接口，BFF 会话注入 uid 转发；前端预取判态，`created_at DESC` 时间游标） |
+| `ListFavouritePostIDs` | ✅ | 收藏的帖子 ID（同构；`FavouriteCap` 内一页可拉全） |
 
 ## 关键逻辑
 
@@ -63,6 +67,13 @@
 ### 删帖/封禁消息链路（consumer）
 `DeletePost` 软删（事务内发 `DeletePost` 消息）→ consumer `handleDeletePost` 同事务**物理回收**软删（DELETED 状态）帖子行与其媒体关联，重复投递幂等；`repo.DeletePost` 带 `status=DELETED` 守卫，不会误删未删帖的裸行。**资产计数回收**在同链路闭环：`DeletePostMedias` 先查后删返回被删关联的资产 ID，按槽位同事务写 outbox `deref_media` 消息（media consumer 递减引用计数），删几槽减几槽，重复投递时 0 行命中即不重复减。`BanPost`（软封禁）与发布后的 `PublishPost` 消息目前由 consumer 占位消费（日志留痕 + ACK，对齐 media 侧 `HandlePublishMedia` 模式），下游逻辑（媒体资产处置/通知等）待需求明确后补。
 
+### 互动（点赞/收藏/浏览计数）
+- **强一致计数**：明细为准（`post_likes`/`post_favourites` 唯一约束 `(post_id, user_id)` + `OnConflict DoNothing` 幂等锚点），明细增删与 `posts.like_count`/`favourite_count` 条件更新同事务；减法为防负条件更新（仅计数 > 0 才减）。
+- **幂等口径**：重复点赞/收藏返回成功且不重复计数——前端可重复动作收敛（互动态前端预取判态的容错基础）。
+- **状态裁决**：仅 PUBLISHED 可互动；非 PUBLISHED/不存在一律 `NotFound`，不泄露帖子状态。
+- **收藏夹容量**：`defaults.FavouriteCap`（1000）；仅新增收藏校验（同事务计数含自身，超限回滚插入）；已藏重复调用幂等成功不报满。
+- **判态列表**：`ListLikedPostIDs`/`ListFavouritePostIDs` 供前端预取 post_ids 本地判态（赞态近似、藏态精确）；时间游标严格小于边界，同毫秒并列行在页边界可能落页外（与现有列表翻页同口径）。
+
 ## 依赖
 
 - `packages/utils` — 校验、JSON 解析（见 [packages/utils/utils.md](../../packages/utils/utils.md)）
@@ -72,6 +83,6 @@
 
 ## 状态
 
-`PostService` 的 11 个 rpc **全部已实现**：草稿链路（`CreateDraft` / `UpdateDraft` / `UpdateDraftMedias` / `PublishDraft`）、查询（`GetPostsByIDs` / `GetPostStatus` / `ViewPost` / `ViewPostByAuthor`）、管理（`DeletePost` / `BanPost` / `SyncPostStat`）。`SetPostStatusDraft` 仅定义 proto 消息、暂无 rpc，为规划中接口（物理回收已由 consumer 删帖链路承担，不再设 RPC）。
+`PostService` 的 17 个 rpc **全部已实现**：草稿链路（`CreateDraft` / `UpdateDraft` / `UpdateDraftMedias` / `PublishDraft`）、查询（`GetPostsByIDs` / `GetPostStatus` / `ViewPost` / `ViewPostByAuthor`）、管理（`DeletePost` / `BanPost` / `SyncPostStat`）、互动（`LikePost` / `UnlikePost` / `FavouritePost` / `UnfavouritePost` / `ListLikedPostIDs` / `ListFavouritePostIDs`）。`SetPostStatusDraft` 仅定义 proto 消息、暂无 rpc，为规划中接口（物理回收已由 consumer 删帖链路承担，不再设 RPC）。
 
 测试：`internal/post/v1` 含 repo 层与 biz 层集成测试（`repo_test.go` / `biz_test.go`，真实 testdb 模板库克隆 + testmq 内存模拟，覆盖正常/边界/错误路径与状态机），依赖 `test/testdb`。

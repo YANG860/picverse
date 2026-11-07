@@ -181,3 +181,35 @@ func (s *BFFServiceHandler) GetFollowRelation(ctx context.Context, req *connect.
 	resp, err := s.Biz.GetFollowRelation(ctx, req.Msg)
 	return connect.NewResponse(resp), err
 }
+
+// ==================== 互动（点赞/收藏） ====================
+
+func (s *BFFServiceHandler) LikePost(ctx context.Context, req *connect.Request[bffv1.LikePostRequest]) (*connect.Response[bffv1.LikePostResponse], error) {
+	resp, err := s.Biz.LikePost(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+func (s *BFFServiceHandler) UnlikePost(ctx context.Context, req *connect.Request[bffv1.UnlikePostRequest]) (*connect.Response[bffv1.UnlikePostResponse], error) {
+	resp, err := s.Biz.UnlikePost(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+func (s *BFFServiceHandler) FavouritePost(ctx context.Context, req *connect.Request[bffv1.FavouritePostRequest]) (*connect.Response[bffv1.FavouritePostResponse], error) {
+	resp, err := s.Biz.FavouritePost(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+func (s *BFFServiceHandler) UnfavouritePost(ctx context.Context, req *connect.Request[bffv1.UnfavouritePostRequest]) (*connect.Response[bffv1.UnfavouritePostResponse], error) {
+	resp, err := s.Biz.UnfavouritePost(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+func (s *BFFServiceHandler) GetMyLikedPostIDs(ctx context.Context, req *connect.Request[bffv1.GetMyLikedPostIDsRequest]) (*connect.Response[bffv1.GetMyLikedPostIDsResponse], error) {
+	resp, err := s.Biz.GetMyLikedPostIDs(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+func (s *BFFServiceHandler) GetMyFavouritePostIDs(ctx context.Context, req *connect.Request[bffv1.GetMyFavouritePostIDsRequest]) (*connect.Response[bffv1.GetMyFavouritePostIDsResponse], error) {
+	resp, err := s.Biz.GetMyFavouritePostIDs(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}

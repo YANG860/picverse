@@ -1216,3 +1216,151 @@ func TestPostUsecase_SyncPostStat(t *testing.T) {
 		assert.Equal(t, errmsg.NotFound, resp.GetErr())
 	})
 }
+
+// ---------- 互动（点赞/收藏） ----------
+
+// TestPostUsecase_Interactions 幂等口径 + 强一致计数 + 状态裁决 + 收藏容量上限 + 判态列表
+func TestPostUsecase_Interactions(t *testing.T) {
+	uc, db, _ := newUsecase(t)
+	ctx := context.Background()
+	seedPost(t, db, postID1, authorID1, postv1.PostStatus_POST_STATUS_PUBLISHED, 1000)
+	seedPost(t, db, postID2, authorID1, postv1.PostStatus_POST_STATUS_DRAFT, 1000)
+	const uid = "5001"
+	postIDStr := strconv.FormatInt(postID1, 10)
+
+	t.Run("点赞/取消幂等 + 计数强一致", func(t *testing.T) {
+		r1, err := uc.LikePost(ctx, &postv1.LikePostRequest{Uid: uid, PostId: postIDStr})
+		require.NoError(t, err)
+		require.False(t, r1.GetFail(), "点赞失败: %v", r1.GetErr())
+		assert.True(t, r1.GetLiked())
+		assert.Equal(t, int64(2), r1.GetLikeCount(), "seed 1 + 1（明细为准）")
+
+		// 重复点赞：幂等成功，计数不重复加（前端可重复动作收敛的契约基础）
+		r2, err := uc.LikePost(ctx, &postv1.LikePostRequest{Uid: uid, PostId: postIDStr})
+		require.NoError(t, err)
+		require.False(t, r2.GetFail())
+		assert.True(t, r2.GetLiked())
+		assert.Equal(t, int64(2), r2.GetLikeCount())
+
+		// 取消 + 重复取消
+		r3, err := uc.UnlikePost(ctx, &postv1.UnlikePostRequest{Uid: uid, PostId: postIDStr})
+		require.NoError(t, err)
+		require.False(t, r3.GetFail())
+		assert.False(t, r3.GetLiked())
+		assert.Equal(t, int64(1), r3.GetLikeCount())
+
+		r4, err := uc.UnlikePost(ctx, &postv1.UnlikePostRequest{Uid: uid, PostId: postIDStr})
+		require.NoError(t, err)
+		require.False(t, r4.GetFail())
+		assert.Equal(t, int64(1), r4.GetLikeCount(), "未赞时取消不重复减")
+	})
+
+	t.Run("非 PUBLISHED 与不存在一律 NotFound（不泄露状态）", func(t *testing.T) {
+		draft, err := uc.LikePost(ctx, &postv1.LikePostRequest{Uid: uid, PostId: strconv.FormatInt(postID2, 10)})
+		require.NoError(t, err)
+		assert.True(t, draft.GetFail())
+		assert.Equal(t, errmsg.NotFound.Code, draft.GetErr().GetCode())
+
+		missing, err := uc.FavouritePost(ctx, &postv1.FavouritePostRequest{Uid: uid, PostId: "999999"})
+		require.NoError(t, err)
+		assert.True(t, missing.GetFail())
+		assert.Equal(t, errmsg.NotFound.Code, missing.GetErr().GetCode())
+	})
+
+	t.Run("非法 uid/post_id → InvalidID", func(t *testing.T) {
+		bad, err := uc.LikePost(ctx, &postv1.LikePostRequest{Uid: "not-id", PostId: postIDStr})
+		require.NoError(t, err)
+		assert.True(t, bad.GetFail())
+		assert.Equal(t, errmsg.InvalidID.Code, bad.GetErr().GetCode())
+	})
+
+	t.Run("收藏容量上限：超限回滚；已藏满额重复收藏幂等不报满", func(t *testing.T) {
+		// 满容量用户 6001：批量种 FavouriteCap 条明细（占位帖子不需要存在——容量只数明细行）
+		favs := make([]*models.PostFavourite, 0, defaults.FavouriteCap)
+		for i := 0; i < defaults.FavouriteCap; i++ {
+			favs = append(favs, &models.PostFavourite{
+				BaseModel: common.BaseModel{ID: 92000 + int64(i)},
+				PostID:    70000 + int64(i),
+				UserID:    6001,
+			})
+		}
+		require.NoError(t, db.CreateInBatches(favs, 500).Error)
+
+		full, err := uc.FavouritePost(ctx, &postv1.FavouritePostRequest{Uid: "6001", PostId: postIDStr})
+		require.NoError(t, err)
+		assert.True(t, full.GetFail())
+		assert.Equal(t, errmsg.FavouriteLimitExceeded.Code, full.GetErr().GetCode())
+		cnt, cntErr := uc.Repo.CountFavouritesByUser(ctx, 6001)
+		require.NoError(t, cntErr)
+		assert.Equal(t, int64(defaults.FavouriteCap), cnt, "超限失败须回滚插入")
+
+		// 已藏且满额：重复收藏幂等成功（不占容量、不报满）
+		favs2 := make([]*models.PostFavourite, 0, defaults.FavouriteCap)
+		for i := 0; i < defaults.FavouriteCap-1; i++ {
+			favs2 = append(favs2, &models.PostFavourite{
+				BaseModel: common.BaseModel{ID: 93000 + int64(i)},
+				PostID:    71000 + int64(i),
+				UserID:    6002,
+			})
+		}
+		favs2 = append(favs2, &models.PostFavourite{
+			BaseModel: common.BaseModel{ID: 93999}, PostID: postID1, UserID: 6002,
+		})
+		require.NoError(t, db.CreateInBatches(favs2, 500).Error)
+
+		okResp, err := uc.FavouritePost(ctx, &postv1.FavouritePostRequest{Uid: "6002", PostId: postIDStr})
+		require.NoError(t, err)
+		require.False(t, okResp.GetFail(), "已藏重复收藏应幂等成功: %v", okResp.GetErr())
+		assert.True(t, okResp.GetFavourited())
+	})
+
+	t.Run("收藏/取消全流程：计数 + 态位", func(t *testing.T) {
+		const uid2 = "6003"
+		f1, err := uc.FavouritePost(ctx, &postv1.FavouritePostRequest{Uid: uid2, PostId: postIDStr})
+		require.NoError(t, err)
+		require.False(t, f1.GetFail())
+		assert.True(t, f1.GetFavourited())
+		assert.Equal(t, int64(3), f1.GetFavouriteCount(), "seed 2 + 1")
+
+		u1, err := uc.UnfavouritePost(ctx, &postv1.UnfavouritePostRequest{Uid: uid2, PostId: postIDStr})
+		require.NoError(t, err)
+		require.False(t, u1.GetFail())
+		assert.False(t, u1.GetFavourited())
+		assert.Equal(t, int64(2), u1.GetFavouriteCount())
+	})
+
+	t.Run("判态列表：空页语义 + 顺序 + 游标", func(t *testing.T) {
+		const uid3 = "6004"
+		empty, err := uc.ListLikedPostIDs(ctx, &postv1.ListLikedPostIDsRequest{Uid: uid3})
+		require.NoError(t, err)
+		require.False(t, empty.GetFail())
+		assert.Empty(t, empty.GetPostIds())
+		assert.Nil(t, empty.GetCursor(), "空页返回空游标")
+
+		// 显式 created_at：两条同毫秒由 id 决序
+		likeRows := []*models.PostLike{
+			{BaseModel: common.BaseModel{ID: 94001, CreatedAt: 1000}, PostID: postID1, UserID: 6004},
+			{BaseModel: common.BaseModel{ID: 94002, CreatedAt: 1000}, PostID: postID2, UserID: 6004},
+		}
+		require.NoError(t, db.Create(likeRows).Error)
+
+		got, err := uc.ListLikedPostIDs(ctx, &postv1.ListLikedPostIDsRequest{
+			Uid:    uid3,
+			Cursor: &commonv1.Cursor{Str: "99999", Limit: 10},
+		})
+		require.NoError(t, err)
+		require.False(t, got.GetFail())
+		assert.Equal(t, []string{strconv.FormatInt(postID2, 10), postIDStr}, got.GetPostIds(),
+			"created_at 并列按 id DESC（94002 > 94001）")
+		require.NotNil(t, got.GetCursor())
+
+		// 游标续翻：时间游标严格小于边界（与现有帖子列表翻页同口径），
+		// 同毫秒并列行落页外为已知现状（判态场景可接受）
+		next, err := uc.ListLikedPostIDs(ctx, &postv1.ListLikedPostIDsRequest{
+			Uid:    uid3,
+			Cursor: &commonv1.Cursor{Str: "1000", Limit: 10},
+		})
+		require.NoError(t, err)
+		assert.Empty(t, next.GetPostIds())
+	})
+}

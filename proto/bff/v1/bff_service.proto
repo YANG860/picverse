@@ -80,8 +80,14 @@ service BFFService {
   // ==================== 帖子互动 ====================
 
   // 点赞/取消赞（幂等；uid 来自会话；响应带最新计数 + 态）
+  rpc LikePost(LikePostRequest) returns (LikePostResponse);
+  rpc UnlikePost(UnlikePostRequest) returns (UnlikePostResponse);
   // 收藏/取消收藏（幂等；超收藏夹容量上限返回 FavouriteLimitExceeded）
+  rpc FavouritePost(FavouritePostRequest) returns (FavouritePostResponse);
+  rpc UnfavouritePost(UnfavouritePostRequest) returns (UnfavouritePostResponse);
   // 我最近点赞/收藏的帖子 ID（前端预取判态）
+  rpc GetMyLikedPostIDs(GetMyLikedPostIDsRequest) returns (GetMyLikedPostIDsResponse);
+  rpc GetMyFavouritePostIDs(GetMyFavouritePostIDsRequest) returns (GetMyFavouritePostIDsResponse);
 
   // ==================== 搜索 ====================
 
