@@ -54,6 +54,7 @@ rednote 是一个仿小红书的图片社交论坛后端。核心链路围绕**�
 | `cmd/post` | `:8082` | 帖子服务 ConnectRPC 入口 |
 | `cmd/user` | `:8083` | 用户服务 ConnectRPC 入口 |
 | `cmd/bff` | `:8084` | 面客聚合网关 ConnectRPC 入口（trace + JWT + validate 拦截器） |
+| `cmd/discover` | `:8085` | 搜推服务 ConnectRPC 入口（关注流/推荐流/搜索） |
 | `cmd/consumer` | — | 消费者，处理 JetStream 中的图片/帖子消息 |
 | `cmd/poller` | — | Outbox Poller，把发件箱消息投递到 JetStream |
 | `cmd/gen` | — | Wire 注入器 + gorm/gen 代码生成（不作为服务运行） |
@@ -83,7 +84,7 @@ rednote/
 ├── config/         配置结构与加载（Viper）
 ├── proto/          protobuf / ConnectRPC 服务与消息定义
 ├── gen/            生成代码（gen/go 连接与消息、gen/query GORM 查询）
-├── internal/       业务模块（auth / user / media / post / bff / common / consumer / poller）
+├── internal/       业务模块（auth / user / media / post / bff / discover / common / consumer / poller）
 ├── packages/       基础组件（db / mq / oss / jwt / trace / logger / utils / defaults / errmsg / redis）
 ├── sql/            建表与索引迁移脚本（幂等）
 ├── scripts/        dbinit（重建模板库）/ dbsync（同步表结构）/ dbtool（清空测试基线：表+流+消费者）/ jsprobe（JetStream 状态探测）/ compose

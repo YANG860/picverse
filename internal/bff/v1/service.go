@@ -120,6 +120,12 @@ func (s *BFFServiceHandler) GetUserPosts(ctx context.Context, req *connect.Reque
 	return connect.NewResponse(resp), err
 }
 
+// SearchPosts 帖子搜索
+func (s *BFFServiceHandler) SearchPosts(ctx context.Context, req *connect.Request[bffv1.SearchPostsRequest]) (*connect.Response[bffv1.SearchPostsResponse], error) {
+	resp, err := s.Biz.SearchPosts(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
 // --- 用户 ---
 
 // GetMyProfile 我的主页资料

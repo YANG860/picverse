@@ -55,7 +55,7 @@ type RedisConfig struct {
 	PoolSize int `mapstructure:"pool_size"`
 }
 
-// MeiliConfig Meilisearch 搜索引擎配置（搜推服务的索引同步与查询，见 doc/design/discover.md）
+// MeiliConfig Meilisearch 搜索引擎配置（搜推服务的索引同步与查询）
 type MeiliConfig struct {
 	// 服务地址，如 "http://127.0.0.1:7700"
 	URL string `mapstructure:"url"`
@@ -145,6 +145,7 @@ type PollerConfig struct {
 type ConsumerConfig struct {
 	Media    MediaConsumerConfig    `mapstructure:"media"`
 	Post     PostConsumerConfig     `mapstructure:"post"`
+	Discover DiscoverConsumerConfig `mapstructure:"discover"`
 }
 
 type MediaConsumerConfig struct {
@@ -157,4 +158,10 @@ type PostConsumerConfig struct {
 	Name       string `mapstructure:"name"`
 	MaxRetry   int    `mapstructure:"max_retry"`
 	WorkingDir string `mapstructure:"working_dir"`
+}
+
+// DiscoverConsumerConfig 搜推消费者配置（索引同步/扇出，跑在 cmd/discover 进程内）
+type DiscoverConsumerConfig struct {
+	Name     string `mapstructure:"name"`
+	MaxRetry int    `mapstructure:"max_retry"`
 }

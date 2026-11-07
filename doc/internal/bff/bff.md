@@ -11,7 +11,7 @@
 | 错误约定 | `fail` + `common.v1.Error`（可枚举错误码），连接层错误走原始 gRPC 错误 | `fail` + `common.v1.Error`；**连接层错误不外泄**：内部记录日志后返回 `InternalError`（见下文“错误处理”） |
 | 分页 | 相同：`common.v1.Cursor`，空页返回空列表 + 空游标 | 相同 |
 
-## 接口（BFFService，规划 26 rpc；proto 现定义 24 个，其余待定稿）
+## 接口（BFFService，proto 现定义 25 rpc）
 
 | 域 | rpc | 下游调用 | 聚合职责 |
 | --- | --- | --- | --- |
@@ -39,6 +39,7 @@
 | 帖子 | GetPost | post.ViewPost + user.GetUserBrief + user.GetFollowingRelation | 组装 `PostDetail` |
 | 帖子 | GetMyPosts | post.ViewPostByAuthor（viewer=author） | 含草稿/审核中（状态随 `PostBrief` 返回），组装 `PostCard`（封面按状态分级签发）|
 | 帖子 | GetUserPosts | post.ViewPostByAuthor（viewer=会话用户） | 仅已发布，组装 `PostCard` |
+| 搜索 | SearchPosts | discover.SearchPosts + post.GetPostsByIDs | 关键词命中（综合/最新双排序），按命中序回查组装 `PostCard`，过滤非 PUBLISHED 兑底同步窗口 |
 | 信息流 | GetFollowingFeed | user.GetFollowings + post.ViewPostByAuthor（逐作者） | 关注的人的已发布帖子按发布时间归并 |
 
 不暴露的内部接口：`BanPost` / `BanUser` / `BanMedia` / `DeleteUnusedMedia` / `SyncPostStat` / `GetPostsByIDs` / `DeleteUnusedPost` 等管理与内部接口一律不经 BFF 面客。
@@ -85,6 +86,10 @@ BFF 由于面向前端，**不返回连接层 error**：下游连接层错误（
 
 `GetFollowingFeed` 由 BFF 聚合：拉取关注列表 → 逐作者调用 `ViewPostByAuthor`（仅已发布）→ 按发布时间归并游标分页。推荐流由后续推荐服务另立接口，不复用本契约。
 
+### 搜索（SearchPosts）
+
+`SearchPosts` 由 BFF 聚合：`discover.SearchPosts`（关键词 + 综合/最新双排序 + offset 游标）→ **按命中顺序**回查 `post.GetPostsByIDs` 组装 `PostCard`（不保证顺序的下游结果按 post_id 对齐）。同步窗口内已软删/封禁的命中在回查后过滤（仅 PUBLISHED 面客，页内条数可能少于 limit）；整页被过滤按翻页到底处理。
+
 ## 依赖
 
 - auth / user / media / post 服务（connectrpc 客户端，`packages/rpc` 统一构造：服务发现传输层 + trace/jwt 拦截器，地址源 `config.services`，见 [rpc](../../packages/rpc/rpc.md)）
@@ -92,7 +97,7 @@ BFF 由于面向前端，**不返回连接层 error**：下游连接层错误（
 
 ## 状态
 
-`internal/bff/v1/`（proto 现定义 24 rpc 全部实现：auth 5 + user 9 + media 2 + post 8；单测 `biz_auth_test.go` / `biz_media_test.go` / `biz_user_test.go` / `biz_post_test.go` 覆盖 auth/media/user/post 四域）：
+`internal/bff/v1/`（proto 现定义 25 rpc 全部实现：auth 5 + user 9 + media 2 + post 8 + search 1；单测 `biz_auth_test.go` / `biz_media_test.go` / `biz_user_test.go` / `biz_post_test.go` / `biz_search_test.go` 覆盖 auth/media/user/post/search 五域）：
 
 - `service.go`：BFFServiceHandler 实现全部 rpc 并委托 biz 层
 - `biz.go`：`BFFUsecase` 接口 + `BFFUsecaseImpl`，身份经 `sessionUID`（jwt claims）注入：
@@ -102,7 +107,8 @@ BFF 由于面向前端，**不返回连接层 error**：下游连接层错误（
     CreateDraft / UpdateDraft / UpdateDraftMedias / PublishDraft / DeletePost
     （媒体批量归属校验 + 原子挂载 +1，下游失败回滚；旧资产 MQ 异步卸载）、
     GetPost（并行聚合作者/关系，NotFound 降级未关注）、GetMyPosts（状态随 `PostBrief` 返回，封面分级签发）、
-    GetUserPosts（恒 PUBLISHED，公开 TTL）
+    GetUserPosts（恒 PUBLISHED，公开 TTL）、
+    SearchPosts（discover 检索 + 按命中序回查组装，过滤非 PUBLISHED 兑底同步窗口）
   - 待实现：GetFollowingFeed（信息流，暂缓）、GetMyMediaAssets（素材库，依赖待定项 2）
 - `repo.go`：`DownstreamRepo` 下游客户端集合
 

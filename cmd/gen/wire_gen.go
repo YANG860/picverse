@@ -11,17 +11,19 @@ import (
 	"rednote/config"
 	"rednote/gen/go/auth/v1/authv1connect"
 	"rednote/gen/go/bff/v1/bffv1connect"
+	"rednote/gen/go/discover/v1/discoverv1connect"
 	"rednote/gen/go/media/v1/mediav1connect"
 	"rednote/gen/go/post/v1/postv1connect"
 	"rednote/gen/go/user/v1/userv1connect"
-	v1_4 "rednote/internal/auth/v1"
-	v1_5 "rednote/internal/bff/v1"
+	v1_5 "rednote/internal/auth/v1"
+	v1_6 "rednote/internal/bff/v1"
 	v1_2 "rednote/internal/common/v1"
 	"rednote/internal/consumer"
+	v1_4 "rednote/internal/discover/v1"
 	"rednote/internal/media/v1"
 	"rednote/internal/poller"
 	v1_3 "rednote/internal/post/v1"
-	v1_6 "rednote/internal/user/v1"
+	v1_7 "rednote/internal/user/v1"
 	"rednote/packages/cache"
 	"rednote/packages/db"
 	"rednote/packages/jwt"
@@ -82,6 +84,34 @@ func InitializePoller(cfg *config.Config) (*poller.OutBoxPoller, func()) {
 	}
 }
 
+func InitializeDiscoverServiceHandler(cfg *config.Config) (discoverv1connect.DiscoverServiceHandler, func()) {
+	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
+	meiliClient, cleanup2 := meili.NewClient(cfg, loggerFactoryImpl)
+	discoverUsecaseImpl := v1_4.NewDiscoverUsecase(loggerFactoryImpl, meiliClient)
+	discoverServiceHandler := v1_4.NewDiscoverServiceHandler(loggerFactoryImpl, discoverUsecaseImpl)
+	return discoverServiceHandler, func() {
+		cleanup2()
+		cleanup()
+	}
+}
+
+func InitializeDiscoverConsumer(cfg *config.Config) (*consumer.DiscoverConsumer, func()) {
+	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
+	jetStreamClient, cleanup2 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
+	meiliClient, cleanup3 := meili.NewClient(cfg, loggerFactoryImpl)
+	staticProvider := rpc.NewStaticProvider(cfg)
+	postServiceClient := rpc.NewPostClient(staticProvider)
+	gormDB, cleanup4 := db.NewPG(cfg, loggerFactoryImpl)
+	processedMessageRepoImpl := v1_2.NewProcessedMessageRepo(gormDB)
+	discoverConsumer := consumer.NewDiscoverConsumer(jetStreamClient, loggerFactoryImpl, cfg, meiliClient, postServiceClient, processedMessageRepoImpl)
+	return discoverConsumer, func() {
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+	}
+}
+
 func InitializeMediaServiceHandler(cfg *config.Config) (mediav1connect.MediaServiceHandler, func()) {
 	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
 	gormDB, cleanup2 := db.NewPG(cfg, loggerFactoryImpl)
@@ -100,10 +130,10 @@ func InitializeMediaServiceHandler(cfg *config.Config) (mediav1connect.MediaServ
 func InitializeAuthServiceHandler(cfg *config.Config) (authv1connect.AuthServiceHandler, func()) {
 	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
 	gormDB, cleanup2 := db.NewPG(cfg, loggerFactoryImpl)
-	authRepoImpl := v1_4.NewAuthRepoImpl(gormDB)
+	authRepoImpl := v1_5.NewAuthRepoImpl(gormDB)
 	managerImpl := jwt.NewManager(cfg)
-	authUsecaseImpl := v1_4.NewAuthUsecaseImpl(authRepoImpl, managerImpl, gormDB)
-	authServiceHandler := v1_4.NewAuthServiceHandler(authUsecaseImpl, loggerFactoryImpl)
+	authUsecaseImpl := v1_5.NewAuthUsecaseImpl(authRepoImpl, managerImpl, gormDB)
+	authServiceHandler := v1_5.NewAuthServiceHandler(authUsecaseImpl, loggerFactoryImpl)
 	return authServiceHandler, func() {
 		cleanup2()
 		cleanup()
@@ -135,10 +165,11 @@ func InitializeBFFServiceHandler(cfg *config.Config) (bffv1connect.BFFServiceHan
 	userServiceClient := rpc.NewUserClient(staticProvider)
 	mediaServiceClient := rpc.NewMediaClient(staticProvider)
 	postServiceClient := rpc.NewPostClient(staticProvider)
-	downstreamRepo := v1_5.NewDownstreamRepo(authServiceClient, userServiceClient, mediaServiceClient, postServiceClient)
+	discoverServiceClient := rpc.NewDiscoverClient(staticProvider)
+	downstreamRepo := v1_6.NewDownstreamRepo(authServiceClient, userServiceClient, mediaServiceClient, postServiceClient, discoverServiceClient)
 	jetStreamClient, cleanup2 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
-	bffUsecaseImpl := v1_5.NewBFFUsecase(downstreamRepo, jetStreamClient, loggerFactoryImpl)
-	bffServiceHandler := v1_5.NewBFFServiceHandler(loggerFactoryImpl, bffUsecaseImpl)
+	bffUsecaseImpl := v1_6.NewBFFUsecase(downstreamRepo, jetStreamClient, loggerFactoryImpl)
+	bffServiceHandler := v1_6.NewBFFServiceHandler(loggerFactoryImpl, bffUsecaseImpl)
 	return bffServiceHandler, func() {
 		cleanup2()
 		cleanup()
@@ -148,13 +179,13 @@ func InitializeBFFServiceHandler(cfg *config.Config) (bffv1connect.BFFServiceHan
 func InitializeUserServiceHandler(cfg *config.Config) (userv1connect.UserServiceHandler, func()) {
 	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
 	gormDB, cleanup2 := db.NewPG(cfg, loggerFactoryImpl)
-	userRepoImpl := v1_6.NewUserRepo(gormDB)
+	userRepoImpl := v1_7.NewUserRepo(gormDB)
 	cacheCache, cleanup3 := cache.NewCache(cfg, loggerFactoryImpl)
 	userEntityCacheImpl := cache.NewUserEntityCache(cacheCache, cfg)
-	cachedUserRepo := v1_6.NewCachedUserRepo(userRepoImpl, userEntityCacheImpl, loggerFactoryImpl)
+	cachedUserRepo := v1_7.NewCachedUserRepo(userRepoImpl, userEntityCacheImpl, loggerFactoryImpl)
 	jetStreamClient, cleanup4 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
-	userUsecaseImpl := v1_6.NewUserUsecase(cachedUserRepo, gormDB, jetStreamClient)
-	userServiceHandler := v1_6.NewUserServiceHandler(gormDB, loggerFactoryImpl, userUsecaseImpl, cachedUserRepo)
+	userUsecaseImpl := v1_7.NewUserUsecase(cachedUserRepo, gormDB, jetStreamClient)
+	userServiceHandler := v1_7.NewUserServiceHandler(gormDB, loggerFactoryImpl, userUsecaseImpl, cachedUserRepo)
 	return userServiceHandler, func() {
 		cleanup4()
 		cleanup3()
@@ -171,18 +202,21 @@ func InitializeAuthInterceptor(cfg *config.Config) *jwt.ServerInterceptor {
 
 // wire.go:
 
-var Repos = wire.NewSet(v1.NewMediaRepo, wire.Bind(new(v1.MediaRepository), new(*v1.MediaRepoImpl)), v1_4.NewAuthRepoImpl, wire.Bind(new(v1_4.AuthRepository), new(*v1_4.AuthRepoImpl)), v1_3.NewPostRepo, v1_3.NewCachedPostRepo, wire.Bind(new(v1_3.PostRepository), new(*v1_3.CachedPostRepo)), v1_6.NewUserRepo, v1_6.NewCachedUserRepo, wire.Bind(new(v1_6.UserRepository), new(*v1_6.CachedUserRepo)), v1_2.NewOutBoxRepo, wire.Bind(new(v1_2.OutBoxRepository), new(*v1_2.OutBoxRepoImpl)), v1_2.NewProcessedMessageRepo, wire.Bind(new(v1_2.ProcessedMessageRepository), new(*v1_2.ProcessedMessageRepoImpl)))
+var Repos = wire.NewSet(v1.NewMediaRepo, wire.Bind(new(v1.MediaRepository), new(*v1.MediaRepoImpl)), v1_5.NewAuthRepoImpl, wire.Bind(new(v1_5.AuthRepository), new(*v1_5.AuthRepoImpl)), v1_3.NewPostRepo, v1_3.NewCachedPostRepo, wire.Bind(new(v1_3.PostRepository), new(*v1_3.CachedPostRepo)), v1_7.NewUserRepo, v1_7.NewCachedUserRepo, wire.Bind(new(v1_7.UserRepository), new(*v1_7.CachedUserRepo)), v1_2.NewOutBoxRepo, wire.Bind(new(v1_2.OutBoxRepository), new(*v1_2.OutBoxRepoImpl)), v1_2.NewProcessedMessageRepo, wire.Bind(new(v1_2.ProcessedMessageRepository), new(*v1_2.ProcessedMessageRepoImpl)))
 
-var Services = wire.NewSet(v1.NewMediaServiceHandler, wire.Bind(new(mediav1connect.MediaServiceHandler), new(*v1.MediaServiceHandler)), v1_4.NewAuthServiceHandler, wire.Bind(new(authv1connect.AuthServiceHandler), new(*v1_4.AuthServiceHandler)), v1_3.NewPostServiceHandler, wire.Bind(new(postv1connect.PostServiceHandler), new(*v1_3.PostServiceHandler)), v1_6.NewUserServiceHandler, wire.Bind(new(userv1connect.UserServiceHandler), new(*v1_6.UserServiceHandler)))
+var Services = wire.NewSet(v1.NewMediaServiceHandler, wire.Bind(new(mediav1connect.MediaServiceHandler), new(*v1.MediaServiceHandler)), v1_5.NewAuthServiceHandler, wire.Bind(new(authv1connect.AuthServiceHandler), new(*v1_5.AuthServiceHandler)), v1_3.NewPostServiceHandler, wire.Bind(new(postv1connect.PostServiceHandler), new(*v1_3.PostServiceHandler)), v1_7.NewUserServiceHandler, wire.Bind(new(userv1connect.UserServiceHandler), new(*v1_7.UserServiceHandler)))
 
-var Usecases = wire.NewSet(v1.NewMediaUsecase, wire.Bind(new(v1.MediaUsecase), new(*v1.MediaUsecaseImpl)), v1_4.NewAuthUsecaseImpl, wire.Bind(new(v1_4.AuthUsecase), new(*v1_4.AuthUsecaseImpl)), v1_3.NewPostUsecase, wire.Bind(new(v1_3.PostUsecase), new(*v1_3.PostUsecaseImpl)), v1_6.NewUserUsecase, wire.Bind(new(v1_6.UserUsecase), new(*v1_6.UserUsecaseImpl)))
+var Usecases = wire.NewSet(v1.NewMediaUsecase, wire.Bind(new(v1.MediaUsecase), new(*v1.MediaUsecaseImpl)), v1_5.NewAuthUsecaseImpl, wire.Bind(new(v1_5.AuthUsecase), new(*v1_5.AuthUsecaseImpl)), v1_3.NewPostUsecase, wire.Bind(new(v1_3.PostUsecase), new(*v1_3.PostUsecaseImpl)), v1_7.NewUserUsecase, wire.Bind(new(v1_7.UserUsecase), new(*v1_7.UserUsecaseImpl)))
 
 var Middlewares = wire.NewSet(cache.NewCache, cache.NewUserEntityCache, wire.Bind(new(cache.UserEntityCache), new(*cache.UserEntityCacheImpl)), cache.NewPostEntityCache, wire.Bind(new(cache.PostEntityCache), new(*cache.PostEntityCacheImpl)), db.NewPG, mq.NewJetStreamClient, wire.Bind(new(mq.MQClient), new(*mq.JetStreamClient)), logger.NewLoggerFactory, wire.Bind(new(logger.LoggerFactory), new(*logger.LoggerFactoryImpl)), oss.NewClient, wire.Bind(new(oss.S3Repo), new(*oss.MinioClient)), meili.NewClient, wire.Bind(new(meili.MeiliRepo), new(*meili.MeiliClient)))
 
 var Utils = wire.NewSet(jwt.NewManager, wire.Bind(new(jwt.Manager), new(*jwt.ManagerImpl)), jwt.NewServerInterceptor)
 
 // Clients 下游服务客户端：服务发现（静态实现）+ 统一拦截器的 connect 客户端
-var Clients = wire.NewSet(rpc.NewStaticProvider, wire.Bind(new(rpc.EndpointProvider), new(*rpc.StaticProvider)), rpc.NewAuthClient, rpc.NewUserClient, rpc.NewMediaClient, rpc.NewPostClient, v1_5.NewDownstreamRepo)
+var Clients = wire.NewSet(rpc.NewStaticProvider, wire.Bind(new(rpc.EndpointProvider), new(*rpc.StaticProvider)), rpc.NewAuthClient, rpc.NewUserClient, rpc.NewMediaClient, rpc.NewPostClient, rpc.NewDiscoverClient, v1_6.NewDownstreamRepo)
 
 // BFF bff 服务装配
-var BFF = wire.NewSet(v1_5.NewBFFUsecase, wire.Bind(new(v1_5.BFFUsecase), new(*v1_5.BFFUsecaseImpl)), v1_5.NewBFFServiceHandler, wire.Bind(new(bffv1connect.BFFServiceHandler), new(*v1_5.BFFServiceHandler)))
+var BFF = wire.NewSet(v1_6.NewBFFUsecase, wire.Bind(new(v1_6.BFFUsecase), new(*v1_6.BFFUsecaseImpl)), v1_6.NewBFFServiceHandler, wire.Bind(new(bffv1connect.BFFServiceHandler), new(*v1_6.BFFServiceHandler)))
+
+// Discover 搜推服务装配
+var Discover = wire.NewSet(v1_4.NewDiscoverUsecase, wire.Bind(new(v1_4.DiscoverUsecase), new(*v1_4.DiscoverUsecaseImpl)), v1_4.NewDiscoverServiceHandler, wire.Bind(new(discoverv1connect.DiscoverServiceHandler), new(*v1_4.DiscoverServiceHandler)))

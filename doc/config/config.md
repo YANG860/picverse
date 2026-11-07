@@ -37,7 +37,7 @@ meili:       # Meilisearch 搜索引擎
 
 | 键 | 类型 | 说明 |
 | --- | --- | --- |
-| `auth` / `user` / `media` / `post` / `bff` | string | 各服务监听地址，如 `:8081`（bff 为 `:8084`） |
+| `auth` / `user` / `media` / `post` / `bff` / `discover` | string | 各服务监听地址，如 `:8081`（bff 为 `:8084`，discover 为 `:8085`） |
 
 ### services — 下游服务地址（服务发现）
 
@@ -45,7 +45,7 @@ meili:       # Meilisearch 搜索引擎
 
 | 键 | 类型 | 说明 |
 | --- | --- | --- |
-| `auth` / `user` / `media` / `post` | string | 下游服务地址，`host:port` 或 `scheme://host:port`；同机 `127.0.0.1:端口`，k8s 填 Service DNS 名 |
+| `auth` / `user` / `media` / `post` / `discover` | string | 下游服务地址，`host:port` 或 `scheme://host:port`；同机 `127.0.0.1:端口`，k8s 填 Service DNS 名 |
 
 ### logger — 日志
 见 [log.md](../log.md)。关键项：`level`、`file`、`out`、`rotate`、`maxsize`、`maxbackups`、`maxage`、`compress`、`buffersize`、`std`。
@@ -79,7 +79,7 @@ meili:       # Meilisearch 搜索引擎
 
 ### meili — Meilisearch 搜索引擎
 
-搜推服务（discover）的索引同步与查询入口（见 [design/discover.md](../design/discover.md)）。
+搜推服务（discover）的索引同步与查询入口。
 
 | 键 | 类型 | 说明 |
 | --- | --- | --- |
@@ -107,6 +107,7 @@ meili:       # Meilisearch 搜索引擎
 | `consumer.media.max_retry` | int | 消息最大投递次数（MaxDeliver） |
 | `consumer.media.working_dir` | string | 图片处理工作目录（不存在时自动创建） |
 | `consumer.post.name` / `max_retry` / `working_dir` | — | post 消费者（同构） |
+| `consumer.discover.name` / `max_retry` | — | 搜推消费者（索引同步/扇出，跑在 cmd/discover 进程内，无工作目录） |
 
 > `config.yaml` 中 `consumer.media.worker_pool_size` 与当前结构体无对应字段，属预留/失效项。
 

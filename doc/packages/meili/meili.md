@@ -1,6 +1,6 @@
 # meili — Meilisearch 客户端封装
 
-代码：`packages/meili/`。搜推服务（discover）索引同步与搜索查询的统一出入口（见 [design/discover.md](../../design/discover.md) §5）。
+代码：`packages/meili/`。搜推服务（discover）索引同步与搜索查询的统一出入口。
 薄封装风格对齐 [redis](../redis)：内嵌 `meilisearch-go` 的 `ServiceManager`，底层索引/搜索操作可直接调用（如 `m.Index("posts")`）。
 
 ## MeiliRepo 接口

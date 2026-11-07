@@ -12,7 +12,7 @@ ID 是全局基础约定，DB 主键、消息 ID、`jti` 等都用它生成。
 
 ## 游标（cursor.go）
 
-`common.v1.Cursor` 的编码/解析工具，两种游标语义（见 [design/discover.md](../../design/discover.md) §6）：
+`common.v1.Cursor` 的编码/解析工具，两种游标语义：
 
 | 函数 | 说明 |
 | --- | --- |

@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package discover.v1;
+
+import "discover/v1/requests.proto";
+
+// DiscoverService 搜推服务（内部接口，BFF 内网调用）。
+// 职责边界：只输出 post_ids / 排序信息，不组装面客视图（PostCard / UserBrief 组装收敛在 BFF）；
+// 本服务不裁决可见性（软删/封禁过滤由 BFF 回查下游完成）。
+//
+service DiscoverService {
+  // 关注流取数：写扩散/推拉结合，复合游标 2 路归并（P1 实现）
+  rpc GetFollowingFeed(GetFollowingFeedRequest) returns (GetFollowingFeedResponse);
+  // 推荐流取数：热度快照 + seen 去重 + 同作者打散 + 探索位（P2 实现）
+  rpc GetRecommendFeed(GetRecommendFeedRequest) returns (GetRecommendFeedResponse);
+  // 帖子搜索：Meilisearch posts 索引，offset 游标（P3 实现）
+  rpc SearchPosts(SearchPostsRequest) returns (SearchPostsResponse);
+}

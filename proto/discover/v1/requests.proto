@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package discover.v1;
+
+import "buf/validate/validate.proto";
+import "common/v1/common.proto";
+
+// ==================== 关注流 ====================
+
+// GetFollowingFeedRequest 关注流取数（内部接口，BFF 调用）：
+// 写扩散/推拉结合——push（fanout_timelines）+ pull（大V现拉）按 (发布时间, id) 复合游标 2 路归并，
+// 返回排序后的 post_ids；可见性过滤与 PostCard 组装收敛在 BFF。
+message GetFollowingFeedRequest {
+  // 会话用户（BFF 鉴权后注入）
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  // BFF 拉取的全量关注列表（封顶由 BFF 控制）
+  repeated string following_ids = 2 [(buf.validate.field).repeated.items.string.min_len = 1];
+  common.v1.Cursor cursor = 3;
+}
+
+message GetFollowingFeedResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 已按 (发布时间, id) 归并排序的帖子 ID
+  repeated string post_ids = 3;
+  // 翻页到底/暂无内容：post_ids 为空且 cursor 为空
+  common.v1.Cursor cursor = 4;
+}
+
+// ==================== 推荐流 ====================
+
+// GetRecommendFeedRequest 推荐流取数（内部接口，BFF 调用）：
+// 热度快照 + seen 已读去重 + 同作者打散 + 探索位，返回 post_ids。
+message GetRecommendFeedRequest {
+  // 会话用户（seen 去重用）
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  common.v1.Cursor cursor = 2;
+}
+
+message GetRecommendFeedResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  repeated string post_ids = 3;
+  common.v1.Cursor cursor = 4;
+}
+
+// ==================== 搜索 ====================
+
+// SearchSort 搜索结果排序
+enum SearchSort {
+  // 未指定：综合排序（相关度 × 时间衰减）
+  SEARCH_SORT_UNSPECIFIED = 0;
+  // 最新：发布时间倒序
+  SEARCH_SORT_LATEST = 1;
+}
+
+// SearchHit 搜索命中项（排序信息；视图组装在 BFF）
+message SearchHit {
+  string post_id = 1;
+  // 相关度得分（Meilisearch rankingScore，0~1；SEARCH_SORT_LATEST 时无意义）
+  double score = 2;
+}
+
+// SearchPostsRequest 帖子搜索（内部接口，BFF 调用）：
+// 检索 Meilisearch posts 索引（仅 PUBLISHED）。
+message SearchPostsRequest {
+  // 关键词必填
+  string keyword = 1 [(buf.validate.field).string.min_len = 1];
+  SearchSort sort = 2;
+  // 游标编码 offset（相关度排序无稳定全序，不复用时间游标）
+  common.v1.Cursor cursor = 3;
+}
+
+message SearchPostsResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  repeated SearchHit hits = 3;
+  // 翻页到底/暂无内容：hits 为空且 cursor 为空
+  common.v1.Cursor cursor = 4;
+}

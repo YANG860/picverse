@@ -5,6 +5,7 @@ package bff.v1;
 import "bff/v1/auth_requests.proto";
 import "bff/v1/media_requests.proto";
 import "bff/v1/post_requests.proto";
+import "bff/v1/search_requests.proto";
 import "bff/v1/user_requests.proto";
 
 // BFFService 面向前端与客户端的聚合网关。
@@ -75,6 +76,17 @@ service BFFService {
   rpc GetMyPosts(GetMyPostsRequest) returns (GetMyPostsResponse);
   // 他人主页的帖子列表（仅已发布；游标分页）
   rpc GetUserPosts(GetUserPostsRequest) returns (GetUserPostsResponse);
+
+  // ==================== 帖子互动 ====================
+
+  // 点赞/取消赞（幂等；uid 来自会话；响应带最新计数 + 态）
+  // 收藏/取消收藏（幂等；超收藏夹容量上限返回 FavouriteLimitExceeded）
+  // 我最近点赞/收藏的帖子 ID（前端预取判态）
+
+  // ==================== 搜索 ====================
+
+  // 帖子搜索：关键词检索（Meilisearch），综合（相关度×时间衰减）/最新双排序，offset 游标
+  rpc SearchPosts(SearchPostsRequest) returns (SearchPostsResponse);
 
   // ==================== 信息流 ====================
 

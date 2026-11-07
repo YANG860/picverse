@@ -7,7 +7,7 @@ import (
 	ms "github.com/meilisearch/meilisearch-go"
 )
 
-// PostIndexDoc posts 搜索索引文档（schema 见 doc/design/discover.md §5.1）：
+// PostIndexDoc posts 搜索索引文档（schema）：
 // 主键 post_id；仅 PUBLISHED 入列；created_at 为 unix 毫秒（"最新"排序键）。
 // 纯值类型（不依赖业务 proto），入库调用方以 map[string]any 提供字段后经 NewPostIndexDoc 组装。
 type PostIndexDoc struct {
@@ -27,7 +27,7 @@ const PostsIndexPrimaryKey = "post_id"
 
 // PostsIndexSettings posts 索引设置：
 // searchableAttributes 限定检索面（标题+正文）；sortableAttributes 支撑"最新"模式排序
-// （created_at 主序 + post_id 同毫秒 tiebreaker，二者都必须声明才能进 sort，见 doc/design/discover.md §5.2）
+// （created_at 主序 + post_id 同毫秒 tiebreaker，二者都必须声明才能进 sort）
 func PostsIndexSettings() *ms.Settings {
 	return &ms.Settings{
 		SearchableAttributes: []string{"title", "full_text"},

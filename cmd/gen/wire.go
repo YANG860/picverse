@@ -9,6 +9,7 @@ import (
 	"rednote/gen/go/media/v1/mediav1connect"
 
 	authv1connect "rednote/gen/go/auth/v1/authv1connect"
+	discoverv1connect "rednote/gen/go/discover/v1/discoverv1connect"
 	"rednote/gen/go/post/v1/postv1connect"
 	userv1connect "rednote/gen/go/user/v1/userv1connect"
 	commonv1 "rednote/internal/common/v1"
@@ -16,6 +17,7 @@ import (
 
 	authv1 "rednote/internal/auth/v1"
 	bffv1 "rednote/internal/bff/v1"
+	discoverv1 "rednote/internal/discover/v1"
 	mediav1 "rednote/internal/media/v1"
 	"rednote/internal/poller"
 	postv1 "rednote/internal/post/v1"
@@ -117,6 +119,7 @@ var Clients = wire.NewSet(
 	rpc.NewUserClient,
 	rpc.NewMediaClient,
 	rpc.NewPostClient,
+	rpc.NewDiscoverClient,
 
 	bffv1.NewDownstreamRepo,
 )
@@ -128,6 +131,15 @@ var BFF = wire.NewSet(
 
 	bffv1.NewBFFServiceHandler,
 	wire.Bind(new(bffv1connect.BFFServiceHandler), new(*bffv1.BFFServiceHandler)),
+)
+
+// Discover 搜推服务装配
+var Discover = wire.NewSet(
+	discoverv1.NewDiscoverUsecase,
+	wire.Bind(new(discoverv1.DiscoverUsecase), new(*discoverv1.DiscoverUsecaseImpl)),
+
+	discoverv1.NewDiscoverServiceHandler,
+	wire.Bind(new(discoverv1connect.DiscoverServiceHandler), new(*discoverv1.DiscoverServiceHandler)),
 )
 
 func InitializeConsumer(cfg *config.Config) (*consumer.MediaConsumer, func()) {
@@ -154,6 +166,24 @@ func InitializePoller(cfg *config.Config) (*poller.OutBoxPoller, func()) {
 		poller.NewPoller,
 		Middlewares,
 		Repos,
+	)
+	return nil, func() {}
+}
+
+func InitializeDiscoverServiceHandler(cfg *config.Config) (discoverv1connect.DiscoverServiceHandler, func()) {
+	wire.Build(
+		Discover,
+		Middlewares,
+	)
+	return nil, func() {}
+}
+
+func InitializeDiscoverConsumer(cfg *config.Config) (*consumer.DiscoverConsumer, func()) {
+	wire.Build(
+		consumer.NewDiscoverConsumer,
+		Clients,
+		Repos,
+		Middlewares,
 	)
 	return nil, func() {}
 }

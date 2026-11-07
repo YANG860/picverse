@@ -45,13 +45,8 @@ rednote 是一个仿小红书的图片社交论坛后端，基于 Go + ConnectRP
 | [packages/utils/utils.md](packages/utils/utils.md) | 工具集：雪花 ID、S3 key、协程池、JSON 解析、格式校验 |
 | [packages/defaults/defaults.md](packages/defaults/defaults.md) | 全局默认常量 |
 | [packages/errmsg/err.md](packages/errmsg/err.md) | 可枚举业务错误码 |
-| [packages/cache/cache.md](packages/cache/cache.md) | 缓存层设计（Cache-Aside + MQ 事件失效，**设计定稿待实现**） |
+| [packages/cache/cache.md](packages/cache/cache.md) | 缓存层（Cache-Aside）：通用原语 + 帖子/用户实体缓存 + 浏览计数器 |
 | [packages/meili/meili.md](packages/meili/meili.md) | Meilisearch 客户端：索引同步封装（EnsureIndex / Upsert / Delete，任务阻塞至生效） |
-
-### design — 设计稿（施工中，未实现）
-| 文档 | 说明 |
-| --- | --- |
-| [design/comment.md](design/comment.md) | 评论服务 0→1 设计：两级楼中楼、点赞、删除/封禁回收、帖子计数联动 |
 
 ### test — 测试
 | 文档 | 说明 |
@@ -64,7 +59,7 @@ rednote 是一个仿小红书的图片社交论坛后端，基于 Go + ConnectRP
 
 ## 模块完成度
 
-文档聚焦于**已实现/可用**的模块（`design/` 下为未实现模块的设计稿）。以下模块仍在施工中，暂不展开文档：
+文档聚焦于**已实现/可用**的模块。以下模块仍在施工中，暂不展开文档：
 
 
 - **redis**：仅封装了客户端与健康检查，业务接口待补全。

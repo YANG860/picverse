@@ -19,6 +19,7 @@ server:
   media: ":8080"
   post: ":8082"
   bff: ":8084"
+  discover: ":8085"
 
 services:
   # 下游服务地址（packages/discovery 静态实现）。
@@ -79,6 +80,9 @@ consumer:
     name: "post_consumer"
     max_retry: 5
     working_dir: "./tmp/post_work"
+  discover:
+    name: "discover_consumer"
+    max_retry: 5
 
 logger:
   level: "info"

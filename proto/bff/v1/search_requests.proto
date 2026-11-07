@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package bff.v1;
+
+import "bff/v1/views.proto";
+import "buf/validate/validate.proto";
+import "common/v1/common.proto";
+import "discover/v1/requests.proto";
+
+// SearchPostsRequest 帖子搜索：关键词必填。
+// 排序：综合（默认）= 相关度 × 时间衰减；最新 = 发布时间倒序（Tab 切换）。
+message SearchPostsRequest {
+  string keyword = 1 [(buf.validate.field).string.min_len = 1];
+  discover.v1.SearchSort sort = 2;
+  // 游标编码 offset（相关度排序无稳定全序，不复用时间游标）
+  common.v1.Cursor cursor = 3;
+}
+
+message SearchPostsResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 命中帖子卡片（保持搜索排序序；同步窗口内已删/封禁的命中已过滤，页内条数可能少于 limit）
+  repeated PostCard posts = 3;
+  // 翻页到底/暂无内容：posts 为空且 cursor 为空
+  common.v1.Cursor cursor = 4;
+}

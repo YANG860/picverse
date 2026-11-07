@@ -9,11 +9,11 @@ import (
 	ms "github.com/meilisearch/meilisearch-go"
 )
 
-// searchTimeDecayDays "综合"排序的时间衰减常数：发布满 N 天权重减半（doc/design/discover.md §5.2 当页近似重排）
+// searchTimeDecayDays "综合"排序的时间衰减常数：发布满 N 天权重减半（ 当页近似重排）
 const searchTimeDecayDays = 14
 
 // PostHit 帖子搜索命中（解码后；posts 索引只存排序所需最小集 post_id / created_at，
-// 面客数据由下游组装，见 doc/design/discover.md §5.2）
+// 面客数据由下游组装）
 type PostHit struct {
 	PostID    string  // 帖子 ID（雪花 ID 字符串）
 	Score     float64 // 相关度得分（Meili rankingScore，0~1；"最新"模式不取为 0）
@@ -92,7 +92,7 @@ func decodePostHits(hits []ms.Hit) []PostHit {
 	return result
 }
 
-// postCombinedScore "综合"分 = 相关度 × 时间衰减（doc/design/discover.md §5.2 当页近似重排）
+// postCombinedScore "综合"分 = 相关度 × 时间衰减（ 当页近似重排）
 func postCombinedScore(h PostHit, nowMs int64) float64 {
 	ageDays := float64(nowMs-h.CreatedAt) / float64(24*time.Hour/time.Millisecond)
 	if ageDays < 0 {

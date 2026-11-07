@@ -64,6 +64,19 @@ durable 名取 `config.Consumer.Post.Name`，ACK/NAK 策略与 MediaConsumer 一
 | `delete_post` | `handleDeletePost` | 同事务物理删除软删帖子（仅 `DELETED` 行）及其媒体关联，并按被删关联逐槽位写 outbox `deref_media` 卸载消息（资产引用计数回收，删几槽减几槽，重复投递幂等） |
 | `ban_post` | `handleBanPost` | 封禁后的下游处理 |
 
+## DiscoverConsumer
+
+由 `NewDiscoverConsumer` 创建（依赖 `meili.MeiliRepo`、post 服务客户端与 `ProcessedMessageRepository`），消费 `post` 流中的 `PostMessage` 驱动 **Meilisearch 索引同步**。durable 名取 `config.Consumer.Discover.Name`，ACK/NAK 策略与 MediaConsumer 一致。
+**跑在 `cmd/discover` 进程内**（非 `cmd/consumer`）；`Start()` 先 `EnsurePostsIndex` 幂等确保 `posts` 索引存在并应用设置（fail-fast），再建立消费循环。索引文档组装/设置收敛在 `packages/meili`（`NewPostIndexDoc` / `PostsIndexSettings`），consumer 侧仅做 proto→`map` 字段提取（`postIndexFields`）薄编排。
+
+| 消息 | 处理器 | 职责 |
+| --- | --- | --- |
+| `publish_post` | `handleUpsertPostIndex` | 拉 `post.GetPostsByIDs` → 提取字段建 `PostIndexDoc` → `UpsertPost` 写 `posts` 索引（仅 PUBLISHED；非 PUBLISHED/结果缺失降级跳过并 Warn） |
+| `ban_post` / `delete_post` | `handleRemovePostIndex` | `RemovePost` 按主键删除索引文档（删不存在的键为 no-op） |
+| `audit_post` | — | 审核中间态不进索引（仅 PUBLISHED 进索引），直接 ACK |
+
+幂等双保险：`Dedup.ExecuteIdempotent`（msgID 去重登记与索引写入同事务，重复投递跳过）+ Meili 按主键 upsert/delete 天然幂等；索引任务阻塞至生效（`WaitForTask`），失败 `Nak` 重投。文档 schema 与索引设置见 [meili](../../packages/meili/meili.md)。
+
 ## ValidateImage
 
 校验原图，返回错误即视为校验失败（业务失败，标 `FAILED`，不重试）：
