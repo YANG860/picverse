@@ -15,7 +15,7 @@ import (
 // 口径：保留期按帖子时间（post_created_at，与游标一致），过保留期的帖子从收件箱视图消失；
 // 不做删帖级联删除——已删帖行同样由本任务随保留期回收（见 doc/internal/discover/discover.md）。
 type FanoutCleaner struct {
-	repo *v1.FanoutRepo
+	repo v1.FanoutRepo
 
 	retention time.Duration
 	interval  time.Duration
@@ -25,7 +25,7 @@ type FanoutCleaner struct {
 
 // NewFanoutCleaner 创建收件箱保留期清理器：
 // cfg.Fanout.Retention 为 0 使用默认 30 天，cfg.Fanout.CleanupInterval 为 0 使用默认 1h
-func NewFanoutCleaner(repo *v1.FanoutRepo, cfg *config.Config, lf logger.LoggerFactory) *FanoutCleaner {
+func NewFanoutCleaner(repo v1.FanoutRepo, cfg *config.Config, lf logger.LoggerFactory) *FanoutCleaner {
 	retention := cfg.Fanout.Retention
 	if retention <= 0 {
 		retention = defaults.FanoutRetention

@@ -12,7 +12,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func newFanoutRepo(t *testing.T) (*FanoutRepo, *gorm.DB) {
+func newFanoutRepo(t *testing.T) (FanoutRepo, *gorm.DB) {
 	db := testdb.Setup(t)
 	return NewFanoutRepo(db), db
 }

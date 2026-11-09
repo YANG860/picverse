@@ -30,24 +30,22 @@ type DiscoverUsecase interface {
 // DiscoverUsecaseImpl 搜推业务逻辑实现
 type DiscoverUsecaseImpl struct {
 	Meili meili.MeiliRepo
-	// BigV 大V快照仓库（P1 接入点：关注流以 JoinPullSet(followings) 交集分流，命中走 pull、未命中走收件箱）
-	BigV *BigVRepo
-	log  *slog.Logger
+	log   *slog.Logger
 }
 
 // NewDiscoverUsecase 创建搜推业务逻辑实例
-// lf 为日志工厂；m 为 Meilisearch 工具仓库（索引查询/同步统一出入口）；bc 为大V快照仓库（pull 分流名单）
-func NewDiscoverUsecase(lf logger.LoggerFactory, m meili.MeiliRepo, bc *BigVRepo) *DiscoverUsecaseImpl {
+// lf 为日志工厂；m 为 Meilisearch 工具仓库（索引查询/同步统一出入口）
+func NewDiscoverUsecase(lf logger.LoggerFactory, m meili.MeiliRepo) *DiscoverUsecaseImpl {
 	return &DiscoverUsecaseImpl{
 		Meili: m,
-		BigV:  bc,
 		log:   lf.GetLoggerOf("discover"),
 	}
 }
 
-// GetFollowingFeed 关注流取数（P1 实现）：push（fanout_timelines）+ pull（大V现拉）复合游标 2 路归并
+// GetFollowingFeed 关注流取数（P1 实现）：push（fanout_timelines）+ pull（发件箱缓存现拉）复合游标 2 路归并
 func (u *DiscoverUsecaseImpl) GetFollowingFeed(_ context.Context, _ *discoverv1.GetFollowingFeedRequest) (*discoverv1.GetFollowingFeedResponse, error) {
-	// TODO(P1): fanout_timelines + discover_bigv_authors 2 路归并 + (created_at, id) 复合游标
+	// TODO(P1): fanout_timelines + AuthorTimelineCache.Window/Rebuild 2 路归并 + (created_at, id) 复合游标；
+	// pull 判据 = 缓存存在性（Window miss 分流：未缓存 → 收件箱路，见底/短取 → 回源 DB）
 	return nil, ErrNotImplemented
 }
 
