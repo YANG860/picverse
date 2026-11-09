@@ -4,6 +4,7 @@ package testredis
 
 import (
 	"context"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,10 +18,17 @@ type entry struct {
 	expiresAt time.Time // zero 表示不过期
 }
 
+// zsetEntry 有序集合条目（ZSET 替身：member → score）
+type zsetEntry struct {
+	members   map[string]float64
+	expiresAt time.Time
+}
+
 // Client 内存缓存测试替身（非并发安全计数器场景外整体并发安全）
 type Client struct {
 	mu sync.Mutex
 	m  map[string]entry
+	z  map[string]zsetEntry
 
 	// 操作计数（断言用）
 	Gets int
@@ -33,7 +41,7 @@ var _ cache.Cache = (*Client)(nil)
 
 // New 创建内存缓存测试替身
 func New() *Client {
-	return &Client{m: make(map[string]entry)}
+	return &Client{m: make(map[string]entry), z: make(map[string]zsetEntry)}
 }
 
 // Get 读取单 key；过期条目按 miss 处理并惰性删除
@@ -155,4 +163,127 @@ func (c *Client) TakeCounters(ctx context.Context, prefix string) (map[string]st
 		delete(c.m, key)
 	}
 	return out, nil
+}
+
+// ==================== 有序集合原语（ZSET） ====================
+
+// zsetRank序 成员排名序：score 升序、同 score member 字典序升序（redis 原生 rank 口径）
+func zsetRankOrder(members map[string]float64) []cache.ZMember {
+	out := make([]cache.ZMember, 0, len(members))
+	for m, s := range members {
+		out = append(out, cache.ZMember{Score: s, Member: m})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Score != out[j].Score {
+			return out[i].Score < out[j].Score
+		}
+		return out[i].Member < out[j].Member
+	})
+	return out
+}
+
+// ZAdd 追加/更新成员并刷新 TTL（过期 key 视为不存在重建）
+func (c *Client) ZAdd(ctx context.Context, key string, members []cache.ZMember, ttl time.Duration) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ze, ok := c.z[key]
+	if !ok || c.zExpired(ze) {
+		ze = zsetEntry{members: make(map[string]float64)}
+	}
+	for _, m := range members {
+		ze.members[m.Member] = m.Score
+	}
+	ze.expiresAt = time.Time{}
+	if ttl > 0 {
+		ze.expiresAt = time.Now().Add(ttl)
+	}
+	c.z[key] = ze
+	return nil
+}
+
+// ZRevRangeByScore 按 score 降序取 [min, max] 闭区间至多 count 名（同 score member 字典序降序）
+func (c *Client) ZRevRangeByScore(ctx context.Context, key string, max, min float64, count int) ([]cache.ZMember, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ze, ok := c.z[key]
+	if !ok || c.zExpired(ze) {
+		if ok {
+			delete(c.z, key)
+		}
+		return nil, nil
+	}
+	ordered := zsetRankOrder(ze.members)
+	var out []cache.ZMember
+	for i := len(ordered) - 1; i >= 0; i-- { // 倒序遍历 = score 降序、同 score member 字典序降序
+		m := ordered[i]
+		if m.Score < min || m.Score > max {
+			continue
+		}
+		out = append(out, m)
+		if count > 0 && len(out) >= count {
+			break
+		}
+	}
+	return out, nil
+}
+
+// ZRemRangeByRank 按排名删除 [start, stop] 闭区间（负数自尾部；越界收敛）
+func (c *Client) ZRemRangeByRank(ctx context.Context, key string, start, stop int) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ze, ok := c.z[key]
+	if !ok || c.zExpired(ze) {
+		if ok {
+			delete(c.z, key)
+		}
+		return nil
+	}
+	ordered := zsetRankOrder(ze.members)
+	n := len(ordered)
+	if start < 0 {
+		start += n
+	}
+	if stop < 0 {
+		stop += n
+	}
+	if start < 0 {
+		start = 0
+	}
+	if stop >= n {
+		stop = n - 1
+	}
+	// redis 语义：越界收敛后 start > stop 为空操作（如截尾时成员数不足）
+	if start > stop || start >= n {
+		return nil
+	}
+	for _, m := range ordered[start : stop+1] {
+		delete(ze.members, m.Member)
+	}
+	return nil
+}
+
+// Exists 判定 key 是否存在（KV 与 ZSET 同命名空间；过期按不存在惰性清理）
+func (c *Client) Exists(ctx context.Context, key string) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e, ok := c.m[key]; ok {
+		if c.expired(e) {
+			delete(c.m, key)
+		} else {
+			return true, nil
+		}
+	}
+	if ze, ok := c.z[key]; ok {
+		if c.zExpired(ze) {
+			delete(c.z, key)
+		} else {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// zExpired 有序集合条目是否过期
+func (c *Client) zExpired(e zsetEntry) bool {
+	return !e.expiresAt.IsZero() && time.Now().After(e.expiresAt)
 }

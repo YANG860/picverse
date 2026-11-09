@@ -26,12 +26,17 @@ func main() {
 	pollerCtx, cancelPoller := context.WithCancel(context.Background())
 	go redisPoller.Run(pollerCtx)
 
+	// 收件箱保留期清理：过期行批量删（维护 fanout_timelines 表大小）
+	fanoutCleaner, cleanupFanout := gen.InitializeFanoutCleaner(cfg)
+	go fanoutCleaner.Run(pollerCtx)
+
 	term := make(chan os.Signal, 1)
 	signal.Notify(term, syscall.SIGINT, syscall.SIGTERM)
 	<-term
 
 	cancelPoller() // RedisPoller 退出前自行冲刷残留增量
 	outboxPoller.Close()
+	cleanupFanout()
 	cleanupRedis()
 	cleanupOutbox()
 }

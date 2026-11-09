@@ -15,11 +15,12 @@ func TestKeyForms(t *testing.T) {
 	assert.Equal(t, "rn:v1:post:view:2001", postViewKey(2001))
 	assert.Equal(t, "rn:v1:user:profile:2001", userProfileKey(2001))
 	assert.Equal(t, "rn:v1:user:stat:2001", userStatKey(2001))
+	assert.Equal(t, "rn:v1:author:timeline:2001", authorTimelineKey(2001))
 }
 
 // TestIDKeyRoundTrip 构造/回读同源不变式：任意 id 经 idKey → idFromKey 往返恒等
 func TestIDKeyRoundTrip(t *testing.T) {
-	for _, prefix := range []string{postDetailPrefix, postStatPrefix, postViewPrefix, userProfilePrefix, userStatPrefix} {
+	for _, prefix := range []string{postDetailPrefix, postStatPrefix, postViewPrefix, userProfilePrefix, userStatPrefix, authorTimelinePrefix} {
 		for _, id := range []int64{0, 1, 2001, -1, 1 << 62, -1 << 62} {
 			got, err := idFromKey(prefix, idKey(prefix, id))
 			require.NoError(t, err, "prefix=%s id=%d", prefix, id)
@@ -29,6 +30,11 @@ func TestIDKeyRoundTrip(t *testing.T) {
 
 	// postView 配对同源（取走增量的回读路径依赖此不变式）
 	got, err := postViewID(postViewKey(2001))
+	require.NoError(t, err)
+	assert.Equal(t, int64(2001), got)
+
+	// authorTimeline 配对同源
+	got, err = authorTimelineID(authorTimelineKey(2001))
 	require.NoError(t, err)
 	assert.Equal(t, int64(2001), got)
 

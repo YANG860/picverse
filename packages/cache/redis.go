@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"strconv"
 	"time"
 
 	"rednote/config"
@@ -107,6 +109,75 @@ func (r *RedisCache) IncrCounter(ctx context.Context, key string, ttl time.Durat
 		return fmt.Errorf("cache incr counter %s: %w", key, err)
 	}
 	return nil
+}
+
+// Exists 判定 key 是否存在（EXISTS 命令）
+func (r *RedisCache) Exists(ctx context.Context, key string) (bool, error) {
+	n, err := r.rc.Exists(ctx, key).Result()
+	if err != nil {
+		return false, fmt.Errorf("cache exists %s: %w", key, err)
+	}
+	return n > 0, nil
+}
+
+// ZAdd ZADD + EXPIRE 管道提交（同 member 更新 score）
+func (r *RedisCache) ZAdd(ctx context.Context, key string, members []ZMember, ttl time.Duration) error {
+	if len(members) == 0 {
+		return nil
+	}
+	zs := make([]goredis.Z, len(members))
+	for i, m := range members {
+		zs[i] = goredis.Z{Score: m.Score, Member: m.Member}
+	}
+	pipe := r.rc.Pipeline()
+	pipe.ZAdd(ctx, key, zs...)
+	if ttl > 0 {
+		pipe.Expire(ctx, key, ttl)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("cache zadd %s: %w", key, err)
+	}
+	return nil
+}
+
+// ZRevRangeByScore ZREVRANGEBYSCORE WITHSCORES（score 降序、同 score member 字典序降序）
+func (r *RedisCache) ZRevRangeByScore(ctx context.Context, key string, max, min float64, count int) ([]ZMember, error) {
+	q := &goredis.ZRangeBy{Max: formatScore(max), Min: formatScore(min)}
+	if count > 0 {
+		q.Count = int64(count)
+	}
+	res, err := r.rc.ZRevRangeByScoreWithScores(ctx, key, q).Result()
+	if err != nil {
+		return nil, fmt.Errorf("cache zrevrangebyscore %s: %w", key, err)
+	}
+	out := make([]ZMember, len(res))
+	for i, z := range res {
+		member, ok := z.Member.(string)
+		if !ok {
+			return nil, fmt.Errorf("cache zrevrangebyscore %s: unexpected member type %T", key, z.Member)
+		}
+		out[i] = ZMember{Score: z.Score, Member: member}
+	}
+	return out, nil
+}
+
+// ZRemRangeByRank ZREMRANGEBYRANK（含 start/stop 闭区间，负数自尾部）
+func (r *RedisCache) ZRemRangeByRank(ctx context.Context, key string, start, stop int) error {
+	if err := r.rc.ZRemRangeByRank(ctx, key, int64(start), int64(stop)).Err(); err != nil {
+		return fmt.Errorf("cache zremrangebyrank %s: %w", key, err)
+	}
+	return nil
+}
+
+// formatScore score → redis 范围参数（±Inf → "+inf"/"-inf"）
+func formatScore(f float64) string {
+	switch {
+	case math.IsInf(f, 1):
+		return "+inf"
+	case math.IsInf(f, -1):
+		return "-inf"
+	}
+	return strconv.FormatFloat(f, 'f', -1, 64)
 }
 
 // TakeCounters SCAN 逐 key GETDEL 原子取走（多消费者互斥：取走者独得增量）。

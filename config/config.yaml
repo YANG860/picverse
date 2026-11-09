@@ -57,9 +57,20 @@ cache:
   profile_ttl: 30m # 用户资料缓存 TTL（±10% 抖动防雪崩）
   post_ttl: 30m    # 帖子详情缓存 TTL（±10% 抖动防雪崩）
   null_ttl: 60s    # 空哨兵 TTL（防穿透）
+  timeline_ttl: 168h     # 作者发件箱缓存 TTL（pull 现拉加速层，7 天）
+  timeline_capacity: 200 # 发件箱缓存每作者保留的近期帖条数（最新连续后缀）
 
 post:
   view_flush_interval: 30s # 浏览计数刷回周期（Redis 计数器 → posts.view_count）
+
+bigv:
+  # 大V快照（推拉结合判定口径，doc/internal/discover/discover.md）
+  sync_interval: 1m  # 惰性同步间隔：读触发回源节流，外部 ≈ 稍微滞后的无感直连 DB
+
+fanout:
+  # 收件箱（fanout_timelines）保留期清理，维护表大小（doc/internal/discover/discover.md）
+  retention: 720h        # 保留期按帖子时间（post_created_at），30 天；过期行由清理任务回收
+  cleanup_interval: 1h   # 清理任务运行周期
 
 jwt:
   secret: "a8de244a1570e97d9e07f9144c78ca7bfe2ed303c7846c32f1201a2d22e2184e"  # HMAC-SHA256 密钥，必填

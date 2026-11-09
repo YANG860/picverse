@@ -18,6 +18,8 @@ type Config struct {
 	Meili     MeiliConfig     `mapstructure:"meili"`
 	Cache     CacheConfig     `mapstructure:"cache"`
 	Post      PostConfig      `mapstructure:"post"`
+	BigV      BigVConfig      `mapstructure:"bigv"`
+	Fanout    FanoutConfig    `mapstructure:"fanout"`
 	Services  ServicesConfig  `mapstructure:"services"`
 }
 
@@ -42,12 +44,30 @@ type CacheConfig struct {
 	PostTTL time.Duration `mapstructure:"post_ttl"`
 	// NullTTL 空哨兵 TTL（防穿透），0 使用默认 60s
 	NullTTL time.Duration `mapstructure:"null_ttl"`
+	// TimelineTTL 作者发件箱缓存 TTL（每作者近期帖窗口，pull 现拉加速层），0 使用默认 7d
+	TimelineTTL time.Duration `mapstructure:"timeline_ttl"`
+	// TimelineCapacity 发件箱缓存每作者保留的近期帖条数（最新连续后缀），0 使用默认 200
+	TimelineCapacity int `mapstructure:"timeline_capacity"`
 }
 
 // PostConfig 帖子服务运行参数
 type PostConfig struct {
 	// ViewFlushInterval 浏览计数刷回周期（Redis → posts.view_count），0 使用默认 30s
 	ViewFlushInterval time.Duration `mapstructure:"view_flush_interval"`
+}
+
+// BigVConfig 大V快照配置（推拉结合判定口径，见 doc/internal/discover/discover.md）
+type BigVConfig struct {
+	// SyncInterval 快照惰性同步间隔（距上次回源超过该间隔的首次读触发回源），0 使用默认 1m
+	SyncInterval time.Duration `mapstructure:"sync_interval"`
+}
+
+// FanoutConfig 收件箱（fanout_timelines）保留期清理配置（维护表大小，见 doc/internal/discover/discover.md）
+type FanoutConfig struct {
+	// Retention 收件箱保留期（按帖子时间 post_created_at，与游标同口径），0 使用默认 720h（30 天）
+	Retention time.Duration `mapstructure:"retention"`
+	// CleanupInterval 清理任务运行周期，0 使用默认 1h
+	CleanupInterval time.Duration `mapstructure:"cleanup_interval"`
 }
 
 // RedisConfig Redis 连接配置

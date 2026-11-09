@@ -42,6 +42,26 @@ func (Noop) IncrCounter(ctx context.Context, key string, ttl time.Duration) erro
 	return nil
 }
 
+// ZAdd 空转
+func (Noop) ZAdd(ctx context.Context, key string, members []ZMember, ttl time.Duration) error {
+	return nil
+}
+
+// ZRevRangeByScore 恒空（无缓存 → 调用方按 miss 回源）
+func (Noop) ZRevRangeByScore(ctx context.Context, key string, max, min float64, count int) ([]ZMember, error) {
+	return nil, nil
+}
+
+// ZRemRangeByRank 空转
+func (Noop) ZRemRangeByRank(ctx context.Context, key string, start, stop int) error {
+	return nil
+}
+
+// Exists 恒 false（无缓存 → 调用方按 miss 回源）
+func (Noop) Exists(ctx context.Context, key string) (bool, error) {
+	return false, nil
+}
+
 // TakeCounters 恒空（无可取增量）
 func (Noop) TakeCounters(ctx context.Context, prefix string) (map[string]string, error) {
 	return map[string]string{}, nil

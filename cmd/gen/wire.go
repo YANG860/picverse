@@ -91,6 +91,8 @@ var Middlewares = wire.NewSet(
 	wire.Bind(new(cache.UserEntityCache), new(*cache.UserEntityCacheImpl)),
 	cache.NewPostEntityCache,
 	wire.Bind(new(cache.PostEntityCache), new(*cache.PostEntityCacheImpl)),
+	cache.NewAuthorTimelineCache,
+	wire.Bind(new(cache.AuthorTimelineCache), new(*cache.AuthorTimelineCacheImpl)),
 	db.NewPG,
 	mq.NewJetStreamClient,
 	wire.Bind(new(mq.MQClient), new(*mq.JetStreamClient)),
@@ -135,6 +137,8 @@ var BFF = wire.NewSet(
 
 // Discover 搜推服务装配
 var Discover = wire.NewSet(
+	discoverv1.NewBigVRepo,
+
 	discoverv1.NewDiscoverUsecase,
 	wire.Bind(new(discoverv1.DiscoverUsecase), new(*discoverv1.DiscoverUsecaseImpl)),
 
@@ -215,6 +219,16 @@ func InitializeRedisPoller(cfg *config.Config) (*poller.RedisPoller, func()) {
 		poller.NewRedisPoller,
 		Middlewares,
 		Repos,
+	)
+	return nil, func() {}
+}
+
+// InitializeFanoutCleaner 收件箱保留期清理装配（cmd/poller 内常驻：维护 fanout_timelines 表大小）
+func InitializeFanoutCleaner(cfg *config.Config) (*poller.FanoutCleaner, func()) {
+	wire.Build(
+		poller.NewFanoutCleaner,
+		discoverv1.NewFanoutRepo,
+		Middlewares,
 	)
 	return nil, func() {}
 }

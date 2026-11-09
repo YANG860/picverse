@@ -86,7 +86,10 @@ BFF 由于面向前端，**不返回连接层 error**：下游连接层错误（
 
 ### 信息流（仅关注流）
 
-`GetFollowingFeed` 由 BFF 聚合：拉取关注列表 → 逐作者调用 `ViewPostByAuthor`（仅已发布）→ 按发布时间归并游标分页。推荐流由后续推荐服务另立接口，不复用本契约。
+`GetFollowingFeed` 为**推拉结合**：BFF 拉取关注列表（封顶）→ 调 `discover.GetFollowingFeed`（push
+`fanout_timelines` + pull 大V现拉，`(created_at, id)` 复合游标 2 路归并返回 `post_ids`）→ 可见性过滤与
+`PostCard` 组装在 BFF。推荐流由后续推荐服务另立接口，不复用本契约。
+设计详见 [discover](../discover/discover.md)（含大V判定与内存镜像）。
 
 ### 搜索（SearchPosts）
 

@@ -9,6 +9,10 @@
 | `003_create_auth_tables.sql` | auth 建表 DDL（user_credentials）及索引 |
 | `004_create_post_tables.sql` | post 建表 DDL（posts、post_medias）及索引 |
 | `005_create_user_tables.sql` | user 建表 DDL（user_profiles、user_follows）及索引 |
+| `006_create_consumer_dedup_tables.sql` | 消费端幂等去重表（processed_messages）建表 DDL |
+| `007_create_post_interaction_tables.sql` | post 互动表（post_likes、post_favourites）建表 DDL 及约束 |
+| `008_create_discover_tables.sql` | discover 建表 DDL（discover_bigv_authors）及索引 |
+| `009_create_fanout_tables.sql` | 关注流扇出收件箱（fanout_timelines）建表 DDL 及索引 |
 
 > **文件组织**：按模块组织，一个模块一个文件 = 建表 + 索引。
 > 所有脚本幂等（`IF NOT EXISTS`），按文件名序执行，由 `scripts/dbsync`、`scripts/dbinit`、
@@ -18,7 +22,7 @@
 
 ## 数据模型总览
 
-共 **8 张表**，均使用雪花 ID 作为主键，时间字段为 unix 毫秒：
+共 **12 张表**，时间字段为 unix 毫秒；除 `discover_bigv_authors`（uid 主键）与 `fanout_timelines`（(uid, post_id) 复合主键，幂等扇出）外均使用雪花 ID 作为主键：
 
 | 表名 | 用途 | 模型来源 |
 | ------ | ------ | ---------- |
@@ -30,6 +34,11 @@
 | `user_follows` | 用户关注关系（一行 = Fan 关注 Following） | `internal/user/models/models.go` |
 | `posts` | 帖子（草稿与已发布同表，status 区分） | `internal/post/models/models.go` |
 | `post_medias` | 帖子与媒体关联 | `internal/post/models/models.go` |
+| `processed_messages` | 消费端幂等去重记录（AtLeastOnce 恰好一次效果） | `internal/common/models/dedup.go` |
+| `post_likes` | 帖子点赞明细（一行 = 一赞，行数即 like_count） | `internal/post/models/models.go` |
+| `post_favourites` | 帖子收藏明细（一行 = 一藏） | `internal/post/models/models.go` |
+| `discover_bigv_authors` | 大V快照（推拉结合判定口径，uid 主键） | `internal/discover/models/models.go` |
+| `fanout_timelines` | 关注流扇出收件箱（推拉结合 push 路径，复合主键） | `internal/discover/models/models.go` |
 
 ---
 
@@ -261,6 +270,66 @@ WHERE following_id = ?   -- "我的粉丝"列表
 
 ---
 
+### discover_bigv_authors（1 个索引，`008_create_discover_tables.sql`）
+
+#### 14. `idx_discover_bigv_demoted_at` — 宽限过期清理
+
+```sql
+ON discover_bigv_authors (demoted_at)
+```
+
+**对应代码**：随发布时判定落地（P1，`internal/discover/v1` 大V快照维护），清理 SQL 形如
+
+```sql
+WHERE demoted_at IS NOT NULL AND demoted_at < ?
+```
+
+**依据**：清理宽限过期的降级行（降级行保留宽限期供 pull 兜底后物理删）。
+表规模 = 大V占比（千~万级），全量扫描亦可接受，保留该索引以省清理开销；
+读侧惰性镜像（`BigVRepo` 全量载入）不依赖此索引。
+
+---
+
+### fanout_timelines（2 个索引，`009_create_fanout_tables.sql`）
+
+#### 15. `idx_fanout_timelines_uid_cursor` — 收件箱 keyset 分页
+
+```sql
+ON fanout_timelines (uid, post_created_at DESC, post_id DESC)
+```
+
+**对应代码**：`internal/discover/v1/repo.go` `FanoutRepo.ReadInbox`（GetFollowingFeed push 路径，P1 接入）
+
+```sql
+WHERE uid = ? AND (post_created_at < ? OR (post_created_at = ? AND post_id < ?))
+ORDER BY post_created_at DESC, post_id DESC LIMIT ?
+```
+
+**依据**：关注流核心读路径。uid 等值列在最左，后接游标元组 (post_created_at, post_id)（即帖子的
+(created_at, id)，与 pull 路径共享游标空间），索引序与排序序一致，keyset 翻页免 filesort。
+
+#### 16. `idx_fanout_timelines_post_created_at` — 保留期清理
+
+```sql
+ON fanout_timelines (post_created_at)
+```
+
+**对应代码**：`internal/poller/fanout_cleaner.go` `FanoutCleaner`（定时清理，跑在 cmd/poller）→
+`internal/discover/v1/repo.go` `FanoutRepo.CleanupExpired`（ctid 批删，批间独立提交）
+
+```sql
+DELETE FROM fanout_timelines
+WHERE ctid IN (
+  SELECT ctid FROM fanout_timelines WHERE post_created_at < ? LIMIT ?
+)
+```
+
+**依据**：收件箱行数 = 粉丝数 x 发帖数，无限增长，需按帖子时间窗定期清理；
+按 post_created_at（帖子时间）而非行创建时间，口径与游标一致（帖子过保留期即从收件箱视图消失）。
+不做删帖级联删除（已删帖行由下游 BFF 回查组装与前端过滤），无按 post_id 删除路径故不建索引。
+
+---
+
 ## 索引总结表
 
 | # | 索引名 | 表 | 列 | 类型 | 核心查询 |
@@ -278,6 +347,9 @@ WHERE following_id = ?   -- "我的粉丝"列表
 | 11 | `idx_post_medias_post_id` | post_medias | post_id | B-tree | 帖子媒体关联查询/删除 |
 | 12 | `idx_user_follows_fan_following` | user_follows | fan_id, following_id | **UNIQUE** | 防重复关注 + 关注列表 |
 | 13 | `idx_user_follows_following_id` | user_follows | following_id | B-tree | 粉丝列表 |
+| 14 | `idx_discover_bigv_demoted_at` | discover_bigv_authors | demoted_at | B-tree | 宽限过期清理 |
+| 15 | `idx_fanout_timelines_uid_cursor` | fanout_timelines | uid, post_created_at DESC, post_id DESC | B-tree | 收件箱 keyset 分页 |
+| 16 | `idx_fanout_timelines_post_created_at` | fanout_timelines | post_created_at | B-tree | 保留期清理 |
 
 ## 设计原则
 

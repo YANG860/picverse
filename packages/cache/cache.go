@@ -28,6 +28,25 @@ type Cache interface {
 	// TakeCounters 按前缀原子取走计数器增量（取走即清除，多消费者互斥：取走者独得）。
 	// 返回 key → 原始值（十进制字符串）；前缀下无键返回空 map，值的合法性由调用方裁决。
 	TakeCounters(ctx context.Context, prefix string) (map[string]string, error)
+
+	// ==================== 有序集合原语（ZSET，score double） ====================
+
+	// ZAdd 追加/更新成员并刷新 TTL（key 不存在创建；同 member 更新 score；ttl <= 0 不过期）
+	ZAdd(ctx context.Context, key string, members []ZMember, ttl time.Duration) error
+	// ZRevRangeByScore 按 score 降序取 [min, max] 闭区间至多 count 名（count <= 0 不限量）。
+	// 同 score 按 member 字典序降序（redis 原生序）；key 不存在返回空
+	ZRevRangeByScore(ctx context.Context, key string, max, min float64, count int) ([]ZMember, error)
+	// ZRemRangeByRank 按排名删除 [start, stop] 闭区间（排名按 score 升序 0 起，负数自尾部：-1 为最大）；
+	// 保最新 keep 条 = ZRemRangeByRank(key, 0, -(keep+1))
+	ZRemRangeByRank(ctx context.Context, key string, start, stop int) error
+	// Exists 判定 key 是否存在（区分"未缓存"与"已缓存但结果为空"）
+	Exists(ctx context.Context, key string) (bool, error)
+}
+
+// ZMember 有序集合成员（score 与 redis ZSET 同为 double；int64 毫秒时间戳在其精确表示范围内）
+type ZMember struct {
+	Score  float64
+	Member string
 }
 
 // KeyPrefix 缓存 key 前缀。v1 为序列化 schema 版本：
@@ -36,11 +55,12 @@ const KeyPrefix = "rn:v1"
 
 // 实体/计数器 key 前缀集中声明（key 空间全览：构造、SCAN、回读解析共用一处，防双源漂移）
 const (
-	postDetailPrefix  = KeyPrefix + ":post:detail:"
-	postStatPrefix    = KeyPrefix + ":post:stat:"
-	postViewPrefix    = KeyPrefix + ":post:view:"
-	userProfilePrefix = KeyPrefix + ":user:profile:"
-	userStatPrefix    = KeyPrefix + ":user:stat:"
+	postDetailPrefix     = KeyPrefix + ":post:detail:"
+	postStatPrefix       = KeyPrefix + ":post:stat:"
+	postViewPrefix       = KeyPrefix + ":post:view:"
+	userProfilePrefix    = KeyPrefix + ":user:profile:"
+	userStatPrefix       = KeyPrefix + ":user:stat:"
+	authorTimelinePrefix = KeyPrefix + ":author:timeline:"
 )
 
 // idKey 实体/计数器 key 的唯一构造点：prefix + 十进制 id

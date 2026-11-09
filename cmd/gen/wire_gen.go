@@ -87,9 +87,12 @@ func InitializePoller(cfg *config.Config) (*poller.OutBoxPoller, func()) {
 func InitializeDiscoverServiceHandler(cfg *config.Config) (discoverv1connect.DiscoverServiceHandler, func()) {
 	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
 	meiliClient, cleanup2 := meili.NewClient(cfg, loggerFactoryImpl)
-	discoverUsecaseImpl := v1_4.NewDiscoverUsecase(loggerFactoryImpl, meiliClient)
+	gormDB, cleanup3 := db.NewPG(cfg, loggerFactoryImpl)
+	bigVRepo := v1_4.NewBigVRepo(gormDB, cfg)
+	discoverUsecaseImpl := v1_4.NewDiscoverUsecase(loggerFactoryImpl, meiliClient, bigVRepo)
 	discoverServiceHandler := v1_4.NewDiscoverServiceHandler(loggerFactoryImpl, discoverUsecaseImpl)
 	return discoverServiceHandler, func() {
+		cleanup3()
 		cleanup2()
 		cleanup()
 	}
@@ -151,6 +154,18 @@ func InitializeRedisPoller(cfg *config.Config) (*poller.RedisPoller, func()) {
 	redisPoller := poller.NewRedisPoller(cachedPostRepo, postEntityCacheImpl, cfg, loggerFactoryImpl)
 	return redisPoller, func() {
 		cleanup3()
+		cleanup2()
+		cleanup()
+	}
+}
+
+// InitializeFanoutCleaner 收件箱保留期清理装配（cmd/poller 内常驻：维护 fanout_timelines 表大小）
+func InitializeFanoutCleaner(cfg *config.Config) (*poller.FanoutCleaner, func()) {
+	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
+	gormDB, cleanup2 := db.NewPG(cfg, loggerFactoryImpl)
+	fanoutRepo := v1_4.NewFanoutRepo(gormDB)
+	fanoutCleaner := poller.NewFanoutCleaner(fanoutRepo, cfg, loggerFactoryImpl)
+	return fanoutCleaner, func() {
 		cleanup2()
 		cleanup()
 	}
@@ -227,7 +242,7 @@ var Services = wire.NewSet(v1.NewMediaServiceHandler, wire.Bind(new(mediav1conne
 
 var Usecases = wire.NewSet(v1.NewMediaUsecase, wire.Bind(new(v1.MediaUsecase), new(*v1.MediaUsecaseImpl)), v1_5.NewAuthUsecaseImpl, wire.Bind(new(v1_5.AuthUsecase), new(*v1_5.AuthUsecaseImpl)), v1_3.NewPostUsecase, wire.Bind(new(v1_3.PostUsecase), new(*v1_3.PostUsecaseImpl)), v1_7.NewUserUsecase, wire.Bind(new(v1_7.UserUsecase), new(*v1_7.UserUsecaseImpl)))
 
-var Middlewares = wire.NewSet(cache.NewCache, cache.NewUserEntityCache, wire.Bind(new(cache.UserEntityCache), new(*cache.UserEntityCacheImpl)), cache.NewPostEntityCache, wire.Bind(new(cache.PostEntityCache), new(*cache.PostEntityCacheImpl)), db.NewPG, mq.NewJetStreamClient, wire.Bind(new(mq.MQClient), new(*mq.JetStreamClient)), logger.NewLoggerFactory, wire.Bind(new(logger.LoggerFactory), new(*logger.LoggerFactoryImpl)), oss.NewClient, wire.Bind(new(oss.S3Repo), new(*oss.MinioClient)), meili.NewClient, wire.Bind(new(meili.MeiliRepo), new(*meili.MeiliClient)))
+var Middlewares = wire.NewSet(cache.NewCache, cache.NewUserEntityCache, wire.Bind(new(cache.UserEntityCache), new(*cache.UserEntityCacheImpl)), cache.NewPostEntityCache, wire.Bind(new(cache.PostEntityCache), new(*cache.PostEntityCacheImpl)), cache.NewAuthorTimelineCache, wire.Bind(new(cache.AuthorTimelineCache), new(*cache.AuthorTimelineCacheImpl)), db.NewPG, mq.NewJetStreamClient, wire.Bind(new(mq.MQClient), new(*mq.JetStreamClient)), logger.NewLoggerFactory, wire.Bind(new(logger.LoggerFactory), new(*logger.LoggerFactoryImpl)), oss.NewClient, wire.Bind(new(oss.S3Repo), new(*oss.MinioClient)), meili.NewClient, wire.Bind(new(meili.MeiliRepo), new(*meili.MeiliClient)))
 
 var Utils = wire.NewSet(jwt.NewManager, wire.Bind(new(jwt.Manager), new(*jwt.ManagerImpl)), jwt.NewServerInterceptor)
 
@@ -238,4 +253,4 @@ var Clients = wire.NewSet(rpc.NewStaticProvider, wire.Bind(new(rpc.EndpointProvi
 var BFF = wire.NewSet(v1_6.NewBFFUsecase, wire.Bind(new(v1_6.BFFUsecase), new(*v1_6.BFFUsecaseImpl)), v1_6.NewBFFServiceHandler, wire.Bind(new(bffv1connect.BFFServiceHandler), new(*v1_6.BFFServiceHandler)))
 
 // Discover 搜推服务装配
-var Discover = wire.NewSet(v1_4.NewDiscoverUsecase, wire.Bind(new(v1_4.DiscoverUsecase), new(*v1_4.DiscoverUsecaseImpl)), v1_4.NewDiscoverServiceHandler, wire.Bind(new(discoverv1connect.DiscoverServiceHandler), new(*v1_4.DiscoverServiceHandler)))
+var Discover = wire.NewSet(v1_4.NewBigVRepo, v1_4.NewDiscoverUsecase, wire.Bind(new(v1_4.DiscoverUsecase), new(*v1_4.DiscoverUsecaseImpl)), v1_4.NewDiscoverServiceHandler, wire.Bind(new(discoverv1connect.DiscoverServiceHandler), new(*v1_4.DiscoverServiceHandler)))

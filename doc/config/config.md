@@ -7,6 +7,7 @@
 ```yaml
 snowflake:   # 雪花节点
 database:    # PostgreSQL
+cache:       # 实体/计数/时间线缓存（Redis/Noop）
 logger:      # 日志
 s3:          # MinIO / S3
 jwt:         # JWT 签发
@@ -18,6 +19,8 @@ server:      # 各服务监听地址
 services:    # 下游服务地址（服务发现）
 meili:       # Meilisearch 搜索引擎
 post:        # 帖子服务运行参数
+bigv:        # 大V快照（推拉结合判定口径）
+fanout:      # 收件箱保留期清理（维护 fanout_timelines 表大小）
 ```
 
 ## 各节详解
@@ -116,6 +119,30 @@ post:        # 帖子服务运行参数
 | 键 | 类型 | 说明 |
 | --- | --- | --- |
 | `view_flush_interval` | duration | 浏览计数刷回周期（RedisPoller：计数器增量 → `posts.view_count`），`0` 使用默认（30s） |
+
+### cache — 实体/计数/时间线缓存（packages/cache）
+
+| 键 | 类型 | 说明 |
+| --- | --- | --- |
+| `enabled` | bool | 缓存总开关：false 不连接 redis（注入 Noop，行为等同无缓存） |
+| `profile_ttl` | duration | 用户资料缓存 TTL（±10% 抖动），`0` 使用默认（30m） |
+| `post_ttl` | duration | 帖子详情缓存 TTL（±10% 抖动），`0` 使用默认（30m） |
+| `null_ttl` | duration | 空哨兵 TTL（防穿透），`0` 使用默认（60s） |
+| `timeline_ttl` | duration | 作者发件箱缓存 TTL（pull 现拉加速层，`AuthorTimelineCache`），`0` 使用默认（7d） |
+| `timeline_capacity` | int | 发件箱缓存每作者保留的近期帖条数（最新连续后缀），`0` 使用默认（200） |
+
+### bigv — 大V快照（推拉结合判定口径）
+
+| 键 | 类型 | 说明 |
+| --- | --- | --- |
+| `sync_interval` | duration | 快照惰性同步间隔（`BigVRepo` 读触发回源节流，外部 ≈ 稍微滞后的无感直连 DB），`0` 使用默认（1m） |
+
+### fanout — 收件箱保留期清理
+
+| 键 | 类型 | 说明 |
+| --- | --- | --- |
+| `retention` | duration | 收件箱保留期（按帖子时间 `post_created_at`，与游标同口径，过期行从收件箱视图消失），`0` 使用默认（720h = 30 天） |
+| `cleanup_interval` | duration | 清理任务运行周期（FanoutCleaner，跑在 cmd/poller 进程内），`0` 使用默认（1h） |
 
 ## 敏感信息
 
