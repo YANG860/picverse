@@ -137,7 +137,7 @@ var BFF = wire.NewSet(
 
 // Discover 搜推服务装配
 var Discover = wire.NewSet(
-	discoverv1.NewBigVRepo,
+	discoverv1.NewFanoutRepo,
 
 	discoverv1.NewDiscoverUsecase,
 	wire.Bind(new(discoverv1.DiscoverUsecase), new(*discoverv1.DiscoverUsecaseImpl)),
@@ -185,6 +185,7 @@ func InitializeDiscoverServiceHandler(cfg *config.Config) (discoverv1connect.Dis
 func InitializeDiscoverConsumer(cfg *config.Config) (*consumer.DiscoverConsumer, func()) {
 	wire.Build(
 		consumer.NewDiscoverConsumer,
+		Discover,
 		Clients,
 		Repos,
 		Middlewares,

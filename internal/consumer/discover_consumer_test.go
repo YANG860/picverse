@@ -7,9 +7,14 @@ import (
 	"testing"
 
 	"connectrpc.com/connect"
+	commonpb "rednote/gen/go/common/v1"
 	postv1 "rednote/gen/go/post/v1"
 	"rednote/gen/go/post/v1/postv1connect"
+	userv1 "rednote/gen/go/user/v1"
+	userv1connect "rednote/gen/go/user/v1/userv1connect"
 	commonv1 "rednote/internal/common/v1"
+	discoverv1 "rednote/internal/discover/v1"
+	"rednote/packages/cache"
 	"rednote/packages/meili"
 
 	"github.com/stretchr/testify/assert"
@@ -282,4 +287,222 @@ func TestHandleRemovePostIndex_InvalidIDs(t *testing.T) {
 	assert.True(t, ack)
 	assert.Empty(t, m.deleted)
 	assert.Zero(t, d.execCalls)
+}
+
+// ==================== 发帖侧推拉分流（handlePublishFanout） ====================
+
+// fakeUserClient 覆写 GetUserProfile / GetFollowers（未覆写方法调用会 panic）。
+// pages 为 GetFollowers 分页 uid 列表（每页一批，末页无 cursor）
+type fakeUserClient struct {
+	userv1connect.UserServiceClient
+
+	followers  int64
+	profileErr error
+	pages      [][]string
+}
+
+func (f *fakeUserClient) GetUserProfile(_ context.Context, _ *connect.Request[userv1.GetUserProfileRequest]) (*connect.Response[userv1.GetUserProfileResponse], error) {
+	if f.profileErr != nil {
+		return nil, f.profileErr
+	}
+	return connect.NewResponse(&userv1.GetUserProfileResponse{
+		Profile: &userv1.UserProfile{Stat: &userv1.UserStat{Followers: f.followers}},
+	}), nil
+}
+
+func (f *fakeUserClient) GetFollowers(_ context.Context, _ *connect.Request[userv1.GetFollowersRequest]) (*connect.Response[userv1.GetFollowersResponse], error) {
+	if len(f.pages) == 0 {
+		return connect.NewResponse(&userv1.GetFollowersResponse{}), nil // 翻页到底
+	}
+	page := f.pages[0]
+	f.pages = f.pages[1:]
+	var briefs []*userv1.UserBrief
+	for _, uid := range page {
+		briefs = append(briefs, &userv1.UserBrief{Uid: uid})
+	}
+	resp := &userv1.GetFollowersResponse{UserBriefs: briefs}
+	if len(f.pages) > 0 {
+		resp.Cursor = &commonpb.Cursor{Str: "next"}
+	}
+	return connect.NewResponse(resp), nil
+}
+
+// fakeFanout 扇出替身（嵌入接口只覆写 WriteInbox）：记录 WriteInbox 参数
+type fakeFanout struct {
+	discoverv1.FanoutRepo
+	writeErr     error
+	gotPostID    int64
+	gotAuthorID  int64
+	gotCreatedAt int64
+	gotFans      []int64
+}
+
+func (f *fakeFanout) WriteInbox(_ context.Context, postID, authorID, postCreatedAt int64, followerUIDs []int64) error {
+	if f.writeErr != nil {
+		return f.writeErr
+	}
+	f.gotPostID, f.gotAuthorID, f.gotCreatedAt = postID, authorID, postCreatedAt
+	f.gotFans = append([]int64(nil), followerUIDs...)
+	return nil
+}
+
+// fakeTimeline 发件箱缓存替身（只桩 Append）
+type fakeTimeline struct {
+	cache.AuthorTimelineCache
+
+	appendErr    error
+	appends      int
+	gotAuthorID  int64
+	gotPostID    int64
+	gotCreatedAt int64
+}
+
+func (f *fakeTimeline) Append(_ context.Context, authorID, postID, createdAt int64) error {
+	if f.appendErr != nil {
+		return f.appendErr
+	}
+	f.appends++
+	f.gotAuthorID, f.gotPostID, f.gotCreatedAt = authorID, postID, createdAt
+	return nil
+}
+
+const (
+	testPostID   = "1700000000000000001"
+	testAuthorID = "1700000000000000002"
+)
+
+// newTestFanoutConsumer 构造发帖侧测试消费者（fanoutCap=3 便于触发溢出安全阀）
+func newTestFanoutConsumer(p postv1connect.PostServiceClient, u userv1connect.UserServiceClient,
+	fo discoverv1.FanoutRepo, tl cache.AuthorTimelineCache, d commonv1.ProcessedMessageRepository) *DiscoverConsumer {
+	if p == nil {
+		p = &fakePostService{resp: &postv1.GetPostsByIDsResponse{
+			Results: []*postv1.PostResult{{PostId: testPostID, Post: publishedPost(testPostID)}},
+		}}
+	}
+	return &DiscoverConsumer{
+		Consumer:    Consumer{log: slog.Default()},
+		PostService: p,
+		UserService: u,
+		Fanout:      fo,
+		Timeline:    tl,
+		Dedup:       d,
+		fanoutCap:   3,
+	}
+}
+
+func fanoutMsg() *postv1.PublishPost {
+	return &postv1.PublishPost{PostId: testPostID, AuthorId: testAuthorID}
+}
+
+// TestHandlePublishFanout_Fanout 普通作者（followers < 晋升线）：全量粉丝扇出、不写缓存
+func TestHandlePublishFanout_Fanout(t *testing.T) {
+	u := &fakeUserClient{followers: 2, pages: [][]string{{"2001", "2002"}}}
+	fo := &fakeFanout{}
+	tl := &fakeTimeline{}
+	d := &fakeDedup{applied: true}
+	c := newTestFanoutConsumer(nil, u, fo, tl, d)
+
+	ack, err := c.handlePublishFanout(context.Background(), fanoutMsg(), testMsgID)
+	require.NoError(t, err)
+	assert.True(t, ack)
+
+	assert.Equal(t, int64(1700000000000000001), fo.gotPostID)
+	assert.Equal(t, int64(1700000000000000002), fo.gotAuthorID)
+	assert.Equal(t, int64(1700000000123), fo.gotCreatedAt)
+	assert.Equal(t, []int64{2001, 2002}, fo.gotFans, "全量粉丝扇出")
+	assert.Zero(t, tl.appends, "普通作者不写发件箱缓存")
+
+	assert.Equal(t, int64(1700000000000000009), d.gotID)
+	assert.Equal(t, "fanout_publish", d.gotHandler)
+}
+
+// TestHandlePublishFanout_PullCache 大V（followers ≥ 晋升线）：写发件箱缓存、不扇出不拉粉丝
+func TestHandlePublishFanout_PullCache(t *testing.T) {
+	u := &fakeUserClient{followers: 100, pages: [][]string{{"2001"}}}
+	fo := &fakeFanout{}
+	tl := &fakeTimeline{}
+	c := newTestFanoutConsumer(nil, u, fo, tl, &fakeDedup{applied: true})
+
+	ack, err := c.handlePublishFanout(context.Background(), fanoutMsg(), testMsgID)
+	require.NoError(t, err)
+	assert.True(t, ack)
+
+	assert.Zero(t, fo.gotPostID, "大V不扇出")
+	assert.Len(t, u.pages, 1, "大V不拉粉丝列表")
+	require.Equal(t, 1, tl.appends)
+	assert.Equal(t, int64(1700000000000000002), tl.gotAuthorID)
+	assert.Equal(t, int64(1700000000000000001), tl.gotPostID)
+	assert.Equal(t, int64(1700000000123), tl.gotCreatedAt)
+}
+
+// TestHandlePublishFanout_FollowerOverflow 拉粉丝触达安全阀（判定后粉丝激增 race）：
+// 不扇出、转写缓存走 pull（宁重不漏）
+func TestHandlePublishFanout_FollowerOverflow(t *testing.T) {
+	u := &fakeUserClient{followers: 2, pages: [][]string{{"2001", "2002", "2003"}}}
+	fo := &fakeFanout{}
+	tl := &fakeTimeline{}
+	c := newTestFanoutConsumer(nil, u, fo, tl, &fakeDedup{applied: true})
+
+	ack, err := c.handlePublishFanout(context.Background(), fanoutMsg(), testMsgID)
+	require.NoError(t, err)
+	assert.True(t, ack)
+
+	assert.Zero(t, fo.gotPostID, "溢出转 pull，不扇出")
+	assert.Equal(t, 1, tl.appends)
+}
+
+// TestHandlePublishFanout_AppendFallback 大V写缓存失败：fallback 全量扇出（宁重不漏，不允许无供给线）
+func TestHandlePublishFanout_AppendFallback(t *testing.T) {
+	u := &fakeUserClient{followers: 100, pages: [][]string{{"2001"}}}
+	fo := &fakeFanout{}
+	tl := &fakeTimeline{appendErr: errors.New("redis down")}
+	c := newTestFanoutConsumer(nil, u, fo, tl, &fakeDedup{applied: true})
+
+	ack, err := c.handlePublishFanout(context.Background(), fanoutMsg(), testMsgID)
+	require.NoError(t, err)
+	assert.True(t, ack)
+
+	assert.Equal(t, []int64{2001}, fo.gotFans, "缓存写失败降级扇出，保证收件箱供给线")
+}
+
+// TestHandlePublishFanout_DedupSkip 重复投递：去重跳过，无副作用
+func TestHandlePublishFanout_DedupSkip(t *testing.T) {
+	u := &fakeUserClient{followers: 2, pages: [][]string{{"2001"}}}
+	fo := &fakeFanout{}
+	tl := &fakeTimeline{}
+	c := newTestFanoutConsumer(nil, u, fo, tl, &fakeDedup{applied: false})
+
+	ack, err := c.handlePublishFanout(context.Background(), fanoutMsg(), testMsgID)
+	require.NoError(t, err)
+	assert.True(t, ack)
+
+	assert.Zero(t, fo.gotPostID)
+	assert.Zero(t, tl.appends)
+}
+
+// TestHandlePublishFanout_ProfileError 取粉丝数失败：RETRY 重投
+func TestHandlePublishFanout_ProfileError(t *testing.T) {
+	u := &fakeUserClient{profileErr: errors.New("boom")}
+	c := newTestFanoutConsumer(nil, u, &fakeFanout{}, &fakeTimeline{}, &fakeDedup{applied: true})
+
+	ack, err := c.handlePublishFanout(context.Background(), fanoutMsg(), testMsgID)
+	require.ErrorContains(t, err, "GetUserProfile")
+	assert.False(t, ack, "可重试错误 RETRY 重投")
+}
+
+// TestHandlePublishFanout_CreatedAtDegraded created_at 非法降级 0 继续扇出（不阻塞链路）
+func TestHandlePublishFanout_CreatedAtDegraded(t *testing.T) {
+	post := publishedPost(testPostID)
+	post.CreatedAt = "not-a-timestamp"
+	p := &fakePostService{resp: &postv1.GetPostsByIDsResponse{
+		Results: []*postv1.PostResult{{PostId: testPostID, Post: post}},
+	}}
+	u := &fakeUserClient{followers: 2, pages: [][]string{{"2001"}}}
+	fo := &fakeFanout{}
+	c := newTestFanoutConsumer(p, u, fo, &fakeTimeline{}, &fakeDedup{applied: true})
+
+	ack, err := c.handlePublishFanout(context.Background(), fanoutMsg(), testMsgID)
+	require.NoError(t, err)
+	assert.True(t, ack)
+	assert.Equal(t, int64(0), fo.gotCreatedAt, "created_at 非法降级 0")
 }

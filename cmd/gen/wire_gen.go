@@ -87,12 +87,9 @@ func InitializePoller(cfg *config.Config) (*poller.OutBoxPoller, func()) {
 func InitializeDiscoverServiceHandler(cfg *config.Config) (discoverv1connect.DiscoverServiceHandler, func()) {
 	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
 	meiliClient, cleanup2 := meili.NewClient(cfg, loggerFactoryImpl)
-	gormDB, cleanup3 := db.NewPG(cfg, loggerFactoryImpl)
-	bigVRepo := v1_4.NewBigVRepo(gormDB, cfg)
-	discoverUsecaseImpl := v1_4.NewDiscoverUsecase(loggerFactoryImpl, meiliClient, bigVRepo)
+	discoverUsecaseImpl := v1_4.NewDiscoverUsecase(loggerFactoryImpl, meiliClient)
 	discoverServiceHandler := v1_4.NewDiscoverServiceHandler(loggerFactoryImpl, discoverUsecaseImpl)
 	return discoverServiceHandler, func() {
-		cleanup3()
 		cleanup2()
 		cleanup()
 	}
@@ -104,10 +101,15 @@ func InitializeDiscoverConsumer(cfg *config.Config) (*consumer.DiscoverConsumer,
 	meiliClient, cleanup3 := meili.NewClient(cfg, loggerFactoryImpl)
 	staticProvider := rpc.NewStaticProvider(cfg)
 	postServiceClient := rpc.NewPostClient(staticProvider)
+	userServiceClient := rpc.NewUserClient(staticProvider)
 	gormDB, cleanup4 := db.NewPG(cfg, loggerFactoryImpl)
+	fanoutRepo := v1_4.NewFanoutRepo(gormDB)
+	cacheCache, cleanup5 := cache.NewCache(cfg, loggerFactoryImpl)
+	authorTimelineCacheImpl := cache.NewAuthorTimelineCache(cacheCache, cfg, loggerFactoryImpl)
 	processedMessageRepoImpl := v1_2.NewProcessedMessageRepo(gormDB)
-	discoverConsumer := consumer.NewDiscoverConsumer(jetStreamClient, loggerFactoryImpl, cfg, meiliClient, postServiceClient, processedMessageRepoImpl)
+	discoverConsumer := consumer.NewDiscoverConsumer(jetStreamClient, loggerFactoryImpl, cfg, meiliClient, postServiceClient, userServiceClient, fanoutRepo, authorTimelineCacheImpl, processedMessageRepoImpl)
 	return discoverConsumer, func() {
+		cleanup5()
 		cleanup4()
 		cleanup3()
 		cleanup2()
@@ -253,4 +255,4 @@ var Clients = wire.NewSet(rpc.NewStaticProvider, wire.Bind(new(rpc.EndpointProvi
 var BFF = wire.NewSet(v1_6.NewBFFUsecase, wire.Bind(new(v1_6.BFFUsecase), new(*v1_6.BFFUsecaseImpl)), v1_6.NewBFFServiceHandler, wire.Bind(new(bffv1connect.BFFServiceHandler), new(*v1_6.BFFServiceHandler)))
 
 // Discover 搜推服务装配
-var Discover = wire.NewSet(v1_4.NewBigVRepo, v1_4.NewDiscoverUsecase, wire.Bind(new(v1_4.DiscoverUsecase), new(*v1_4.DiscoverUsecaseImpl)), v1_4.NewDiscoverServiceHandler, wire.Bind(new(discoverv1connect.DiscoverServiceHandler), new(*v1_4.DiscoverServiceHandler)))
+var Discover = wire.NewSet(v1_4.NewFanoutRepo, v1_4.NewDiscoverUsecase, wire.Bind(new(v1_4.DiscoverUsecase), new(*v1_4.DiscoverUsecaseImpl)), v1_4.NewDiscoverServiceHandler, wire.Bind(new(discoverv1connect.DiscoverServiceHandler), new(*v1_4.DiscoverServiceHandler)))
