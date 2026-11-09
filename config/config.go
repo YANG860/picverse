@@ -56,10 +56,10 @@ type PostConfig struct {
 	ViewFlushInterval time.Duration `mapstructure:"view_flush_interval"`
 }
 
-// BigVConfig 大V快照配置（推拉结合判定口径，见 doc/internal/discover/discover.md）
+// BigVConfig 大V判定配置（发帖侧分流阈值，见 doc/internal/discover/discover.md）
 type BigVConfig struct {
-	// SyncInterval 快照惰性同步间隔（距上次回源超过该间隔的首次读触发回源），0 使用默认 1m
-	SyncInterval time.Duration `mapstructure:"sync_interval"`
+	// PromoteFollowers 大V晋升线（粉丝数 ≥ 该值写发件箱缓存走 pull，否则扇出收件箱），0 使用默认 5000
+	PromoteFollowers int64 `mapstructure:"promote_followers"`
 }
 
 // FanoutConfig 收件箱（fanout_timelines）保留期清理配置（维护表大小，见 doc/internal/discover/discover.md）

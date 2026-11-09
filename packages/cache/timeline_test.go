@@ -46,14 +46,15 @@ func TestAuthorTimelineAppendWindow(t *testing.T) {
 	require.Empty(t, entries)
 }
 
-// TestAuthorTimelineWindowMiss 未缓存作者：miss=true（调用方回源 DB 并 Rebuild）；Rebuild 后可命中
+// TestAuthorTimelineWindowMiss 未缓存作者：miss=true → 分流到收件箱路（非 pull 对象，不回源）；
+// Rebuild 后建 key 即转 pull 路可命中（分流契约：key 存在性 = pull 判据）
 func TestAuthorTimelineWindowMiss(t *testing.T) {
 	a := newTimelineCapacity(testredis.New(), 200)
 	ctx := context.Background()
 
 	entries, miss, err := a.Window(ctx, 2001, 0, 0, 10)
 	require.NoError(t, err)
-	require.True(t, miss, "未缓存须回源重建")
+	require.True(t, miss, "未缓存 = 非 pull 对象，分流收件箱路")
 	require.Empty(t, entries)
 
 	require.NoError(t, a.Rebuild(ctx, 2001, []cache.TimelineEntry{{PostID: 9, CreatedAt: 900}, {PostID: 8, CreatedAt: 800}}))

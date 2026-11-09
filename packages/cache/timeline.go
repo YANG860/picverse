@@ -20,19 +20,21 @@ type TimelineEntry struct {
 	CreatedAt int64
 }
 
-// AuthorTimelineCache 作者发件箱（帖子时间线）缓存：pull 现拉的加速层（方案 A：名单统一缓存）。
+// AuthorTimelineCache 作者发件箱（帖子时间线）缓存：pull 现拉的加速层（方案 A：统一缓存）。
 // per 作者 ZSET 窗口：member = post_id、score = created_at，恰为关注流游标二元组 (created_at, id)；
 // 只保近期 Capacity 条（最新连续后缀），TTL 自然回收。
-// 语义边界（宁重不漏）：DB 仍是事实源，缓存只是加速——miss/短取（返回 < limit）都不等于"到底"，
-// 调用方须回源 DB 作答；外部语义依然是无感直连 DB。
+// 语义边界（宁重不漏）：DB 仍是事实源，缓存只是加速——短取（返回 < limit）不等于"到底"；
+// key 存在性兼作 pull 分流判据（有缓存 → pull，无缓存 → 收件箱，见 Window）。
 // 不做删帖失效（已删帖由下游过滤，与收件箱同口径）；术语注意：勿与消息发件箱 out_box_entries 混淆。
 type AuthorTimelineCache interface {
-	// Append 发布追加：写入并截尾保留近 Capacity 条（发布链路同步调用，O(log N)）
+	// Append 发布追加：写入并截尾保留近 Capacity 条（发布链路同步调用，O(log N)）；
+	// 写失败时发布链路降级 fallback 扇出收件箱（宁重不漏，不允许无供给线）
 	Append(ctx context.Context, authorID, postID, createdAt int64) error
 	// Window 按游标取窗：严格早于 (beforeTS, beforeID) 的至多 limit 条，(created_at, post_id) 倒序。
-	// miss = true 表示该作者未缓存（key 不存在），调用方回源 DB 并 Rebuild；
-	// miss = false 时若 len(entries) < limit，缓存不能完整作答（触及缓存低边界/同刻游标过滤），
-	// 调用方须以 DB 补足，短取不等于到底
+	// 分流契约（缓存存在性 = pull 判据）：
+	//   - miss = true：该作者未缓存（key 不存在）→ 非 pull 对象，分流到收件箱路（不回源，普通作者零 DB 开销）
+	//   - miss = false 且 len(entries) < limit：pull 对象但缓存不能完整作答（见底/同刻游标过滤）→
+	//     调用方以 DB 补足并 Rebuild（pull 对象是大V，回源量小）；短取不等于到底
 	Window(ctx context.Context, authorID, beforeTS, beforeID int64, limit int) (entries []TimelineEntry, miss bool, err error)
 	// Rebuild 回源回填：以 DB 行并入缓存并截尾（增量 ZADD 不 DEL，与并发 Append 天然合并）。
 	// entries 必须是该作者"最新的至多 Capacity 条"（DB 按 (created_at, id) 倒序 LIMIT 回源行），

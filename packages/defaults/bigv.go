@@ -1,9 +1,7 @@
 package defaults
 
-import "time"
-
-// 大V快照默认值（config.bigv 对应项为 0 时回退），见 doc/internal/discover/discover.md
+// 大V判定默认值（config.bigv 对应项为 0 时回退），见 doc/internal/discover/discover.md
 const (
-	// BigVSyncInterval 大V快照惰性同步间隔（读触发回源节流，外部 ≈ 稍微滞后的直连 DB）
-	BigVSyncInterval = time.Minute
+	// BigVPromoteFollowers 大V晋升线（粉丝数 ≥ 该值写发件箱缓存走 pull，否则扇出收件箱）
+	BigVPromoteFollowers = 5000
 )
