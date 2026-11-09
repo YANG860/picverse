@@ -19,7 +19,7 @@ server:      # 各服务监听地址
 services:    # 下游服务地址（服务发现）
 meili:       # Meilisearch 搜索引擎
 post:        # 帖子服务运行参数
-bigv:        # 大V快照（推拉结合判定口径）
+bigv:        # 发帖侧分流判定（大V晋升线）
 fanout:      # 收件箱保留期清理（维护 fanout_timelines 表大小）
 ```
 
@@ -128,14 +128,14 @@ fanout:      # 收件箱保留期清理（维护 fanout_timelines 表大小）
 | `profile_ttl` | duration | 用户资料缓存 TTL（±10% 抖动），`0` 使用默认（30m） |
 | `post_ttl` | duration | 帖子详情缓存 TTL（±10% 抖动），`0` 使用默认（30m） |
 | `null_ttl` | duration | 空哨兵 TTL（防穿透），`0` 使用默认（60s） |
-| `timeline_ttl` | duration | 作者发件箱缓存 TTL（pull 现拉加速层，`AuthorTimelineCache`），`0` 使用默认（7d） |
+| `timeline_ttl` | duration | 作者发件箱缓存 TTL（pull 现拉加速层，`AuthorTimelineCache`），`0` 使用默认（720h = 30 天，与 `fanout.retention` 对齐：零漏前提） |
 | `timeline_capacity` | int | 发件箱缓存每作者保留的近期帖条数（最新连续后缀），`0` 使用默认（200） |
 
-### bigv — 大V快照（推拉结合判定口径）
+### bigv — 发帖侧分流判定
 
 | 键 | 类型 | 说明 |
 | --- | --- | --- |
-| `sync_interval` | duration | 快照惰性同步间隔（`BigVRepo` 读触发回源节流，外部 ≈ 稍微滞后的无感直连 DB），`0` 使用默认（1m） |
+| `promote_followers` | int | 大V晋升线（粉丝数 ≥ 该值写发件箱缓存走 pull，否则扇出收件箱），`0` 使用默认（5000） |
 
 ### fanout — 收件箱保留期清理
 
