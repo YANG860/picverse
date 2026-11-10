@@ -57,6 +57,11 @@ func (Noop) ZRemRangeByRank(ctx context.Context, key string, start, stop int) er
 	return nil
 }
 
+// ZRemRangeByScore 空转
+func (Noop) ZRemRangeByScore(ctx context.Context, key string, max, min float64) error {
+	return nil
+}
+
 // Exists 恒 false（无缓存 → 调用方按 miss 回源）
 func (Noop) Exists(ctx context.Context, key string) (bool, error) {
 	return false, nil

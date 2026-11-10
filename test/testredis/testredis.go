@@ -262,6 +262,25 @@ func (c *Client) ZRemRangeByRank(ctx context.Context, key string, start, stop in
 	return nil
 }
 
+// ZRemRangeByScore 按 score 删除 [min, max] 闭区间（±Inf 可用）
+func (c *Client) ZRemRangeByScore(ctx context.Context, key string, max, min float64) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ze, ok := c.z[key]
+	if !ok || c.zExpired(ze) {
+		if ok {
+			delete(c.z, key)
+		}
+		return nil
+	}
+	for member, sc := range ze.members {
+		if sc >= min && sc <= max {
+			delete(ze.members, member)
+		}
+	}
+	return nil
+}
+
 // Exists 判定 key 是否存在（KV 与 ZSET 同命名空间；过期按不存在惰性清理）
 func (c *Client) Exists(ctx context.Context, key string) (bool, error) {
 	c.mu.Lock()

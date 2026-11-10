@@ -169,6 +169,14 @@ func (r *RedisCache) ZRemRangeByRank(ctx context.Context, key string, start, sto
 	return nil
 }
 
+// ZRemRangeByScore 按 score 删除 [min, max] 闭区间（±Inf 经 formatScore 归一）
+func (r *RedisCache) ZRemRangeByScore(ctx context.Context, key string, max, min float64) error {
+	if err := r.rc.ZRemRangeByScore(ctx, key, formatScore(max), formatScore(min)).Err(); err != nil {
+		return fmt.Errorf("cache zremrangebyscore %s: %w", key, err)
+	}
+	return nil
+}
+
 // formatScore score → redis 范围参数（±Inf → "+inf"/"-inf"）
 func formatScore(f float64) string {
 	switch {

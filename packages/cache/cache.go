@@ -39,6 +39,8 @@ type Cache interface {
 	// ZRemRangeByRank 按排名删除 [start, stop] 闭区间（排名按 score 升序 0 起，负数自尾部：-1 为最大）；
 	// 保最新 keep 条 = ZRemRangeByRank(key, 0, -(keep+1))
 	ZRemRangeByRank(ctx context.Context, key string, start, stop int) error
+	// ZRemRangeByScore 按 score 删除 [min, max] 闭区间（±Inf 可用）；用于按时间窗截尾
+	ZRemRangeByScore(ctx context.Context, key string, max, min float64) error
 	// Exists 判定 key 是否存在（区分"未缓存"与"已缓存但结果为空"）
 	Exists(ctx context.Context, key string) (bool, error)
 }
@@ -61,6 +63,7 @@ const (
 	userProfilePrefix    = KeyPrefix + ":user:profile:"
 	userStatPrefix       = KeyPrefix + ":user:stat:"
 	authorTimelinePrefix = KeyPrefix + ":author:timeline:"
+	authorBigVPrefix     = KeyPrefix + ":author:bigv:"
 )
 
 // idKey 实体/计数器 key 的唯一构造点：prefix + 十进制 id
