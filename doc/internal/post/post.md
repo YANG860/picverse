@@ -31,7 +31,6 @@
 | `GetPostsByIDs` | ✅ | 批量获取（内部接口，BFF 内网调用；本身就无鉴权/可见性过滤，返回任意状态的帖子；`PostResult` 逐项 `fail`/`err`） |
 | `GetPostStatus` | ✅ | 帖子状态查询 |
 | `ViewPost` | ✅ | 查看帖子（非发布状态仅作者可见，软删对外隐藏，封禁返回 `Banned`） |
-| `SetPostStatusDraft` | 规划中 | 发布后修改场景：PUBLISHED→DRAFT（仅 proto 消息定义，暂无 rpc） |
 | `ViewPostByAuthor` | ✅ | 按作者游标分页（空页返回空列表 + 空游标，不以 NotFound 表达翻页到底）；`PostBrief` 携带 `status`，供 BFF 直接组装 `PostCard` 无需二次查询 |
 | `DeletePost` | ✅ | 用户删帖（软删 → DELETED，事务内发 `DeletePost` 消息，consumer 物理回收） |
 | `BanPost` | ✅ | 封禁帖子（管理侧，无 uid 校验；软封禁 → BANNED + outbox 发 `BanPost` 消息） |
@@ -84,6 +83,6 @@
 
 ## 状态
 
-`PostService` 的 17 个 rpc **全部已实现**：草稿链路（`CreateDraft` / `UpdateDraft` / `UpdateDraftMedias` / `PublishDraft`）、查询（`GetPostsByIDs` / `GetPostStatus` / `ViewPost` / `ViewPostByAuthor`）、管理（`DeletePost` / `BanPost` / `SyncPostStat`）、互动（`LikePost` / `UnlikePost` / `FavouritePost` / `UnfavouritePost` / `ListLikedPostIDs` / `ListFavouritePostIDs`）。`SetPostStatusDraft` 仅定义 proto 消息、暂无 rpc，为规划中接口（物理回收已由 consumer 删帖链路承担，不再设 RPC）。
+`PostService` 的 17 个 rpc **全部已实现**：草稿链路（`CreateDraft` / `UpdateDraft` / `UpdateDraftMedias` / `PublishDraft`）、查询（`GetPostsByIDs` / `GetPostStatus` / `ViewPost` / `ViewPostByAuthor`）、管理（`DeletePost` / `BanPost` / `SyncPostStat`）、互动（`LikePost` / `UnlikePost` / `FavouritePost` / `UnfavouritePost` / `ListLikedPostIDs` / `ListFavouritePostIDs`）。
 
 测试：`internal/post/v1` 含 repo 层与 biz 层集成测试（`repo_test.go` / `biz_test.go`，真实 testdb 模板库克隆 + testmq 内存模拟，覆盖正常/边界/错误路径与状态机），依赖 `test/testdb`。

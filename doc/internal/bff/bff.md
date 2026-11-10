@@ -114,12 +114,11 @@ BFF 由于面向前端，**不返回连接层 error**：下游连接层错误（
     GetPost（并行聚合作者/关系，NotFound 降级未关注）、GetMyPosts（状态随 `PostBrief` 返回，封面分级签发）、
     GetUserPosts（恒 PUBLISHED，公开 TTL）、
     SearchPosts（discover 检索 + 按命中序回查组装，过滤非 PUBLISHED 兑底同步窗口）
-  - 待实现：GetFollowingFeed（信息流，暂缓）、GetMyMediaAssets（素材库，依赖待定项 2）
 - `repo.go`：`DownstreamRepo` 下游客户端集合
 
-`cmd/bff/main.go` 启动入口已落地（`gen.InitializeBFFServiceHandler` 装配下游客户端 + MQ，
+`cmd/bff/main.go` 启动入口：`gen.InitializeBFFServiceHandler` 装配下游客户端 + MQ，
 main 挂 trace + `jwt.NewServerInterceptor`（token 存在才注入，认证由业务层判定）+ validate 拦截器；
-监听 `config.server.bff`（`:8084`））。待补：redis 会话缓存。
+监听 `config.server.bff`（`:8084`）。
 
 ## 待定项
 

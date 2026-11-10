@@ -1,31 +1,33 @@
 # consumer — 消息消费者
 
-代码：`internal/consumer/`（`consumer.go`、`media_consumer.go`、`post_consumer.go`、`utils.go`），进程：`cmd/consumer`（同进程拉起两个消费者）。
+代码：`internal/consumer/`（`consumer.go` 基座、`media_consumer.go`、`post_consumer.go`、
+`discover_index_consumer.go`、`fanout_consumer.go`、`utils.go`）。
+进程装配：`cmd/consumer`（Media + Post）、`cmd/discover`（DiscoverIndex + Fanout）。
 
-消费 JetStream 中的两类消息：`media` 流的 `MediaMessage`（驱动图片处理状态机）与 `post` 流的 `PostMessage`（驱动帖子状态机）。采用 **ACK/NAK** 确认机制：处理成功 `Ack`，可重试错误 `Nak`（交回队列重投），不可恢复错误 `Term`。
+消费 JetStream 消息，**ACK/NAK** 确认：处理成功 `Ack`，可重试错误 `Nak`（交回队列重投），
+不可恢复错误 `Term`。
+
+## MessageLoop 基座（consumer.go）
+
+泛型模板 `MessageLoop[P proto.Message]` 承载消息循环公共流程（`HandleMessage`）：
+
+1. 从消息头取 `trace_id` / `send_at` / `message_id`，注入 context；
+2. `proto.Unmarshal` 出消息（`oneof` 类型名取自 proto 反射，用于日志），失败 `Term`（不可恢复）；
+3. 分发到各消费者实现的 `dispatch(ctx, m, messageID)`（oneof type switch，业务本质）；
+4. 依据返回 `(ack, err)` 决定 `Ack` / `Nak`，记录结构化日志；
+5. 全程 `recover` panic，防止单条消息搞挂 worker。
+
+生命周期：`Start()`（可选工作目录准备）建立 durable consumer 消费循环，`Close()` 取消 context 停止消费。
+业务依赖（Repo/S3/Dedup 等）由各消费者自持，基座仅持 MQ、日志与运行参数。
+
+`utils.go` 提供消息 ID 解析（`ParseMessageID` 失败 RETRY / `ParseSnowflakeID` 失败 ACK）；
+幂等处理统一为 `Dedup.ExecuteIdempotent`（去重登记与副作用同事务，重复投递跳过）原地展开。
 
 ## MediaConsumer
 
-由 `NewMediaConsumer` 创建，通过 `CreateOrUpdateConsumer` 建立 durable consumer：
-
-| 配置 | 说明 |
-| --- | --- |
-| `Name` / `Durable` | consumer 名（`config.Consumer.Media.Name`） |
-| `DeliverPolicy` | `DeliverAll` |
-| `AckPolicy` | `AckExplicit` |
-| `MaxDeliver` | 最大投递次数（`max_retry`） |
-
-生命周期：`Start()` 创建消费循环（并确保工作目录存在），`Close()` 取消 context 并停止消费。
-
-## 消息分发（HandleMessage）
-
-1. 从消息头取 `trace_id` / `send_at` / `message_id`，注入 context。
-2. `proto.Unmarshal` 出 `MediaMessage`，失败则 `Term`（不可恢复）。
-3. 按 `oneof payload` 分发到对应 handler。
-4. 依据返回 `(ack, err)` 决定 `Ack` / `Nak`，并记录结构化日志。
-5. 全程 `recover` panic，防止单条消息搞挂 worker。
-
-## 消息处理器
+`internal/consumer/media_consumer.go`，`cmd/consumer` 进程。消费 `media` 流 `MediaMessage`
+驱动图片处理状态机；durable 名取 `config.Consumer.Media.Name`（`DeliverAll` / `AckExplicit` /
+`MaxDeliver` = `max_retry`）。
 
 | 消息 | 处理器 | 职责 |
 | --- | --- | --- |
@@ -54,8 +56,8 @@
 
 ## PostConsumer
 
-由 `NewPostConsumer` 创建（依赖 media 服务客户端与 `PostRepository`），消费 `post` 流中的 `PostMessage`，
-durable 名取 `config.Consumer.Post.Name`，ACK/NAK 策略与 MediaConsumer 一致。`cmd/consumer` 同进程拉起两个消费者。
+`internal/consumer/post_consumer.go`，`cmd/consumer` 进程。消费 `post` 流 `PostMessage`
+驱动帖子状态机；durable 名取 `config.Consumer.Post.Name`。
 
 | 消息 | 处理器 | 职责 |
 | --- | --- | --- |
@@ -64,10 +66,13 @@ durable 名取 `config.Consumer.Post.Name`，ACK/NAK 策略与 MediaConsumer 一
 | `delete_post` | `handleDeletePost` | 同事务物理删除软删帖子（仅 `DELETED` 行）及其媒体关联，并按被删关联逐槽位写 outbox `deref_media` 卸载消息（资产引用计数回收，删几槽减几槽，重复投递幂等） |
 | `ban_post` | `handleBanPost` | 封禁后的下游处理 |
 
-## DiscoverConsumer
+## DiscoverIndexConsumer
 
-由 `NewDiscoverConsumer` 创建（依赖 `meili.MeiliRepo`、post 服务客户端与 `ProcessedMessageRepository`），消费 `post` 流中的 `PostMessage` 驱动 **Meilisearch 索引同步**。durable 名取 `config.Consumer.Discover.Name`，ACK/NAK 策略与 MediaConsumer 一致。
-**跑在 `cmd/discover` 进程内**（非 `cmd/consumer`）；`Start()` 先 `EnsurePostsIndex` 幂等确保 `posts` 索引存在并应用设置（fail-fast），再建立消费循环。索引文档组装/设置收敛在 `packages/meili`（`NewPostIndexDoc` / `PostsIndexSettings`），consumer 侧仅做 proto→`map` 字段提取（`postIndexFields`）薄编排。
+`internal/consumer/discover_index_consumer.go`，**跑在 `cmd/discover` 进程内**。消费 `post` 流
+`PostMessage` 驱动 Meilisearch 索引同步；durable 名取 `config.Consumer.Discover.Index.Name`。
+`Start()` 先 `EnsurePostsIndex` 幂等确保 `posts` 索引存在并应用设置（fail-fast），再建立消费循环。
+索引文档组装/设置收敛在 `packages/meili`（`NewPostIndexDoc` / `PostsIndexSettings`），
+consumer 侧仅做 proto→`map` 字段提取（`postIndexFields`）薄编排。
 
 | 消息 | 处理器 | 职责 |
 | --- | --- | --- |
@@ -75,7 +80,20 @@ durable 名取 `config.Consumer.Post.Name`，ACK/NAK 策略与 MediaConsumer 一
 | `ban_post` / `delete_post` | `handleRemovePostIndex` | `RemovePost` 按主键删除索引文档（删不存在的键为 no-op） |
 | `audit_post` | — | 审核中间态不进索引（仅 PUBLISHED 进索引），直接 ACK |
 
-幂等双保险：`Dedup.ExecuteIdempotent`（msgID 去重登记与索引写入同事务，重复投递跳过）+ Meili 按主键 upsert/delete 天然幂等；索引任务阻塞至生效（`WaitForTask`），失败 `Nak` 重投。文档 schema 与索引设置见 [meili](../../packages/meili/meili.md)。
+幂等双保险：`Dedup.ExecuteIdempotent`（msgID 去重登记与索引写入同事务，重复投递跳过）+ Meili 按主键
+upsert/delete 天然幂等；索引任务阻塞至生效（`WaitForTask`），失败 `Nak` 重投。文档 schema 与索引设置见
+[meili](../../packages/meili/meili.md)。
+
+## FanoutConsumer
+
+`internal/consumer/fanout_consumer.go`，**跑在 `cmd/discover` 进程内**。消费 `post` 流 `PostMessage`
+做关注流推拉分流（见 [discover](../discover/discover.md)）；durable 名取 `config.Consumer.Discover.Fanout.Name`。
+与 DiscoverIndexConsumer 拆为独立 durable（失败隔离：各自重试预算/死信/进度）。
+
+| 消息 | 处理器 | 职责 |
+| --- | --- | --- |
+| `publish_post` | `handlePublishFanout` | 取帖（PUBLISHED 校验）→ 查粉丝数 → 防抖动判定分流：大V写发件箱缓存（`AuthorTimelineCache.Append`，失败 fallback 全量扇出）/ 普通作者 `GetFollowers` 全量分页扇出收件箱（`FanoutRepo.WriteInbox`） |
+| `audit_post` / `ban_post` / `delete_post` | — | 扇出只关心发布事件（删帖不级联收件箱，由保留期回收），直接 ACK |
 
 ## ValidateImage
 

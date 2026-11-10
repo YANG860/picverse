@@ -29,8 +29,9 @@ rednote 是一个仿小红书的图片社交论坛后端，基于 Go + ConnectRP
 | [internal/user/user.md](internal/user/user.md) | 用户服务：资料增改（含独立头像更新）、关注关系、封禁 |
 | [internal/media/media.md](internal/media/media.md) | 媒体服务：上传、异步处理流水线、引用计数、清理 |
 | [internal/common/common.md](internal/common/common.md) | 公共模型与 Outbox（事务性发件箱） |
-| [internal/consumer/consumer.md](internal/consumer/consumer.md) | 媒体消费者：JetStream 消费 + 图片处理状态机 |
-| [internal/poller/poller.md](internal/poller/poller.md) | Outbox Poller：轮询发件箱投递到 JetStream |
+| [internal/consumer/consumer.md](internal/consumer/consumer.md) | 消息消费者：MessageLoop 基座 + 媒体处理状态机 / 帖子状态机 / 索引同步 / 关注流扇出 |
+| [internal/discover/discover.md](internal/discover/discover.md) | 搜推服务：关注流（推拉归并）、搜索（Meilisearch）、推拉分流与发件箱缓存 |
+| [internal/poller/poller.md](internal/poller/poller.md) | Outbox Poller：轮询发件箱投递到 JetStream；收件箱保留期清理 |
 
 ### packages — 基础组件
 | 文档 | 说明 |
@@ -60,8 +61,6 @@ rednote 是一个仿小红书的图片社交论坛后端，基于 Go + ConnectRP
 
 ## 模块完成度
 
-文档聚焦于**已实现/可用**的模块。以下模块仍在施工中，暂不展开文档：
+文档聚焦于**已实现/可用**的模块：
 
-
-- **redis**：仅封装了客户端与健康检查，业务接口待补全。
-- **cache**：缓存层设计已定稿（见 [packages/cache/cache.md](packages/cache/cache.md)），代码尚未实现。
+- **redis**：仅封装了客户端与健康检查。

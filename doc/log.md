@@ -75,6 +75,6 @@
 
 `packages/db.NewSlogAdapter` 把 `slog.Logger` 适配为 GORM 的 `logger.Interface`，SQL 执行细节（语句、行数、耗时、错误）以 `Debug` 级别输出（`gorm trace`）。详见 [packages/db/db.md](packages/db/db.md)。
 
-## 目标可观测栈
+## 可观测
 
-项目规划的日志服务为 **Loki + Promtail + Grafana**：服务侧输出 JSON 结构化日志 → Promtail 采集 → Loki 存储/索引 → Grafana 查询与告警。当前仓库内已落地的是"结构化 JSON 日志输出"这一侧，采集/存储/展示的部署配置暂不在本仓库内。
+服务侧输出 JSON 结构化日志（trace_id 关联）；日志的采集/存储/展示不在本仓库内。

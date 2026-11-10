@@ -63,7 +63,7 @@ type BFFUsecase interface {
 	SearchPosts(ctx context.Context, req *bffv1.SearchPostsRequest) (*bffv1.SearchPostsResponse, error)
 
 	// ==================== 信息流 ====================
-	// TODO: GetFollowingFeed（关注流）待实现，设计见 doc/internal/bff/bff.md（限制关注数全量归并 + 时间游标）
+	// GetFollowingFeed（关注流）尚未实现
 
 }
 

@@ -128,14 +128,15 @@ fanout:      # 收件箱保留期清理（维护 fanout_timelines 表大小）
 | `profile_ttl` | duration | 用户资料缓存 TTL（±10% 抖动），`0` 使用默认（30m） |
 | `post_ttl` | duration | 帖子详情缓存 TTL（±10% 抖动），`0` 使用默认（30m） |
 | `null_ttl` | duration | 空哨兵 TTL（防穿透），`0` 使用默认（60s） |
-| `timeline_ttl` | duration | 作者发件箱缓存 TTL（pull 现拉加速层，`AuthorTimelineCache`），`0` 使用默认（720h = 30 天，与 `fanout.retention` 对齐：零漏前提） |
-| `timeline_capacity` | int | 发件箱缓存每作者保留的近期帖条数（最新连续后缀），`0` 使用默认（200） |
+| `timeline_ttl` | duration | 作者发件箱缓存 key TTL（pull 现拉加速层，`AuthorTimelineCache`），`0` 使用默认（720h = 30 天，与 `fanout.retention` 对齐：零漏前提，改须同步） |
+| `timeline_capacity` | int | 发件箱缓存条数保险丝（防事故刷帖撑爆内存），`0` 使用默认（5000）；窗口语义 = `fanout.retention` 时间截尾（承诺窗口内全量，短取即见底免回源），正常流量永不触发 |
 
 ### bigv — 发帖侧分流判定
 
 | 键 | 类型 | 说明 |
 | --- | --- | --- |
 | `promote_followers` | int | 大V晋升线（粉丝数 ≥ 该值写发件箱缓存走 pull，否则扇出收件箱），`0` 使用默认（5000） |
+| `mark_ttl` | duration | 大V标识 TTL（防抖动保持窗）：晋升后至少该时长维持大V供给路径，粉丝数抖动不切换供给线（发帖缓存连续）；跌破线后标识自然过期回归扇出，`0` 使用默认（7d） |
 
 ### fanout — 收件箱保留期清理
 

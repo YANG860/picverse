@@ -276,7 +276,7 @@ WHERE following_id = ?   -- "我的粉丝"列表
 ON fanout_timelines (uid, post_created_at DESC, post_id DESC)
 ```
 
-**对应代码**：`internal/discover/v1/repo.go` `FanoutRepo.ReadInbox`（GetFollowingFeed push 路径，P1 接入）
+**对应代码**：`internal/discover/v1/repo.go` `FanoutRepo.ReadInbox`（GetFollowingFeed push 路径）
 
 ```sql
 WHERE uid = ? AND (post_created_at < ? OR (post_created_at = ? AND post_id < ?))

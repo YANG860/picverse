@@ -19,7 +19,7 @@ import (
 	"gorm.io/datatypes"
 )
 
-// ErrNotImplemented 脚手架占位错误，具体实现落地后移除
+// ErrNotImplemented 尚未实现的 RPC 占位错误
 var ErrNotImplemented = errors.New("post: not implemented")
 
 // 包内 sentinel 业务分支错误：用 errors.Is 匹配，由各接口映射为可枚举业务码（见 doc/packages/errmsg/err.md）
