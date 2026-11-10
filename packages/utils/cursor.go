@@ -4,6 +4,7 @@ import (
 	commonv1 "rednote/gen/go/common/v1"
 	"rednote/packages/defaults"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -60,6 +61,38 @@ func NewOffsetCursor(nextOffset int64, limit int64) *commonv1.Cursor {
 
 	return &commonv1.Cursor{
 		Str:   strconv.FormatInt(nextOffset, 10),
+		Limit: limit,
+	}
+}
+
+// ParseMergeCursor 解析 (created_at, post_id) 复合游标（关注流 2 路归并用）：
+// str 编码 "ts:id"，空/非法回退零值（首页）；limit 归一与 ParseOffsetCursor 同口径
+func ParseMergeCursor(cursor *commonv1.Cursor) (createdAt, postID, limit int64) {
+	s := cursor.GetStr()
+	if s != "" {
+		if i := strings.IndexByte(s, ':'); i > 0 {
+			if ts, err := strconv.ParseInt(s[:i], 10, 64); err == nil {
+				if id, err := strconv.ParseInt(s[i+1:], 10, 64); err == nil {
+					createdAt, postID = ts, id
+				}
+			}
+		}
+	}
+
+	l := cursor.GetLimit()
+	if l <= 0 || l > defaults.MaxLimit {
+		l = defaults.CursorLimit
+	}
+	return createdAt, postID, l
+}
+
+// NewMergeCursor 编码 (created_at, post_id) 复合游标（关注流翻页；到底由调用方置 nil 不编码）
+func NewMergeCursor(nextCreatedAt, nextPostID, limit int64) *commonv1.Cursor {
+	if limit <= 0 || limit > defaults.MaxLimit {
+		limit = defaults.CursorLimit
+	}
+	return &commonv1.Cursor{
+		Str:   strconv.FormatInt(nextCreatedAt, 10) + ":" + strconv.FormatInt(nextPostID, 10),
 		Limit: limit,
 	}
 }

@@ -14,7 +14,7 @@ import (
 // FanoutRepo 收件箱（fanout_timelines）读写仓库接口（推拉结合的 push 路径，gorm 实现见 fanoutRepo）。
 // 一行 = 一名粉丝收件箱里的一条帖子引用；游标口径与 pull 路径共享
 // (post_created_at, post_id)（即帖子的 (created_at, id)），2 路归并按 post_id 去重。
-// 写入方为扇出消费（普通作者发帖 → 扇出粉丝收件箱），读取方为关注流 push 路径（P1）。
+// 写入方为扇出消费（普通作者发帖 → 扇出粉丝收件箱），读取方为关注流 push 路径。
 // 不做删帖级联删除：已删帖行留在收件箱，由下游（BFF 回查组装时过滤）与前端自行过滤，
 // 行随保留期清理（按 post_created_at 时间窗）回收。接口便于测试替身/mock。
 type FanoutRepo interface {
