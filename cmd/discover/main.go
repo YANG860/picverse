@@ -32,9 +32,12 @@ func main() {
 		connect.WithInterceptors(trace.NewServerInterceptor(), validate.NewInterceptor()),
 	)
 
-	// 索引同步消费者：消费 post 流消息维护 Meili posts 索引（启动即校验索引/连接，fail-fast）
-	discoverConsumer, consumerCleanup := gen.InitializeDiscoverConsumer(cfg)
-	discoverConsumer.Start()
+	// 搜推双消费者（独立 durable，失败隔离）：
+	// 索引同步维护 Meili posts 索引；关注流扇出做推拉分流（启动即校验依赖连接，fail-fast）
+	indexConsumer, indexCleanup := gen.InitializeDiscoverIndexConsumer(cfg)
+	indexConsumer.Start()
+	fanoutConsumer, fanoutCleanup := gen.InitializeFanoutConsumer(cfg)
+	fanoutConsumer.Start()
 
 	mux := http.NewServeMux()
 	mux.Handle(path, handler)
@@ -69,8 +72,10 @@ func main() {
 		log.Fatalf("优雅关闭失败: %v", err)
 	}
 
-	discoverConsumer.Close()
-	consumerCleanup()
+	fanoutConsumer.Close()
+	indexConsumer.Close()
+	fanoutCleanup()
+	indexCleanup()
 	cleanup()
 	log.Println("服务已优雅关闭")
 }

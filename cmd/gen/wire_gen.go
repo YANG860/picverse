@@ -38,12 +38,12 @@ import (
 
 func InitializeConsumer(cfg *config.Config) (*consumer.MediaConsumer, func()) {
 	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
-	gormDB, cleanup2 := db.NewPG(cfg, loggerFactoryImpl)
-	jetStreamClient, cleanup3 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
+	jetStreamClient, cleanup2 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
 	minioClient := oss.NewClient(cfg, loggerFactoryImpl)
+	gormDB, cleanup3 := db.NewPG(cfg, loggerFactoryImpl)
 	mediaRepoImpl := v1.NewMediaRepo(gormDB)
 	processedMessageRepoImpl := v1_2.NewProcessedMessageRepo(gormDB)
-	mediaConsumer := consumer.NewMediaConsumer(gormDB, jetStreamClient, minioClient, loggerFactoryImpl, cfg, mediaRepoImpl, processedMessageRepoImpl)
+	mediaConsumer := consumer.NewMediaConsumer(jetStreamClient, minioClient, loggerFactoryImpl, cfg, mediaRepoImpl, processedMessageRepoImpl)
 	return mediaConsumer, func() {
 		cleanup3()
 		cleanup2()
@@ -54,7 +54,6 @@ func InitializeConsumer(cfg *config.Config) (*consumer.MediaConsumer, func()) {
 func InitializePostConsumer(cfg *config.Config) (*consumer.PostConsumer, func()) {
 	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
 	jetStreamClient, cleanup2 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
-	minioClient := oss.NewClient(cfg, loggerFactoryImpl)
 	staticProvider := rpc.NewStaticProvider(cfg)
 	mediaServiceClient := rpc.NewMediaClient(staticProvider)
 	gormDB, cleanup3 := db.NewPG(cfg, loggerFactoryImpl)
@@ -62,7 +61,7 @@ func InitializePostConsumer(cfg *config.Config) (*consumer.PostConsumer, func())
 	cacheCache, cleanup4 := cache.NewCache(cfg, loggerFactoryImpl)
 	postEntityCacheImpl := cache.NewPostEntityCache(cacheCache, cfg, loggerFactoryImpl)
 	cachedPostRepo := v1_3.NewCachedPostRepo(postRepoImpl, postEntityCacheImpl, loggerFactoryImpl)
-	postConsumer := consumer.NewPostConsumer(jetStreamClient, minioClient, loggerFactoryImpl, cfg, mediaServiceClient, cachedPostRepo)
+	postConsumer := consumer.NewPostConsumer(jetStreamClient, loggerFactoryImpl, cfg, mediaServiceClient, cachedPostRepo)
 	return postConsumer, func() {
 		cleanup4()
 		cleanup3()
@@ -87,29 +86,50 @@ func InitializePoller(cfg *config.Config) (*poller.OutBoxPoller, func()) {
 func InitializeDiscoverServiceHandler(cfg *config.Config) (discoverv1connect.DiscoverServiceHandler, func()) {
 	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
 	meiliClient, cleanup2 := meili.NewClient(cfg, loggerFactoryImpl)
-	discoverUsecaseImpl := v1_4.NewDiscoverUsecase(loggerFactoryImpl, meiliClient)
+	gormDB, cleanup3 := db.NewPG(cfg, loggerFactoryImpl)
+	fanoutRepo := v1_4.NewFanoutRepo(gormDB)
+	cacheCache, cleanup4 := cache.NewCache(cfg, loggerFactoryImpl)
+	authorTimelineCacheImpl := cache.NewAuthorTimelineCache(cacheCache, cfg, loggerFactoryImpl)
+	discoverUsecaseImpl := v1_4.NewDiscoverUsecase(loggerFactoryImpl, meiliClient, fanoutRepo, authorTimelineCacheImpl)
 	discoverServiceHandler := v1_4.NewDiscoverServiceHandler(loggerFactoryImpl, discoverUsecaseImpl)
 	return discoverServiceHandler, func() {
+		cleanup4()
+		cleanup3()
 		cleanup2()
 		cleanup()
 	}
 }
 
-func InitializeDiscoverConsumer(cfg *config.Config) (*consumer.DiscoverConsumer, func()) {
+func InitializeDiscoverIndexConsumer(cfg *config.Config) (*consumer.DiscoverIndexConsumer, func()) {
 	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
 	jetStreamClient, cleanup2 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
 	meiliClient, cleanup3 := meili.NewClient(cfg, loggerFactoryImpl)
 	staticProvider := rpc.NewStaticProvider(cfg)
 	postServiceClient := rpc.NewPostClient(staticProvider)
-	userServiceClient := rpc.NewUserClient(staticProvider)
 	gormDB, cleanup4 := db.NewPG(cfg, loggerFactoryImpl)
+	processedMessageRepoImpl := v1_2.NewProcessedMessageRepo(gormDB)
+	discoverIndexConsumer := consumer.NewDiscoverIndexConsumer(jetStreamClient, loggerFactoryImpl, cfg, meiliClient, postServiceClient, processedMessageRepoImpl)
+	return discoverIndexConsumer, func() {
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+	}
+}
+
+func InitializeFanoutConsumer(cfg *config.Config) (*consumer.FanoutConsumer, func()) {
+	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
+	jetStreamClient, cleanup2 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
+	staticProvider := rpc.NewStaticProvider(cfg)
+	postServiceClient := rpc.NewPostClient(staticProvider)
+	userServiceClient := rpc.NewUserClient(staticProvider)
+	gormDB, cleanup3 := db.NewPG(cfg, loggerFactoryImpl)
 	fanoutRepo := v1_4.NewFanoutRepo(gormDB)
-	cacheCache, cleanup5 := cache.NewCache(cfg, loggerFactoryImpl)
+	cacheCache, cleanup4 := cache.NewCache(cfg, loggerFactoryImpl)
 	authorTimelineCacheImpl := cache.NewAuthorTimelineCache(cacheCache, cfg, loggerFactoryImpl)
 	processedMessageRepoImpl := v1_2.NewProcessedMessageRepo(gormDB)
-	discoverConsumer := consumer.NewDiscoverConsumer(jetStreamClient, loggerFactoryImpl, cfg, meiliClient, postServiceClient, userServiceClient, fanoutRepo, authorTimelineCacheImpl, processedMessageRepoImpl)
-	return discoverConsumer, func() {
-		cleanup5()
+	fanoutConsumer := consumer.NewFanoutConsumer(jetStreamClient, loggerFactoryImpl, cfg, postServiceClient, userServiceClient, fanoutRepo, authorTimelineCacheImpl, processedMessageRepoImpl)
+	return fanoutConsumer, func() {
 		cleanup4()
 		cleanup3()
 		cleanup2()

@@ -46,7 +46,8 @@ type CacheConfig struct {
 	NullTTL time.Duration `mapstructure:"null_ttl"`
 	// TimelineTTL 作者发件箱缓存 TTL（每作者近期帖窗口，pull 现拉加速层），0 使用默认 7d
 	TimelineTTL time.Duration `mapstructure:"timeline_ttl"`
-	// TimelineCapacity 发件箱缓存每作者保留的近期帖条数（最新连续后缀），0 使用默认 200
+	// TimelineCapacity 发件箱缓存条数保险丝（防事故刷帖撑爆内存）；
+	// 窗口语义 = fanout.retention 时间截尾（承诺窗口内全量，短取即见底免回源），正常永不触发，0 使用默认 5000
 	TimelineCapacity int `mapstructure:"timeline_capacity"`
 }
 
@@ -60,6 +61,9 @@ type PostConfig struct {
 type BigVConfig struct {
 	// PromoteFollowers 大V晋升线（粉丝数 ≥ 该值写发件箱缓存走 pull，否则扇出收件箱），0 使用默认 5000
 	PromoteFollowers int64 `mapstructure:"promote_followers"`
+	// MarkTTL 大V标识 TTL（防抖动保持窗）：晋升后至少该时长维持大V供给路径，
+	// 粉丝数抖动不切换供给线；跌破线后标识自然过期回归扇出，0 使用默认 7 天
+	MarkTTL time.Duration `mapstructure:"mark_ttl"`
 }
 
 // FanoutConfig 收件箱（fanout_timelines）保留期清理配置（维护表大小，见 doc/internal/discover/discover.md）
@@ -187,8 +191,15 @@ type PostConsumerConfig struct {
 	WorkingDir string `mapstructure:"working_dir"`
 }
 
-// DiscoverConsumerConfig 搜推消费者配置（索引同步/扇出，跑在 cmd/discover 进程内）
+// DiscoverConsumerConfig 搜推消费者配置：索引同步与关注流扇出拆为独立 durable consumer
+// （失败隔离：各自重试预算/死信/进度，见 doc/internal/discover/discover.md）
 type DiscoverConsumerConfig struct {
+	Index  DiscoverConsumerItem `mapstructure:"index"`
+	Fanout DiscoverConsumerItem `mapstructure:"fanout"`
+}
+
+// DiscoverConsumerItem 单个搜推消费者的 durable 名与重试上限
+type DiscoverConsumerItem struct {
 	Name     string `mapstructure:"name"`
 	MaxRetry int    `mapstructure:"max_retry"`
 }

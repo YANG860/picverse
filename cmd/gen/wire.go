@@ -182,9 +182,19 @@ func InitializeDiscoverServiceHandler(cfg *config.Config) (discoverv1connect.Dis
 	return nil, func() {}
 }
 
-func InitializeDiscoverConsumer(cfg *config.Config) (*consumer.DiscoverConsumer, func()) {
+func InitializeDiscoverIndexConsumer(cfg *config.Config) (*consumer.DiscoverIndexConsumer, func()) {
 	wire.Build(
-		consumer.NewDiscoverConsumer,
+		consumer.NewDiscoverIndexConsumer,
+		Clients,
+		Repos,
+		Middlewares,
+	)
+	return nil, func() {}
+}
+
+func InitializeFanoutConsumer(cfg *config.Config) (*consumer.FanoutConsumer, func()) {
+	wire.Build(
+		consumer.NewFanoutConsumer,
 		Discover,
 		Clients,
 		Repos,
