@@ -17,6 +17,10 @@ import (
 type MediaRepository interface {
 	// 使用事务
 	WithTX(tx *gorm.DB) MediaRepository
+	// Transaction 在事务内执行 fn，fn 拿到绑定事务的 repo（与 PostRepository.Transaction 同型）
+	Transaction(fn func(repo MediaRepository) error) error
+	// DB 返回当前绑定的 *gorm.DB（事务上下文中即事务句柄，outbox SendTX 用）
+	DB() *gorm.DB
 
 	// CreateMediaAsset 创建媒体资产
 	CreateMediaAsset(ctx context.Context, asset *models.MediaAsset) error
@@ -49,19 +53,31 @@ type MediaRepository interface {
 var _ MediaRepository = (*MediaRepoImpl)(nil)
 
 type MediaRepoImpl struct {
-	DB *gorm.DB
+	db *gorm.DB
 	q  *query.Query
 }
 
 func NewMediaRepo(db *gorm.DB) *MediaRepoImpl {
 	return &MediaRepoImpl{
-		DB: db,
+		db: db,
 		q:  query.Use(db),
 	}
 }
 
 func (r *MediaRepoImpl) WithTX(tx *gorm.DB) MediaRepository {
-	return &MediaRepoImpl{DB: tx, q: query.Use(tx)}
+	return &MediaRepoImpl{db: tx, q: query.Use(tx)}
+}
+
+// Transaction 在事务内执行 fn，fn 拿到绑定事务的 repo
+func (r *MediaRepoImpl) Transaction(fn func(repo MediaRepository) error) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		return fn(r.WithTX(tx))
+	})
+}
+
+// DB 返回当前绑定的 *gorm.DB（事务上下文中即事务句柄）
+func (r *MediaRepoImpl) DB() *gorm.DB {
+	return r.db
 }
 
 func (r *MediaRepoImpl) CreateMediaAsset(ctx context.Context, asset *models.MediaAsset) error {
@@ -110,7 +126,7 @@ func (r *MediaRepoImpl) SetMediaAssetStatus(ctx context.Context, id int64, from,
 // 原子性地更新所有资产的引用计数
 func (r *MediaRepoImpl) ModifyMediaAssetRefCount(ctx context.Context, ids []int64, deltas []int64) error {
 
-	err := r.DB.Transaction(func(tx *gorm.DB) error {
+	err := r.db.Transaction(func(tx *gorm.DB) error {
 		q := query.Use(tx)
 
 		for i := 0; i < len(ids); i++ {

@@ -61,9 +61,9 @@ func (f *fakeDedup) ExecuteIdempotent(_ context.Context, messageID int64, handle
 
 func newDerefMediaConsumer(repo v1.MediaRepository, dedup commonv1.ProcessedMessageRepository) *MediaConsumer {
 	return &MediaConsumer{
-		Consumer: Consumer{log: slog.Default()},
-		Repo:     repo,
-		Dedup:    dedup,
+		MessageLoop: &MessageLoop[*mediav1.MediaMessage]{Consumer: Consumer{log: slog.Default()}},
+		Repo:        repo,
+		Dedup:       dedup,
 	}
 }
 

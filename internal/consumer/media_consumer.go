@@ -8,10 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"rednote/config"
 	mediav1 "rednote/gen/go/media/v1"
-	"rednote/gen/query"
 	commonv1 "rednote/internal/common/v1"
 	media "rednote/internal/media/models"
 	v1 "rednote/internal/media/v1"
@@ -19,27 +17,21 @@ import (
 	"rednote/packages/logger"
 	"rednote/packages/mq"
 	"rednote/packages/oss"
-	"rednote/packages/trace"
 	"rednote/packages/utils"
-	"runtime/debug"
-	"strconv"
-	"strings"
 
 	"github.com/bwmarrin/snowflake"
 	"github.com/chai2010/webp"
 	"github.com/disintegration/imaging"
-	"github.com/nats-io/nats.go/jetstream"
-	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 
 	_ "golang.org/x/image/webp"
 )
 
 type MediaConsumer struct {
-	Consumer
-	Repo       v1.MediaRepository
-	Dedup      commonv1.ProcessedMessageRepository
-	ConsumeCtx jetstream.ConsumeContext
+	*MessageLoop[*mediav1.MediaMessage]
+	Repo  v1.MediaRepository
+	S3    oss.S3Repo
+	Dedup commonv1.ProcessedMessageRepository
 }
 
 var (
@@ -51,158 +43,43 @@ var (
 	}
 )
 
-func NewMediaConsumer(db *gorm.DB, mqClient mq.MQClient, s3 oss.S3Repo, lf logger.LoggerFactory, cfg *config.Config, repo v1.MediaRepository, dedup commonv1.ProcessedMessageRepository) *MediaConsumer {
-	ctx, cancel := context.WithCancel(context.Background())
-	return &MediaConsumer{
-		Consumer: Consumer{
-			name:       cfg.Consumer.Media.Name,
-			maxRetry:   cfg.Consumer.Media.MaxRetry,
-			workingDir: cfg.Consumer.Media.WorkingDir,
-
-			DB:  db,
-			q:   query.Use(db),
-			MQ:  mqClient,
-			S3:  s3,
-			log: lf.GetLoggerOf("media_consumer"),
-
-			ctx:    ctx,
-			cancel: cancel,
-		},
-		Repo:  repo,
-		Dedup: dedup,
-	}
-}
-
-func (c *MediaConsumer) Start() {
-
-	c.log.Info("starting media consumer...")
-	_, err := os.Stat(c.workingDir)
-	if os.IsNotExist(err) {
-		err := os.MkdirAll(c.workingDir, 0755)
-		if err != nil {
-			c.log.Error("failed to create working directory", "error", err)
-			panic(err)
-		}
-	}
-
-	consumer, err := c.MQ.GetStream().CreateOrUpdateConsumer(c.ctx,
+func NewMediaConsumer(mqClient mq.MQClient, s3 oss.S3Repo, lf logger.LoggerFactory, cfg *config.Config, repo v1.MediaRepository, dedup commonv1.ProcessedMessageRepository) *MediaConsumer {
+	c := &MediaConsumer{Repo: repo, S3: s3, Dedup: dedup}
+	c.MessageLoop = NewMessageLoop(
+		newConsumer(cfg.Consumer.Media.Name, cfg.Consumer.Media.MaxRetry, cfg.Consumer.Media.WorkingDir,
+			mqClient, lf, "media_consumer"),
 		defaults.MediaStream,
-		jetstream.ConsumerConfig{
-			Name:    c.name,
-			Durable: c.name,
-
-			DeliverPolicy: jetstream.DeliverAllPolicy,
-			AckPolicy:     jetstream.AckExplicitPolicy,
-
-			MaxDeliver: c.maxRetry,
-		})
-	if err != nil {
-		c.log.Error("failed to create or update consumer", "error", err)
-		panic(err)
-	}
-
-	consumeCtx, err := consumer.Consume(c.HandleMessage)
-	if err != nil {
-		panic(err)
-	}
-	c.ConsumeCtx = consumeCtx
-	c.log.Info("media consumer started")
+		func() *mediav1.MediaMessage { return &mediav1.MediaMessage{} },
+		c.dispatch,
+	)
+	return c
 }
 
-func (c *MediaConsumer) HandleMessage(msg jetstream.Msg) {
-
-	traceID := msg.Headers().Get(defaults.TraceIDKey)
-	sendAt := msg.Headers().Get(defaults.SendAtKey)
-	id := msg.Headers().Get(defaults.MessageIDKey)
-	ctx := trace.WithTraceID(c.ctx, traceID)
-
-	defer func() {
-		if r := recover(); r != nil {
-			c.log.Error("panic occurred",
-				"trace_id", traceID,
-				"send_at", sendAt,
-				"id", id,
-				"error", r,
-				"stack", debug.Stack(),
-			)
-		}
-	}()
-
-	var err error
-	var ack bool
-
-	m := &mediav1.MediaMessage{}
-	err = proto.Unmarshal(msg.Data(), m)
-	if err != nil {
-		_ = msg.Term()
-		c.log.Error("failed to unmarshal media message",
-			"id", id,
-			"trace_id", traceID,
-			"send_at", sendAt,
-			"error", err,
-		)
-
-		return
-	}
-
-	msgType := strings.TrimPrefix(fmt.Sprintf("%T", m.Payload), "*mediav1.MediaMessage_")
+// dispatch media 消息分发（oneof → 业务 handler）；错误分类语义见 utils.go
+func (c *MediaConsumer) dispatch(ctx context.Context, m *mediav1.MediaMessage, messageID string) (ack bool, err error) {
 	switch message := m.Payload.(type) {
 	case *mediav1.MediaMessage_DeleteMedia:
-		ack, err = c.HandleDeleteMedia(ctx, message.DeleteMedia)
+		return c.HandleDeleteMedia(ctx, message.DeleteMedia)
 	case *mediav1.MediaMessage_UploadMedia:
-		ack, err = c.HandleUploadMedia(ctx, message.UploadMedia)
+		return c.HandleUploadMedia(ctx, message.UploadMedia)
 	case *mediav1.MediaMessage_AuditMedia:
-		ack, err = c.HandleAuditMedia(ctx, message.AuditMedia)
+		return c.HandleAuditMedia(ctx, message.AuditMedia)
 	case *mediav1.MediaMessage_ProcessMedia:
-		ack, err = c.HandleProcessMedia(ctx, message.ProcessMedia)
+		return c.HandleProcessMedia(ctx, message.ProcessMedia)
 	case *mediav1.MediaMessage_PublishMedia:
-		ack, err = c.HandlePublishMedia(ctx, message.PublishMedia)
+		return c.HandlePublishMedia(ctx, message.PublishMedia)
 	case *mediav1.MediaMessage_BanMedia:
-		ack, err = c.HandleBanMedia(ctx, message.BanMedia)
+		return c.HandleBanMedia(ctx, message.BanMedia)
 	case *mediav1.MediaMessage_DerefMedia:
-		ack, err = c.HandleDerefMedia(ctx, message.DerefMedia, id)
-
+		return c.HandleDerefMedia(ctx, message.DerefMedia, messageID)
 	default:
-		ack = true
-		err = fmt.Errorf("unhandled media message")
+		return ACK, fmt.Errorf("unhandled media message")
 	}
-
-	if err != nil {
-		c.log.Error("failed to handle media message",
-			"id", id,
-			"type", msgType,
-			"trace_id", traceID,
-			"send_at", sendAt,
-			"error", err,
-		)
-	} else {
-		c.log.Info("successfully handled media message",
-			"id", id,
-			"type", msgType,
-			"trace_id", traceID,
-			"send_at", sendAt,
-		)
-	}
-
-	// Ack/Nak 失败不吞错：Ack 失败会导致消息重投（AtLeastOnce，无去重时有害），需可追溯
-	if ack {
-		if ackErr := msg.Ack(); ackErr != nil {
-			c.log.Warn("message ack failed，将重投", "id", id, "error", ackErr)
-		}
-	} else if nakErr := msg.Nak(); nakErr != nil {
-		c.log.Warn("message nak failed", "id", id, "error", nakErr)
-	}
-
-}
-
-func (c *MediaConsumer) Close() {
-	c.cancel()
-	c.ConsumeCtx.Stop()
 }
 
 func (c *MediaConsumer) HandleUploadMedia(ctx context.Context, message *mediav1.UploadMedia) (ack bool, err error) {
 
-	assetID, err := snowflake.ParseString(message.GetAssetId())
+	assetID, err := ParseSnowflakeID(message.GetAssetId(), "asset_id")
 	if err != nil {
 		return ACK, err
 	}
@@ -302,8 +179,8 @@ func (c *MediaConsumer) SetMediaStatusAuditing(ctx context.Context, assetID int6
 		return RETRY, err
 	}
 
-	err = c.DB.Transaction(func(tx *gorm.DB) error {
-		info, err := c.Repo.WithTX(tx).SetMediaAssetStatus(ctx, assetID,
+	err = c.Repo.Transaction(func(repo v1.MediaRepository) error {
+		info, err := repo.SetMediaAssetStatus(ctx, assetID,
 			mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_UPLOADING,
 			mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_AUDITING,
 		)
@@ -315,7 +192,7 @@ func (c *MediaConsumer) SetMediaStatusAuditing(ctx context.Context, assetID int6
 			return nil
 		}
 
-		return c.MQ.SendTX(ctx, mqMsg, tx)
+		return c.MQ.SendTX(ctx, mqMsg, repo.DB())
 	})
 
 	if err != nil {
@@ -329,7 +206,7 @@ func (c *MediaConsumer) HandleAuditMedia(ctx context.Context, message *mediav1.A
 	// Implementation for handling audit media message
 	// TODO: 添加实际审查逻辑
 
-	assetID, err := snowflake.ParseString(message.GetAssetId())
+	assetID, err := ParseSnowflakeID(message.GetAssetId(), "asset_id")
 	if err != nil {
 		return ACK, err
 	}
@@ -356,8 +233,8 @@ func (c *MediaConsumer) SetMediaStatusProcessing(ctx context.Context, assetID in
 		return RETRY, err
 	}
 
-	err = c.DB.Transaction(func(tx *gorm.DB) error {
-		info, err := c.Repo.WithTX(tx).SetMediaAssetStatus(ctx, assetID,
+	err = c.Repo.Transaction(func(repo v1.MediaRepository) error {
+		info, err := repo.SetMediaAssetStatus(ctx, assetID,
 			mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_AUDITING,
 			mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_PROCESSING,
 		)
@@ -369,7 +246,7 @@ func (c *MediaConsumer) SetMediaStatusProcessing(ctx context.Context, assetID in
 			return nil
 		}
 
-		return c.MQ.SendTX(ctx, mqMsg, tx)
+		return c.MQ.SendTX(ctx, mqMsg, repo.DB())
 	})
 
 	if err != nil {
@@ -381,7 +258,7 @@ func (c *MediaConsumer) SetMediaStatusProcessing(ctx context.Context, assetID in
 
 func (c *MediaConsumer) HandleProcessMedia(ctx context.Context, message *mediav1.ProcessMedia) (ack bool, err error) {
 
-	assetID, err := snowflake.ParseString(message.GetAssetId())
+	assetID, err := ParseSnowflakeID(message.GetAssetId(), "asset_id")
 	if err != nil {
 		return ACK, err
 	}
@@ -524,8 +401,8 @@ func (c *MediaConsumer) SetMediaStatusActive(ctx context.Context, assetID int64,
 		return RETRY, err
 	}
 
-	err = c.DB.Transaction(func(tx *gorm.DB) error {
-		info, err := c.Repo.WithTX(tx).SetMediaAssetStatus(ctx, assetID,
+	err = c.Repo.Transaction(func(repo v1.MediaRepository) error {
+		info, err := repo.SetMediaAssetStatus(ctx, assetID,
 			mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_PROCESSING,
 			mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_ACTIVE,
 		)
@@ -537,7 +414,7 @@ func (c *MediaConsumer) SetMediaStatusActive(ctx context.Context, assetID int64,
 			return nil
 		}
 
-		return c.MQ.SendTX(ctx, mqMsg, tx)
+		return c.MQ.SendTX(ctx, mqMsg, repo.DB())
 	})
 
 	if err != nil {
@@ -557,7 +434,7 @@ func (c *MediaConsumer) HandlePublishMedia(ctx context.Context, message *mediav1
 }
 
 func (c *MediaConsumer) HandleDeleteMedia(ctx context.Context, message *mediav1.DeleteMedia) (ack bool, err error) {
-	assetID, err := snowflake.ParseString(message.GetAssetId())
+	assetID, err := ParseSnowflakeID(message.GetAssetId(), "asset_id")
 	if err != nil {
 		return ACK, err
 	}
@@ -592,12 +469,12 @@ func (c *MediaConsumer) HandleDeleteMedia(ctx context.Context, message *mediav1.
 		}
 	}
 
-	err = c.DB.Transaction(func(tx *gorm.DB) error {
-		_, err := c.Repo.WithTX(tx).DeleteMediaFiles(ctx, assetID.Int64())
+	err = c.Repo.Transaction(func(repo v1.MediaRepository) error {
+		_, err := repo.DeleteMediaFiles(ctx, assetID.Int64())
 		if err != nil {
 			return err
 		}
-		_, err = c.Repo.WithTX(tx).DeleteMediaAssets(ctx, []int64{assetID.Int64()})
+		_, err = repo.DeleteMediaAssets(ctx, []int64{assetID.Int64()})
 		if err != nil {
 			return err
 		}
@@ -611,7 +488,7 @@ func (c *MediaConsumer) HandleDeleteMedia(ctx context.Context, message *mediav1.
 }
 
 func (c *MediaConsumer) HandleBanMedia(ctx context.Context, message *mediav1.BanMedia) (ack bool, err error) {
-	assetID, err := snowflake.ParseString(message.GetAssetId())
+	assetID, err := ParseSnowflakeID(message.GetAssetId(), "asset_id")
 	if err != nil {
 		return ACK, err
 	}
@@ -653,18 +530,18 @@ func (c *MediaConsumer) HandleBanMedia(ctx context.Context, message *mediav1.Ban
 // 投递语义 AtLeastOnce：经 consumer_processed_messages 同事务去重登记（ApplyDerefIdempotent），
 // 重复投递跳过、乱序无害（delta 可交换），恰好一次效果。
 func (c *MediaConsumer) HandleDerefMedia(ctx context.Context, message *mediav1.DerefMedia, messageID string) (ack bool, err error) {
-	msgID, err := strconv.ParseInt(messageID, 10, 64)
+	msgID, err := ParseMessageID(messageID)
 	if err != nil {
 		// message_id 缺失/非法：不减数不登记，RETRY 等正确消息（宁可重试不可错减）
-		return RETRY, fmt.Errorf("invalid message id %q: %w", messageID, err)
+		return RETRY, err
 	}
-	assetID, err := snowflake.ParseString(message.GetAssetId())
+	assetID, err := ParseSnowflakeID(message.GetAssetId(), "asset_id")
 	if err != nil {
 		// 非法资产 ID 不可恢复，ACK 丢弃（与 HandleDeleteMedia 一致）
 		return ACK, err
 	}
 
-	// 幂等执行模板（共用去重机制）：去重登记与计数变更同事务，恰好一次效果
+	// 幂等执行（共用去重机制）：去重登记与计数变更同事务，恰好一次效果；重复投递跳过、乱序无害
 	applied, err := c.Dedup.ExecuteIdempotent(ctx, msgID, "deref_media", func(tx *gorm.DB) error {
 		return c.Repo.WithTX(tx).ModifyMediaAssetRefCount(ctx, []int64{assetID.Int64()}, []int64{-1})
 	})

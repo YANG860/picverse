@@ -3,7 +3,6 @@ package consumer
 import (
 	"context"
 	"fmt"
-	"os"
 	"rednote/config"
 	mediav1 "rednote/gen/go/media/v1"
 	"rednote/gen/go/media/v1/mediav1connect"
@@ -12,165 +11,48 @@ import (
 	"rednote/packages/defaults"
 	"rednote/packages/logger"
 	"rednote/packages/mq"
-	"rednote/packages/oss"
-	"rednote/packages/trace"
-	"runtime/debug"
 	"strconv"
-	"strings"
-
-	"github.com/bwmarrin/snowflake"
-	"github.com/nats-io/nats.go/jetstream"
-	"google.golang.org/protobuf/proto"
 )
 
 type PostConsumer struct {
-	Consumer
+	*MessageLoop[*postv1.PostMessage]
 	Repo         v1.PostRepository
 	MediaService mediav1connect.MediaServiceClient
-	ConsumeCtx   jetstream.ConsumeContext
 }
 
-func NewPostConsumer(mqClient mq.MQClient, s3 oss.S3Repo, lf logger.LoggerFactory, cfg *config.Config, mediaService mediav1connect.MediaServiceClient, repo v1.PostRepository) *PostConsumer {
-	ctx, cancel := context.WithCancel(context.Background())
-	return &PostConsumer{
-		Consumer: Consumer{
-			name:       cfg.Consumer.Post.Name,
-			maxRetry:   cfg.Consumer.Post.MaxRetry,
-			workingDir: cfg.Consumer.Post.WorkingDir,
-
-			MQ:  mqClient,
-			S3:  s3,
-			log: lf.GetLoggerOf("post_consumer"),
-
-			ctx:    ctx,
-			cancel: cancel,
-		},
+func NewPostConsumer(mqClient mq.MQClient, lf logger.LoggerFactory, cfg *config.Config, mediaService mediav1connect.MediaServiceClient, repo v1.PostRepository) *PostConsumer {
+	c := &PostConsumer{
 		Repo:         repo,
 		MediaService: mediaService,
 	}
-}
-
-func (c *PostConsumer) Start() {
-
-	c.log.Info("starting post consumer...")
-	_, err := os.Stat(c.workingDir)
-	if os.IsNotExist(err) {
-		err := os.MkdirAll(c.workingDir, 0755)
-		if err != nil {
-			c.log.Error("failed to create working directory", "error", err)
-			panic(err)
-		}
-	}
-
-	consumer, err := c.MQ.GetStream().CreateOrUpdateConsumer(c.ctx,
+	c.MessageLoop = NewMessageLoop(
+		newConsumer(cfg.Consumer.Post.Name, cfg.Consumer.Post.MaxRetry, cfg.Consumer.Post.WorkingDir,
+			mqClient, lf, "post_consumer"),
 		defaults.PostStream,
-		jetstream.ConsumerConfig{
-			Name:    c.name,
-			Durable: c.name,
-
-			DeliverPolicy: jetstream.DeliverAllPolicy,
-			AckPolicy:     jetstream.AckExplicitPolicy,
-
-			MaxDeliver: c.maxRetry,
-		})
-	if err != nil {
-		c.log.Error("failed to create or update consumer", "error", err)
-		panic(err)
-	}
-
-	consumeCtx, err := consumer.Consume(c.HandleMessage)
-	if err != nil {
-		panic(err)
-	}
-	c.ConsumeCtx = consumeCtx
-	c.log.Info("post consumer started")
+		func() *postv1.PostMessage { return &postv1.PostMessage{} },
+		c.dispatch,
+	)
+	return c
 }
 
-func (c *PostConsumer) HandleMessage(msg jetstream.Msg) {
-
-	traceID := msg.Headers().Get(defaults.TraceIDKey)
-	sendAt := msg.Headers().Get(defaults.SendAtKey)
-	id := msg.Headers().Get(defaults.MessageIDKey)
-	ctx := trace.WithTraceID(c.ctx, traceID)
-
-	defer func() {
-		if r := recover(); r != nil {
-			c.log.Error("panic occurred",
-				"trace_id", traceID,
-				"send_at", sendAt,
-				"id", id,
-				"error", r,
-				"stack", debug.Stack(),
-			)
-		}
-	}()
-
-	var err error
-	var ack bool
-
-	m := &postv1.PostMessage{}
-	err = proto.Unmarshal(msg.Data(), m)
-	if err != nil {
-		_ = msg.Term()
-		c.log.Error("failed to unmarshal post message",
-			"id", id,
-			"trace_id", traceID,
-			"send_at", sendAt,
-			"error", err,
-		)
-		return
-	}
-
-	msgType := strings.TrimPrefix(fmt.Sprintf("%T", m.Payload), "*postv1.PostMessage_")
+// dispatch post 消息分发（oneof → 业务 handler）；错误分类语义见 utils.go
+func (c *PostConsumer) dispatch(ctx context.Context, m *postv1.PostMessage, _ string) (ack bool, err error) {
 	switch message := m.Payload.(type) {
 	case *postv1.PostMessage_AuditPost:
-		ack, err = c.handleAuditPost(ctx, message.AuditPost)
+		return c.handleAuditPost(ctx, message.AuditPost)
 	case *postv1.PostMessage_PublishPost:
-		ack, err = c.handlePublishPost(ctx, message.PublishPost)
+		return c.handlePublishPost(ctx, message.PublishPost)
 	case *postv1.PostMessage_BanPost:
-		ack, err = c.handleBanPost(ctx, message.BanPost)
+		return c.handleBanPost(ctx, message.BanPost)
 	case *postv1.PostMessage_DeletePost:
-		ack, err = c.handleDeletePost(ctx, message.DeletePost)
+		return c.handleDeletePost(ctx, message.DeletePost)
 	default:
-		ack = true
-		err = fmt.Errorf("unhandled post message")
+		return ACK, fmt.Errorf("unhandled post message")
 	}
-
-	if err != nil {
-		c.log.Error("failed to handle post message",
-			"id", id,
-			"type", msgType,
-			"trace_id", traceID,
-			"send_at", sendAt,
-			"error", err,
-		)
-	} else {
-		c.log.Info("successfully handled post message",
-			"id", id,
-			"type", msgType,
-			"trace_id", traceID,
-			"send_at", sendAt,
-		)
-	}
-
-	// Ack/Nak 失败不吞错：Ack 失败会导致消息重投（AtLeastOnce），需可追溯
-	if ack {
-		if ackErr := msg.Ack(); ackErr != nil {
-			c.log.Warn("message ack failed，将重投", "id", id, "error", ackErr)
-		}
-	} else if nakErr := msg.Nak(); nakErr != nil {
-		c.log.Warn("message nak failed", "id", id, "error", nakErr)
-	}
-
-}
-
-func (c *PostConsumer) Close() {
-	c.cancel()
-	c.ConsumeCtx.Stop()
 }
 
 func (c *PostConsumer) handleAuditPost(ctx context.Context, msg *postv1.AuditPost) (ack bool, err error) {
-	postID, err := snowflake.ParseString(msg.PostId)
+	postID, err := ParseSnowflakeID(msg.PostId, "post_id")
 	if err != nil {
 		return ACK, err
 	}
@@ -241,12 +123,12 @@ func (c *PostConsumer) handlePublishPost(ctx context.Context, msg *postv1.Publis
 // 与其媒体关联，并按被删关联逐槽位写 outbox 卸载消息（deref_media → media consumer 递减引用计数），
 // 计数回收与删除同事务必达不漏；重复投递时 0 行命中即幂等成功（不重复发消息/减计数）。
 func (c *PostConsumer) handleDeletePost(ctx context.Context, msg *postv1.DeletePost) (ack bool, err error) {
-	postID, err := snowflake.ParseString(msg.PostId)
+	postID, err := ParseSnowflakeID(msg.PostId, "post_id")
 	if err != nil {
 		return ACK, err
 	}
 
-	authorID, err := snowflake.ParseString(msg.AuthorId)
+	authorID, err := ParseSnowflakeID(msg.AuthorId, "author_id")
 	if err != nil {
 		return ACK, err
 	}

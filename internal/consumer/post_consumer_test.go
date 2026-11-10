@@ -72,8 +72,8 @@ func derefAssetIDs(t *testing.T, c *testmq.Client) []string {
 
 func newDeletePostConsumer(repo v1.PostRepository, mqClient mq.MQClient) *PostConsumer {
 	return &PostConsumer{
-		Consumer: Consumer{MQ: mqClient, log: slog.Default()},
-		Repo:     repo,
+		MessageLoop: &MessageLoop[*postv1.PostMessage]{Consumer: Consumer{MQ: mqClient, log: slog.Default()}},
+		Repo:        repo,
 	}
 }
 
