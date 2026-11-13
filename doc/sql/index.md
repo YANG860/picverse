@@ -12,6 +12,7 @@
 | `006_create_consumer_dedup_tables.sql` | 消费端幂等去重表（processed_messages）建表 DDL |
 | `007_create_post_interaction_tables.sql` | post 互动表（post_likes、post_favourites）建表 DDL 及约束 |
 | `009_create_fanout_tables.sql` | 关注流扇出收件箱（fanout_timelines）建表 DDL 及索引 |
+| `010_create_post_comment_tables.sql` | post 评论表（post_comments）建表 DDL 及索引 |
 
 > **文件组织**：按模块组织，一个模块一个文件 = 建表 + 索引。
 > 所有脚本幂等（`IF NOT EXISTS`），按文件名序执行，由 `scripts/dbsync`、`scripts/dbinit`、
@@ -21,7 +22,7 @@
 
 ## 数据模型总览
 
-共 **11 张表**，时间字段为 unix 毫秒；除 `fanout_timelines`（(uid, post_id) 复合主键，幂等扇出）外均使用雪花 ID 作为主键：
+共 **12 张表**，时间字段为 unix 毫秒；除 `fanout_timelines`（(uid, post_id) 复合主键，幂等扇出）外均使用雪花 ID 作为主键：
 
 | 表名 | 用途 | 模型来源 |
 | ------ | ------ | ---------- |
@@ -37,6 +38,7 @@
 | `post_likes` | 帖子点赞明细（一行 = 一赞，行数即 like_count） | `internal/post/models/models.go` |
 | `post_favourites` | 帖子收藏明细（一行 = 一藏） | `internal/post/models/models.go` |
 | `fanout_timelines` | 关注流扇出收件箱（推拉结合 push 路径，复合主键） | `internal/discover/models/models.go` |
+| `post_comments` | 帖子评论（一级评论 + 楼内回复同表，NORMAL 行数即 comment_count） | `internal/post/models/models.go` |
 
 ---
 
@@ -308,6 +310,61 @@ WHERE ctid IN (
 
 ---
 
+### post_comments（3 个索引，`010_create_post_comment_tables.sql`）
+
+#### 16. `idx_post_comments_post_root` — 帖子一级评论游标分页
+
+```sql
+ON post_comments (post_id, root_id, created_at DESC)
+```
+
+**对应查询**：
+
+```sql
+WHERE post_id = ? AND root_id = 0 AND status = 1 AND created_at < ?
+ORDER BY created_at DESC LIMIT ?
+```
+
+**依据**：评论区核心读路径。post_id + root_id 两列等值过滤在最左（root_id=0 即一级评论的哨兵口径，
+见表注释），created_at 范围过滤/排序殿后，索引序与排序序一致，keyset 翻页免 filesort。
+
+---
+
+#### 17. `idx_post_comments_root` — 楼内回复游标分页 + 级联软删/计数回收
+
+```sql
+ON post_comments (root_id, created_at DESC)
+```
+
+**对应查询**：
+
+```sql
+WHERE root_id = ? AND status = 1 AND created_at < ? ORDER BY created_at DESC LIMIT ?   -- 楼内回复翻页
+WHERE root_id = ? AND status = 1                                                     -- 级联软删整楼 / 楼层回复计数
+```
+
+**依据**：楼中楼两段式查询的第二段（root_id = 楼层 id 单列等值），同时服务删一级评论的级联软删与
+reply_count 维护。与索引 16 不冗余：16 的最左前缀是 (post_id, root_id)，服务不了按 root_id 的单列反查。
+
+---
+
+#### 18. `idx_post_comments_user` — 用户评论列表（v2 预留）
+
+```sql
+ON post_comments (user_id, created_at DESC)
+```
+
+**对应查询**（v2 "我的评论"，本版本无消费查询）：
+
+```sql
+WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ?
+```
+
+**依据**：对齐 `007` 互动明细表预留索引惯例（idx_post_likes_user / idx_post_favourites_user 同款）：
+"我的评论"查询一旦落地即免补索引，(user_id, created_at DESC) 复合序直接满足时间游标翻页。
+
+---
+
 ## 索引总结表
 
 | # | 索引名 | 表 | 列 | 类型 | 核心查询 |
@@ -327,6 +384,9 @@ WHERE ctid IN (
 | 13 | `idx_user_follows_following_id` | user_follows | following_id | B-tree | 粉丝列表 |
 | 14 | `idx_fanout_timelines_uid_cursor` | fanout_timelines | uid, post_created_at DESC, post_id DESC | B-tree | 收件箱 keyset 分页 |
 | 15 | `idx_fanout_timelines_post_created_at` | fanout_timelines | post_created_at | B-tree | 保留期清理 |
+| 16 | `idx_post_comments_post_root` | post_comments | post_id, root_id, created_at DESC | B-tree | 一级评论游标分页 |
+| 17 | `idx_post_comments_root` | post_comments | root_id, created_at DESC | B-tree | 楼内回复分页 + 级联软删 |
+| 18 | `idx_post_comments_user` | post_comments | user_id, created_at DESC | B-tree | 用户评论列表（v2 预留） |
 
 ## 设计原则
 
