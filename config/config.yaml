@@ -73,6 +73,26 @@ fanout:
   retention: 720h        # 保留期按帖子时间（post_created_at），30 天；过期行由清理任务回收
   cleanup_interval: 1h   # 清理任务运行周期
 
+hot:
+  # 热榜池（rn:v1:hot:posts）维护任务与热度分（doc/internal/discover/plan_recommend_hot.md）
+  refresh_interval: 10m  # 维护周期（整池重建：入池/算分/淘汰/TTL 续期）
+  window: 168h           # 候选时间窗（7 天；窗口外帖子自然出池）
+  ttl: 30m               # 池 key TTL 兜底（维护停摆消亡，随写入续期）
+  hard_cap: 500000       # 池容量事故保险丝（候选超限按分数截尾，正常永不触发）
+  gravity: 1.5           # 热度分时间衰减陡度（越大越偏重新帖）
+  weights:               # 热度分信号权重（engagement = Σ w·ln(1+count)）
+    like: 1.0
+    favourite: 1.5
+    comment: 2.0
+    view: 0.1
+
+recommend:
+  # 推荐流（GetRecommendFeed）参数（doc/internal/discover/plan_recommend_hot.md）
+  seen_ttl: 720h              # seen 已曝光去重窗口（30 天；账本 key TTL 随记账滚动续期）
+  scan_batch_factor: 3        # 候选扫描批次 = limit × factor（预留 seen/打散过滤跳过）
+  scatter_window: 3           # 同作者打散滑窗（窗内同作者 ≤ 1）
+  explore_ratio: 0.1          # 探索位比例（每页随机采样条数占比，至少 1 条）
+
 jwt:
   secret: "a8de244a1570e97d9e07f9144c78ca7bfe2ed303c7846c32f1201a2d22e2184e"  # HMAC-SHA256 密钥，必填
   issuer: "rednote"

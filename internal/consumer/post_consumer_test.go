@@ -25,12 +25,16 @@ import (
 type fakePostRepo struct {
 	v1.PostRepository
 
-	deletePostErr   error
-	deleteMediasErr error
-	assetIDs        []int64
+	deletePostErr     error
+	deleteMediasErr   error
+	deleteCommentsErr error
+	assetIDs          []int64
 
-	gotDeletePost   bool
-	gotDeleteMedias bool
+	gotDeletePost     bool
+	gotDeleteMedias   bool
+	gotDeleteComments bool
+	deleteCommentsN   int
+	commentsPostID    int64
 }
 
 func (f *fakePostRepo) Transaction(fn func(repo v1.PostRepository) error) error {
@@ -55,6 +59,16 @@ func (f *fakePostRepo) DeletePostMedias(_ context.Context, _ int64) ([]int64, er
 	ids := f.assetIDs
 	f.assetIDs = nil
 	return ids, nil
+}
+
+func (f *fakePostRepo) DeletePostComments(_ context.Context, postID int64) (gen.ResultInfo, error) {
+	f.gotDeleteComments = true
+	f.deleteCommentsN++
+	f.commentsPostID = postID
+	if f.deleteCommentsErr != nil {
+		return gen.ResultInfo{}, f.deleteCommentsErr
+	}
+	return gen.ResultInfo{}, nil
 }
 
 // derefAssetIDs 解出 media 流上的 DerefMedia 消息资产 ID 序列
@@ -91,6 +105,8 @@ func TestHandleDeletePost(t *testing.T) {
 		assert.True(t, ack)
 		assert.True(t, repo.gotDeletePost)
 		assert.True(t, repo.gotDeleteMedias)
+		assert.True(t, repo.gotDeleteComments, "删帖连带物理回收评论")
+		assert.Equal(t, int64(9001), repo.commentsPostID)
 		assert.Equal(t, []string{"6001", "6002"}, derefAssetIDs(t, mqc))
 
 		sent := mqc.SentBySubject(defaults.MediaMessageStream)
@@ -111,6 +127,7 @@ func TestHandleDeletePost(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, ack)
 		assert.Len(t, mqc.SentBySubject(defaults.MediaMessageStream), 1, "第二次不重复发卸载消息")
+		assert.Equal(t, 2, repo.deleteCommentsN, "每次投递都执行评论回收（DB 侧 0 行命中幂等）")
 	})
 
 	t.Run("物理删除失败 RETRY 不发消息", func(t *testing.T) {
@@ -126,6 +143,17 @@ func TestHandleDeletePost(t *testing.T) {
 
 	t.Run("关联删除失败 RETRY 不发消息", func(t *testing.T) {
 		repo := &fakePostRepo{assetIDs: []int64{6001}, deleteMediasErr: errors.New("db down")}
+		mqc := testmq.New()
+		c := newDeletePostConsumer(repo, mqc)
+
+		ack, err := c.handleDeletePost(context.Background(), msg)
+		assert.False(t, ack, "RETRY")
+		assert.Error(t, err)
+		assert.Empty(t, mqc.Sent())
+	})
+
+	t.Run("评论回收失败 RETRY 不发消息（同事务回滚，不漏清）", func(t *testing.T) {
+		repo := &fakePostRepo{assetIDs: []int64{6001}, deleteCommentsErr: errors.New("db down")}
 		mqc := testmq.New()
 		c := newDeletePostConsumer(repo, mqc)
 

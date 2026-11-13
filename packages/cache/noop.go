@@ -47,9 +47,35 @@ func (Noop) ZAdd(ctx context.Context, key string, members []ZMember, ttl time.Du
 	return nil
 }
 
+// ZAddNX 空转
+func (Noop) ZAddNX(ctx context.Context, key string, members []ZMember, ttl time.Duration) error {
+	return nil
+}
+
 // ZRevRangeByScore 恒空（无缓存 → 调用方按 miss 回源）
 func (Noop) ZRevRangeByScore(ctx context.Context, key string, max, min float64, count int) ([]ZMember, error) {
 	return nil, nil
+}
+
+// ZRevRange 恒空（无缓存 → 调用方按 miss 回源）
+func (Noop) ZRevRange(ctx context.Context, key string, start, stop int) ([]ZMember, error) {
+	return nil, nil
+}
+
+// ZRandMember 恒空（无缓存 → 调用方按 miss 回源）
+func (Noop) ZRandMember(ctx context.Context, key string, count int) ([]ZMember, error) {
+	return nil, nil
+}
+
+// ZMScore 全 false（无缓存 = 全未曝光，调用方全量放行）
+func (Noop) ZMScore(ctx context.Context, key string, members []string) ([]bool, error) {
+	out := make([]bool, len(members))
+	return out, nil
+}
+
+// Rename 空转
+func (Noop) Rename(ctx context.Context, src, dst string) error {
+	return nil
 }
 
 // ZRemRangeByRank 空转

@@ -28,6 +28,24 @@ message GetFollowingFeedResponse {
   common.v1.Cursor cursor = 4;
 }
 
+// ==================== 热榜 ====================
+
+// GetHotPostsRequest 热门帖子榜取数（内部接口，BFF 调用）：热池全序翻页。
+// 榜单语义：可重复看的排行，不做 seen 去重/个性化；不做删帖剔除（BFF 回查过滤兜底）。
+message GetHotPostsRequest {
+  common.v1.Cursor cursor = 1;
+}
+
+message GetHotPostsResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 已按热度降序的帖子 ID
+  repeated string post_ids = 3;
+  // 翻页到底/暂无内容：post_ids 为空且 cursor 为空
+  common.v1.Cursor cursor = 4;
+}
+
 // ==================== 推荐流 ====================
 
 // GetRecommendFeedRequest 推荐流取数（内部接口，BFF 调用）：

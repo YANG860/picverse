@@ -48,6 +48,15 @@ func (s *DiscoverServiceHandler) GetFollowingFeed(ctx context.Context, req *conn
 	return connect.NewResponse(resp), nil
 }
 
+// GetHotPosts 热榜取数
+func (s *DiscoverServiceHandler) GetHotPosts(ctx context.Context, req *connect.Request[discoverv1.GetHotPostsRequest]) (*connect.Response[discoverv1.GetHotPostsResponse], error) {
+	resp, err := s.Biz.GetHotPosts(ctx, req.Msg)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
+}
+
 // GetRecommendFeed 推荐流取数
 func (s *DiscoverServiceHandler) GetRecommendFeed(ctx context.Context, req *connect.Request[discoverv1.GetRecommendFeedRequest]) (*connect.Response[discoverv1.GetRecommendFeedResponse], error) {
 	resp, err := s.Biz.GetRecommendFeed(ctx, req.Msg)

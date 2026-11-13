@@ -20,6 +20,8 @@ type Config struct {
 	Post      PostConfig      `mapstructure:"post"`
 	BigV      BigVConfig      `mapstructure:"bigv"`
 	Fanout    FanoutConfig    `mapstructure:"fanout"`
+	Hot       HotConfig       `mapstructure:"hot"`
+	Recommend RecommendConfig `mapstructure:"recommend"`
 	Services  ServicesConfig  `mapstructure:"services"`
 }
 
@@ -72,6 +74,48 @@ type FanoutConfig struct {
 	Retention time.Duration `mapstructure:"retention"`
 	// CleanupInterval 清理任务运行周期，0 使用默认 1h
 	CleanupInterval time.Duration `mapstructure:"cleanup_interval"`
+}
+
+// HotConfig 热榜池（rn:v1:hot:posts）维护任务与热度分配置
+// （见 doc/internal/discover/plan_recommend_hot.md）
+type HotConfig struct {
+	// RefreshInterval 维护周期（入池/算分/淘汰/TTL 续期），0 使用默认 10m
+	RefreshInterval time.Duration `mapstructure:"refresh_interval"`
+	// Window 候选时间窗（窗口外帖子自然出池），0 使用默认 168h（7 天）
+	Window time.Duration `mapstructure:"window"`
+	// TTL 池 key TTL 兜底（维护停摆消亡，随写入续期），0 使用默认 30m
+	TTL time.Duration `mapstructure:"ttl"`
+	// HardCap 池容量事故保险丝（候选超限按分数截尾），0 使用默认 500000
+	HardCap int `mapstructure:"hard_cap"`
+	// Gravity 热度分时间衰减陡度，0 使用默认 1.5
+	Gravity float64 `mapstructure:"gravity"`
+	// Weights 热度分信号权重；整组零值时使用默认组，单个 0 是合法权重
+	Weights HotWeights `mapstructure:"weights"`
+}
+
+// HotWeights 热度分信号权重（engagement = Σ wᵢ·ln(1+countᵢ)）
+type HotWeights struct {
+	Like      float64 `mapstructure:"like"`
+	Favourite float64 `mapstructure:"favourite"`
+	Comment   float64 `mapstructure:"comment"`
+	View      float64 `mapstructure:"view"`
+}
+
+// Zero 判定整组权重是否未配置（全零 → 调用方回退默认组）
+func (w HotWeights) Zero() bool {
+	return w.Like == 0 && w.Favourite == 0 && w.Comment == 0 && w.View == 0
+}
+
+// RecommendConfig 推荐流（GetRecommendFeed）配置（见 doc/internal/discover/plan_recommend_hot.md）
+type RecommendConfig struct {
+	// SeenTTL seen 已曝光去重窗口（账本 key TTL 随记账滚动续期），0 使用默认 720h（30 天）
+	SeenTTL time.Duration `mapstructure:"seen_ttl"`
+	// ScanBatchFactor 候选扫描批次 = limit × factor（预留过滤跳过），0 使用默认 3
+	ScanBatchFactor int `mapstructure:"scan_batch_factor"`
+	// ScatterWindow 同作者打散滑窗（窗内同作者 ≤ 1），0 使用默认 3
+	ScatterWindow int `mapstructure:"scatter_window"`
+	// ExploreRatio 探索位比例（每页随机采样条数占比，至少 1 条），0 使用默认 0.1
+	ExploreRatio float64 `mapstructure:"explore_ratio"`
 }
 
 // RedisConfig Redis 连接配置

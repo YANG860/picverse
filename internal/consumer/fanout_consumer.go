@@ -30,6 +30,7 @@ type FanoutConsumer struct {
 	UserService userv1connect.UserServiceClient
 	Fanout      discoverv1.FanoutRepo
 	Timeline    cache.AuthorTimelineCache
+	HotPool     *cache.HotPoolCache
 	Dedup       commonv1.ProcessedMessageRepository
 
 	fanoutCap int64 // 大V晋升线（cfg.BigV.PromoteFollowers）：粉丝数 ≥ 该值写缓存走 pull，否则扇出
@@ -38,7 +39,7 @@ type FanoutConsumer struct {
 // NewFanoutConsumer 创建关注流扇出消费者（消费 post 流）
 func NewFanoutConsumer(mqClient mq.MQClient, lf logger.LoggerFactory, cfg *config.Config,
 	postService postv1connect.PostServiceClient, userService userv1connect.UserServiceClient,
-	fanout discoverv1.FanoutRepo, timeline cache.AuthorTimelineCache,
+	fanout discoverv1.FanoutRepo, timeline cache.AuthorTimelineCache, hotPool *cache.HotPoolCache,
 	dedup commonv1.ProcessedMessageRepository) *FanoutConsumer {
 	fanoutCap := cfg.BigV.PromoteFollowers
 	if fanoutCap <= 0 {
@@ -49,6 +50,7 @@ func NewFanoutConsumer(mqClient mq.MQClient, lf logger.LoggerFactory, cfg *confi
 		UserService: userService,
 		Fanout:      fanout,
 		Timeline:    timeline,
+		HotPool:     hotPool,
 		Dedup:       dedup,
 		fanoutCap:   fanoutCap,
 	}
@@ -128,7 +130,14 @@ func (c *FanoutConsumer) handlePublishFanout(ctx context.Context, msg *postv1.Pu
 	followers := profResp.Msg.GetProfile().GetStat().GetFollowers()
 
 	applied, err := c.Dedup.ExecuteIdempotent(ctx, msgID, "fanout_publish", func(_ *gorm.DB) error {
-		return c.dispatchPublishFanout(ctx, postUID.Int64(), authorUID.Int64(), createdAt, followers)
+		if err := c.dispatchPublishFanout(ctx, postUID.Int64(), authorUID.Int64(), createdAt, followers); err != nil {
+			return err
+		}
+		// 发帖钩子：0 分占位入热池（新帖秒级可被探索位采样；补给非红线，失败降级不阻塞发布主链路）
+		if err := c.HotPool.Add(ctx, postUID.Int64(), authorUID.Int64()); err != nil {
+			c.log.Warn("hot pool add failed，降级跳过", "id", messageID, "post_id", postID, "error", err)
+		}
+		return nil
 	})
 	if err != nil {
 		return RETRY, err
@@ -205,7 +214,8 @@ func (c *FanoutConsumer) fanoutToInbox(ctx context.Context, postID, authorID, cr
 func (c *FanoutConsumer) fetchFollowers(ctx context.Context, authorID int64) ([]int64, error) {
 	var fans []int64
 	uid := strconv.FormatInt(authorID, 10)
-	cursor := &commonpb.Cursor{Limit: defaults.MaxLimit}
+	// 页大小 < 1000：common.v1.Cursor.limit 契约 int64.lt = 1000，取 500（拉全量粉丝，页大小不敏感）
+	cursor := &commonpb.Cursor{Limit: 500}
 	for {
 		resp, err := c.UserService.GetFollowers(ctx, connect.NewRequest(&userv1.GetFollowersRequest{
 			Uid: uid, Cursor: cursor,

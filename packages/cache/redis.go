@@ -140,6 +140,93 @@ func (r *RedisCache) ZAdd(ctx context.Context, key string, members []ZMember, tt
 	return nil
 }
 
+// ZAddNX ZADD NX + EXPIRE 管道提交（仅不存在的成员写入，不覆盖已有 score；
+// 不会因写入清空已有成员的分数；TTL 随写入刷新，ttl <= 0 不动）
+func (r *RedisCache) ZAddNX(ctx context.Context, key string, members []ZMember, ttl time.Duration) error {
+	if len(members) == 0 {
+		return nil
+	}
+	zs := make([]goredis.Z, len(members))
+	for i, m := range members {
+		zs[i] = goredis.Z{Score: m.Score, Member: m.Member}
+	}
+	pipe := r.rc.Pipeline()
+	pipe.ZAddNX(ctx, key, zs...)
+	if ttl > 0 {
+		pipe.Expire(ctx, key, ttl)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("cache zaddnx %s: %w", key, err)
+	}
+	return nil
+}
+
+// ZRevRange ZREVRANGE WITHSCORES（score 降序排名 [start, stop] 闭区间，负数自尾部）
+func (r *RedisCache) ZRevRange(ctx context.Context, key string, start, stop int) ([]ZMember, error) {
+	res, err := r.rc.ZRevRangeWithScores(ctx, key, int64(start), int64(stop)).Result()
+	if err != nil {
+		return nil, fmt.Errorf("cache zrevrange %s: %w", key, err)
+	}
+	out := make([]ZMember, len(res))
+	for i, z := range res {
+		member, ok := z.Member.(string)
+		if !ok {
+			return nil, fmt.Errorf("cache zrevrange %s: unexpected member type %T", key, z.Member)
+		}
+		out[i] = ZMember{Score: z.Score, Member: member}
+	}
+	return out, nil
+}
+
+// ZRandMember ZRANDMEMBER WITHSCORES（随机不放回采样至多 count 名）
+func (r *RedisCache) ZRandMember(ctx context.Context, key string, count int) ([]ZMember, error) {
+	res, err := r.rc.ZRandMemberWithScores(ctx, key, count).Result()
+	if err != nil {
+		return nil, fmt.Errorf("cache zrandmember %s: %w", key, err)
+	}
+	out := make([]ZMember, len(res))
+	for i, z := range res {
+		member, ok := z.Member.(string)
+		if !ok {
+			return nil, fmt.Errorf("cache zrandmember %s: unexpected member type %T", key, z.Member)
+		}
+		out[i] = ZMember{Score: z.Score, Member: member}
+	}
+	return out, nil
+}
+
+// ZMScore 批量判定存在性（pipeline 多 ZSCORE，redis.Nil 记不存在；结果等长对齐）
+func (r *RedisCache) ZMScore(ctx context.Context, key string, members []string) ([]bool, error) {
+	if len(members) == 0 {
+		return nil, nil
+	}
+	pipe := r.rc.Pipeline()
+	cmds := make([]*goredis.FloatCmd, len(members))
+	for i, m := range members {
+		cmds[i] = pipe.ZScore(ctx, key, m)
+	}
+	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, goredis.Nil) {
+		return nil, fmt.Errorf("cache zmscore %s: %w", key, err)
+	}
+	out := make([]bool, len(members))
+	for i, cmd := range cmds {
+		if cmd.Err() == nil {
+			out[i] = true
+		} else if !errors.Is(cmd.Err(), goredis.Nil) {
+			return nil, fmt.Errorf("cache zmscore %s member %s: %w", key, members[i], cmd.Err())
+		}
+	}
+	return out, nil
+}
+
+// Rename RENAME（dst 原值覆盖，TTL 跟随 src）
+func (r *RedisCache) Rename(ctx context.Context, src, dst string) error {
+	if err := r.rc.Rename(ctx, src, dst).Err(); err != nil {
+		return fmt.Errorf("cache rename %s -> %s: %w", src, dst, err)
+	}
+	return nil
+}
+
 // ZRevRangeByScore ZREVRANGEBYSCORE WITHSCORES（score 降序、同 score member 字典序降序）
 func (r *RedisCache) ZRevRangeByScore(ctx context.Context, key string, max, min float64, count int) ([]ZMember, error) {
 	q := &goredis.ZRangeBy{Max: formatScore(max), Min: formatScore(min)}

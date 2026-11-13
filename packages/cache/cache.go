@@ -33,6 +33,9 @@ type Cache interface {
 
 	// ZAdd 追加/更新成员并刷新 TTL（key 不存在创建；同 member 更新 score；ttl <= 0 不过期）
 	ZAdd(ctx context.Context, key string, members []ZMember, ttl time.Duration) error
+	// ZAddNX 仅不存在的成员写入（不覆盖已有 score）并刷新 TTL（ttl <= 0 不过期）：
+	// 用于占位写入（如热池发帖钩子 0 分入池，不干扰维护算好的分数）
+	ZAddNX(ctx context.Context, key string, members []ZMember, ttl time.Duration) error
 	// ZRevRangeByScore 按 score 降序取 [min, max] 闭区间至多 count 名（count <= 0 不限量）。
 	// 同 score 按 member 字典序降序（redis 原生序）；key 不存在返回空
 	ZRevRangeByScore(ctx context.Context, key string, max, min float64, count int) ([]ZMember, error)
@@ -41,6 +44,17 @@ type Cache interface {
 	ZRemRangeByRank(ctx context.Context, key string, start, stop int) error
 	// ZRemRangeByScore 按 score 删除 [min, max] 闭区间（±Inf 可用）；用于按时间窗截尾
 	ZRemRangeByScore(ctx context.Context, key string, max, min float64) error
+	// ZRevRange 按 score 降序排名取 [start, stop] 闭区间（负数自尾部；同 score member 字典序降序）；
+	// 用于榜单按名次翻页；key 不存在返回空
+	ZRevRange(ctx context.Context, key string, start, stop int) ([]ZMember, error)
+	// ZRandMember 随机采样至多 count 名（不放回）；key 不存在返回空
+	ZRandMember(ctx context.Context, key string, count int) ([]ZMember, error)
+	// ZMScore 批量判定成员存在性，结果与 members 等长对齐（true=存在）；key 不存在全 false。
+	// 用于已曝光账本批量去重（seen 过滤）
+	ZMScore(ctx context.Context, key string, members []string) ([]bool, error)
+	// Rename 原子换 key（src → dst，dst 原值覆盖，TTL 跟随 src）；src 不存在报错。
+	// 用于整池重建的原子发布（build key 写满后一步换入，读侧无中间态）
+	Rename(ctx context.Context, src, dst string) error
 	// Exists 判定 key 是否存在（区分"未缓存"与"已缓存但结果为空"）
 	Exists(ctx context.Context, key string) (bool, error)
 }
@@ -64,6 +78,9 @@ const (
 	userStatPrefix       = KeyPrefix + ":user:stat:"
 	authorTimelinePrefix = KeyPrefix + ":author:timeline:"
 	authorBigVPrefix     = KeyPrefix + ":author:bigv:"
+	hotPoolKey           = KeyPrefix + ":hot:posts"
+	hotPoolBuildKey      = hotPoolKey + ":build"
+	seenPrefix           = KeyPrefix + ":seen:"
 )
 
 // idKey 实体/计数器 key 的唯一构造点：prefix + 十进制 id

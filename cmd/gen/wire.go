@@ -93,6 +93,8 @@ var Middlewares = wire.NewSet(
 	wire.Bind(new(cache.PostEntityCache), new(*cache.PostEntityCacheImpl)),
 	cache.NewAuthorTimelineCache,
 	wire.Bind(new(cache.AuthorTimelineCache), new(*cache.AuthorTimelineCacheImpl)),
+	cache.NewHotPoolCache,
+	cache.NewSeenCache,
 	db.NewPG,
 	mq.NewJetStreamClient,
 	wire.Bind(new(mq.MQClient), new(*mq.JetStreamClient)),
@@ -138,6 +140,7 @@ var BFF = wire.NewSet(
 // Discover 搜推服务装配
 var Discover = wire.NewSet(
 	discoverv1.NewFanoutRepo,
+	discoverv1.NewHotRepo,
 
 	discoverv1.NewDiscoverUsecase,
 	wire.Bind(new(discoverv1.DiscoverUsecase), new(*discoverv1.DiscoverUsecaseImpl)),
@@ -239,6 +242,17 @@ func InitializeFanoutCleaner(cfg *config.Config) (*poller.FanoutCleaner, func())
 	wire.Build(
 		poller.NewFanoutCleaner,
 		discoverv1.NewFanoutRepo,
+		Middlewares,
+	)
+	return nil, func() {}
+}
+
+// InitializeHotPoolRefresher 热榜池维护装配（cmd/poller 内常驻：整池重建（入池/算分/淘汰），
+// 共享给 discover 的热榜/推荐流读路径）
+func InitializeHotPoolRefresher(cfg *config.Config) (*poller.HotPoolRefresher, func()) {
+	wire.Build(
+		poller.NewHotPoolRefresher,
+		discoverv1.NewHotRepo,
 		Middlewares,
 	)
 	return nil, func() {}

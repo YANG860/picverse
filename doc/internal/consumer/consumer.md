@@ -63,7 +63,7 @@
 | --- | --- | --- |
 | `audit_post` | `handleAuditPost` | 审核（当前占位直通），同事务 `AUDITING→PUBLISHED` + 发 `publish_post` |
 | `publish_post` | `handlePublishPost` | 发布后下游处理（占位：仅记录日志，不阻塞 ACK） |
-| `delete_post` | `handleDeletePost` | 同事务物理删除软删帖子（仅 `DELETED` 行）及其媒体关联，并按被删关联逐槽位写 outbox `deref_media` 卸载消息（资产引用计数回收，删几槽减几槽，重复投递幂等） |
+| `delete_post` | `handleDeletePost` | 同事务物理删除软删帖子（仅 `DELETED` 行）及其媒体关联与该帖全部评论行（任意状态一并清，计数随帖子行消失），并按被删关联逐槽位写 outbox `deref_media` 卸载消息（资产引用计数回收，删几槽减几槽，重复投递幂等） |
 | `ban_post` | `handleBanPost` | 封禁后的下游处理 |
 
 ## DiscoverIndexConsumer
@@ -92,7 +92,7 @@ upsert/delete 天然幂等；索引任务阻塞至生效（`WaitForTask`），�
 
 | 消息 | 处理器 | 职责 |
 | --- | --- | --- |
-| `publish_post` | `handlePublishFanout` | 取帖（PUBLISHED 校验）→ 查粉丝数 → 防抖动判定分流：大V写发件箱缓存（`AuthorTimelineCache.Append`，失败 fallback 全量扇出）/ 普通作者 `GetFollowers` 全量分页扇出收件箱（`FanoutRepo.WriteInbox`） |
+| `publish_post` | `handlePublishFanout` | 取帖（PUBLISHED 校验）→ 查粉丝数 → 防抖动判定分流：大V写发件箱缓存（`AuthorTimelineCache.Append`，失败 fallback 全量扇出）/ 普通作者 `GetFollowers` 全量分页扇出收件箱（`FanoutRepo.WriteInbox`）；分流后发帖钩子 `HotPool.Add` 0 分占位入热池（失败降级不阻塞） |
 | `audit_post` / `ban_post` / `delete_post` | — | 扇出只关心发布事件（删帖不级联收件箱，由保留期回收），直接 ACK |
 
 ## ValidateImage

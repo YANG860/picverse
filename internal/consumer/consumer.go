@@ -76,6 +76,7 @@ func (l *MessageLoop[P]) HandleMessage(msg jetstream.Msg) {
 	sendAt := msg.Headers().Get(defaults.SendAtKey)
 	id := msg.Headers().Get(defaults.MessageIDKey)
 	ctx := trace.WithTraceID(l.ctx, traceID)
+	l.log.Info("message received", "name", l.name, "id", id) // 分水岭：回调进门即打（定位库层丢 or 业务层丢）
 
 	defer func() {
 		if r := recover(); r != nil {

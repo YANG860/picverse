@@ -30,12 +30,17 @@ func main() {
 	fanoutCleaner, cleanupFanout := gen.InitializeFanoutCleaner(cfg)
 	go fanoutCleaner.Run(pollerCtx)
 
+	// 热榜池维护：定时整池重建（入池/算分/淘汰/TTL 续期，供 discover 热榜/推荐流读路径）
+	hotRefresher, cleanupHot := gen.InitializeHotPoolRefresher(cfg)
+	go hotRefresher.Run(pollerCtx)
+
 	term := make(chan os.Signal, 1)
 	signal.Notify(term, syscall.SIGINT, syscall.SIGTERM)
 	<-term
 
 	cancelPoller() // RedisPoller 退出前自行冲刷残留增量
 	outboxPoller.Close()
+	cleanupHot()
 	cleanupFanout()
 	cleanupRedis()
 	cleanupOutbox()

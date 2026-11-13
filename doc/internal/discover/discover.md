@@ -9,6 +9,8 @@
 - discover 只输出 `post_ids` / 排序信息（`proto/discover/v1/requests.proto`，内部接口，BFF 调用）；
   可见性过滤与 `PostCard` 组装收敛在 BFF（复用 SearchPosts 的回查组装路径）。
 - `SearchPosts`：Meilisearch 双排序（综合/最新），offset 游标。
+- `GetHotPosts`：热榜（热池全序翻页）；`GetRecommendFeed`：推荐流（热池候选 + seen 去重 + 打散 + 探索位）。
+  热池（`rn:v1:hot:posts`）的入池/维护/热度分见 `plan_recommend_hot.md`（施工计划，落地部分如下）。
 
 ## GetFollowingFeed（关注流）
 
@@ -78,6 +80,18 @@ GetFollowingFeed(uid, following_ids, cursor)
 proto：`post_ids` 空且 `cursor` 空 = 到底）。删帖行不剔除（`post_ids` 原样返回，BFF 回查过滤兜底）。
 
 容错口径：缓存读失败不当作 miss（会丢大V供给线）→ 整体失败重试。
+
+### 热榜 / 推荐流读路径
+
+- **热榜 `GetHotPosts`**：`HotPool.TopN`（热度降序，offset 游标），短取即到底（池内全序、
+  不剔除已删——BFF 过滤兜底）；不做 seen/个性化（榜单 = 可重复看的排行）。
+- **推荐流 `GetRecommendFeed`**：候选扫描（`limit × scan_batch_factor` 批次）→ `SeenCache.Filter`
+  去重 → 同作者打散（滑窗 `scatter_window` 内同作者 ≤ 1）→ 探索位（`explore_ratio` 比例随机采样，
+  过 seen、去本页重复）→ 曝光记账（`SeenCache.Mark`）。
+  **短取 ≠ 到底**（seen/打散跳候选）：批内消费位置推进游标，批用尽且批短（扫到池尾）才是到底。
+  容错：候选/seen 失败整体重试（seen 失败不当"未曝光"防重复、不丢记账）；探索位采样失败降级跳过。
+- 发帖钩子：`FanoutConsumer` 发布分流后 `HotPool.Add`（0 分占位，新帖秒级可被探索位采样；
+  失败 Warn 降级不阻塞发布主链路）。
 
 ### 发帖侧链路（`FanoutConsumer.handlePublishFanout`）
 

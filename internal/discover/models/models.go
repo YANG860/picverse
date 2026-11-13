@@ -19,3 +19,15 @@ type FanoutTimeline struct {
 func (FanoutTimeline) TableName() string {
 	return "fanout_timelines"
 }
+
+// HotCandidate 热池候选（posts 表：PUBLISHED + 时间窗 + 统计列）：
+// 热度分算分输入（统计列即互动汇总事实，无需互动事件链路；见 doc/internal/discover/plan_recommend_hot.md）。
+type HotCandidate struct {
+	PostID         int64 `gorm:"column:id"`
+	AuthorID       int64 `gorm:"column:author_id"`
+	LikeCount      int64 `gorm:"column:like_count"`
+	FavouriteCount int64 `gorm:"column:favourite_count"`
+	CommentCount   int64 `gorm:"column:comment_count"`
+	ViewCount      int64 `gorm:"column:view_count"`
+	CreatedAt      int64 `gorm:"column:created_at"` // unix 毫秒
+}

@@ -119,8 +119,9 @@ func (c *PostConsumer) handlePublishPost(ctx context.Context, msg *postv1.Publis
 	return ACK, nil
 }
 
-// handleDeletePost 删帖消息的下游回收：同事务物理删除软删帖子行（仅 DELETED 行，见 repo.DeletePost）
-// 与其媒体关联，并按被删关联逐槽位写 outbox 卸载消息（deref_media → media consumer 递减引用计数），
+// handleDeletePost 删帖消息的下游回收：同事务物理删除软删帖子行（仅 DELETED 行，见 repo.DeletePost）、
+// 其媒体关联与该帖全部评论行（任意状态一并清，计数随帖子行消失无需回收），
+// 并按被删关联逐槽位写 outbox 卸载消息（deref_media → media consumer 递减引用计数），
 // 计数回收与删除同事务必达不漏；重复投递时 0 行命中即幂等成功（不重复发消息/减计数）。
 func (c *PostConsumer) handleDeletePost(ctx context.Context, msg *postv1.DeletePost) (ack bool, err error) {
 	postID, err := ParseSnowflakeID(msg.PostId, "post_id")
@@ -143,6 +144,14 @@ func (c *PostConsumer) handleDeletePost(ctx context.Context, msg *postv1.DeleteP
 			return err
 		}
 		c.log.Info("delete post reclaim", "post_id", msg.GetPostId(), "asset_ids", assetIDs)
+
+		// 连带物理回收该帖评论行（软删/正常一并清；帖子行已删，comment_count 随之消失无需回收）；
+		// 重复投递 0 行命中即幂等
+		cmtInfo, err := repo.DeletePostComments(ctx, postID.Int64())
+		if err != nil {
+			return err
+		}
+		c.log.Info("delete post comments reclaim", "post_id", msg.GetPostId(), "rows", cmtInfo.RowsAffected)
 
 		// 逐槽位卸载消息与删除同事务写 outbox（SendTX），必达；每条消息唯一 ID，媒体侧幂等去重
 		for _, assetID := range assetIDs {

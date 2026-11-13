@@ -21,6 +21,8 @@ meili:       # Meilisearch 搜索引擎
 post:        # 帖子服务运行参数
 bigv:        # 发帖侧分流判定（大V晋升线）
 fanout:      # 收件箱保留期清理（维护 fanout_timelines 表大小）
+hot:         # 热榜池维护任务与热度分（rn:v1:hot:posts）
+recommend:   # 推荐流（seen 去重/打散/探索位）
 ```
 
 ## 各节详解
@@ -144,6 +146,31 @@ fanout:      # 收件箱保留期清理（维护 fanout_timelines 表大小）
 | --- | --- | --- |
 | `retention` | duration | 收件箱保留期（按帖子时间 `post_created_at`，与游标同口径，过期行从收件箱视图消失），`0` 使用默认（720h = 30 天） |
 | `cleanup_interval` | duration | 清理任务运行周期（FanoutCleaner，跑在 cmd/poller 进程内），`0` 使用默认（1h） |
+
+### hot — 热榜池维护与热度分
+
+热池 `rn:v1:hot:posts`（ZSET，member = post_id、score = 热度分）：热榜与推荐流共享候选池。
+维护任务（HotPoolRefresher，跑在 cmd/poller 进程内）定时整池重建（入池/算分/淘汰/TTL 续期一步完成）。
+
+| 键 | 类型 | 说明 |
+| --- | --- | --- |
+| `refresh_interval` | duration | 维护周期（整池重建），`0` 使用默认（10m） |
+| `window` | duration | 候选时间窗（PUBLISHED 且窗口内；窗口外帖子自然出池），`0` 使用默认（168h = 7 天） |
+| `ttl` | duration | 池 key TTL 兜底（维护停摆消亡，随任何写入续期），`0` 使用默认（30m） |
+| `hard_cap` | int | 池容量事故保险丝（候选超限按分数截尾，正常永不触发），`0` 使用默认（500000） |
+| `gravity` | float | 热度分时间衰减陡度（`score = engagement/(age_hours+2)^gravity`，越大越偏重新帖），`0` 使用默认（1.5） |
+| `weights.*` | float | 热度分信号权重（`engagement = Σ w·ln(1+count)`，like/favourite/comment/view）；整组未配置使用默认组（1.0/1.5/2.0/0.1），单个 0 是合法权重 |
+
+### recommend — 推荐流
+
+`GetRecommendFeed` 读路径参数（热池候选 + seen 去重 + 同作者打散 + 探索位）。
+
+| 键 | 类型 | 说明 |
+| --- | --- | --- |
+| `seen_ttl` | duration | seen 已曝光去重窗口（账本 `rn:v1:seen:{uid}` 的 ZSET 窗口与 key TTL，随记账滚动续期），`0` 使用默认（720h = 30 天） |
+| `scan_batch_factor` | int | 候选扫描批次 = limit × factor（预留 seen/打散过滤跳过），`0` 使用默认（3） |
+| `scatter_window` | int | 同作者打散滑窗（窗内同作者 ≤ 1），`0` 使用默认（3） |
+| `explore_ratio` | float | 探索位比例（每页随机采样条数占比，至少 1 条），`0` 使用默认（0.1） |
 
 ## 敏感信息
 

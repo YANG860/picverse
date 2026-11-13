@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	commonpb "rednote/gen/go/common/v1"
@@ -15,6 +16,7 @@ import (
 	commonv1 "rednote/internal/common/v1"
 	discoverv1 "rednote/internal/discover/v1"
 	"rednote/packages/cache"
+	"rednote/test/testredis"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -133,6 +135,7 @@ func newTestFanoutConsumer(p postv1connect.PostServiceClient, u userv1connect.Us
 		UserService: u,
 		Fanout:      fo,
 		Timeline:    tl,
+		HotPool:     cache.NewHotPoolCache(testredis.New(), nil), // 发帖钩子真身（默认；入池语义用例另建）
 		Dedup:       d,
 		fanoutCap:   3,
 	}
@@ -336,4 +339,44 @@ func TestHandlePublishFanout_MarkError(t *testing.T) {
 	ack, err = c2.handlePublishFanout(ctx, fanoutMsg(), testMsgID)
 	require.Error(t, err)
 	assert.False(t, ack)
+}
+
+// TestHandlePublishFanout_HotPoolAdd 发帖钩子：发布分流后 0 分占位入热池（新帖秒级可被探索位采样）
+func TestHandlePublishFanout_HotPoolAdd(t *testing.T) {
+	u := &fakeUserClient{followers: 2, pages: [][]string{{"2001", "2002"}}}
+	fo := &fakeFanout{}
+	tl := &fakeTimeline{}
+	c := newTestFanoutConsumer(nil, u, fo, tl, &fakeDedup{applied: true})
+
+	ack, err := c.handlePublishFanout(context.Background(), fanoutMsg(), testMsgID)
+	require.NoError(t, err)
+	require.True(t, ack)
+
+	ms, err := c.HotPool.TopN(context.Background(), 0, 10)
+	require.NoError(t, err)
+	require.Len(t, ms, 1)
+	assert.Equal(t, int64(1700000000000000001), ms[0].PostID)
+	assert.Equal(t, int64(1700000000000000002), ms[0].AuthorID, "author 随 member 携带（打散用）")
+	assert.Zero(t, ms[0].Score, "0 分占位")
+}
+
+// failingZAddNX ZAddNX 失败替身（嵌接口，未覆写方法 panic 兜底）
+type failingZAddNX struct{ cache.Cache }
+
+func (failingZAddNX) ZAddNX(context.Context, string, []cache.ZMember, time.Duration) error {
+	return errors.New("redis down")
+}
+
+// TestHandlePublishFanout_HotPoolAddFail 钩子失败降级：入池是补给非红线，不阻塞发布主链路
+func TestHandlePublishFanout_HotPoolAddFail(t *testing.T) {
+	u := &fakeUserClient{followers: 2, pages: [][]string{{"2001", "2002"}}}
+	fo := &fakeFanout{}
+	tl := &fakeTimeline{}
+	c := newTestFanoutConsumer(nil, u, fo, tl, &fakeDedup{applied: true})
+	c.HotPool = cache.NewHotPoolCache(failingZAddNX{}, nil)
+
+	ack, err := c.handlePublishFanout(context.Background(), fanoutMsg(), testMsgID)
+	require.NoError(t, err, "入池失败不阻塞发布（扇出已成功）")
+	assert.True(t, ack)
+	assert.Equal(t, []int64{2001, 2002}, fo.gotFans, "扇出照常完成")
 }

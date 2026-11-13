@@ -15,6 +15,7 @@ import (
 	"rednote/test/testdb"
 	"rednote/test/testredis"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -165,4 +166,132 @@ func TestMergeCursorRoundTrip(t *testing.T) {
 		require.Zero(t, ts)
 		require.Zero(t, id)
 	}
+}
+
+// newHotUsecase 带热池/账本的用例组装（testredis 真身；推荐流参数固定小值便于断言）
+func newHotUsecase(t *testing.T) *DiscoverUsecaseImpl {
+	t.Helper()
+	tl := cache.NewAuthorTimelineCache(testredis.New(), nil, feedLF{})
+	hp := cache.NewHotPoolCache(testredis.New(), nil)
+	seen := cache.NewSeenCache(testredis.New(), nil)
+	return &DiscoverUsecaseImpl{
+		Timeline: tl, HotPool: hp, Seen: seen, log: slog.Default(),
+		recommendScanFactor: 3, recommendScatterWindow: 3, recommendExploreRatio: 0.1,
+	}
+}
+
+// TestGetHotPosts 热榜翻页：热度降序 + offset 游标往返 + 短取即到底（游标置空）
+func TestGetHotPosts(t *testing.T) {
+	u := newHotUsecase(t)
+	ctx := context.Background()
+	require.NoError(t, u.HotPool.Rebuild(ctx, []cache.HotEntry{
+		{PostID: 11, AuthorID: 1, Score: 1}, {PostID: 55, AuthorID: 2, Score: 5}, {PostID: 33, AuthorID: 3, Score: 3},
+	}))
+
+	// 首页（limit=2）：热度降序，满页续游标
+	resp, err := u.GetHotPosts(ctx, &discoverv1.GetHotPostsRequest{Cursor: &commonv1.Cursor{Limit: 2}})
+	require.NoError(t, err)
+	require.False(t, resp.GetFail())
+	assert.Equal(t, []string{"55", "33"}, resp.GetPostIds())
+	require.NotNil(t, resp.GetCursor(), "满页续游标")
+
+	// 次页：短取（1 条 < limit）→ 到底（游标置空）
+	resp, err = u.GetHotPosts(ctx, &discoverv1.GetHotPostsRequest{Cursor: resp.GetCursor()})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"11"}, resp.GetPostIds())
+	assert.Nil(t, resp.GetCursor(), "短取即到底")
+}
+
+// TestGetHotPostsEmpty 池空（未维护/停摆消亡）：降级空页（fail-soft），非错误
+func TestGetHotPostsEmpty(t *testing.T) {
+	u := newHotUsecase(t)
+	resp, err := u.GetHotPosts(context.Background(), &discoverv1.GetHotPostsRequest{Cursor: &commonv1.Cursor{Limit: 10}})
+	require.NoError(t, err)
+	assert.False(t, resp.GetFail())
+	assert.Empty(t, resp.GetPostIds())
+	assert.Nil(t, resp.GetCursor())
+}
+
+// recommendReq 组装请求：uid=1
+func recommendReq(cursorOffset, limit int64) *discoverv1.GetRecommendFeedRequest {
+	req := &discoverv1.GetRecommendFeedRequest{Uid: "1"}
+	if cursorOffset > 0 || limit > 0 {
+		req.Cursor = &commonv1.Cursor{Str: utils.NewOffsetCursor(cursorOffset, limit).GetStr(), Limit: limit}
+	}
+	return req
+}
+
+// TestGetRecommendFeed 基本流：seen 去重翻页 + 曝光记账 + 探索位页尾（quota=limit-1）
+func TestGetRecommendFeed(t *testing.T) {
+	u := newHotUsecase(t)
+	ctx := context.Background()
+	require.NoError(t, u.HotPool.Rebuild(ctx, []cache.HotEntry{
+		{PostID: 1, AuthorID: 10, Score: 5},
+		{PostID: 2, AuthorID: 20, Score: 4},
+		{PostID: 3, AuthorID: 30, Score: 3},
+		{PostID: 4, AuthorID: 40, Score: 2},
+		{PostID: 5, AuthorID: 50, Score: 1},
+	}))
+
+	// 首页 limit=3：正文 quota=2（1,2）+ 探索位 1 条页尾；满扫（3 < 6=scanBatch？不——扫 3×3=9 → 全池 5 条 < 9 → 批短）
+	resp, err := u.GetRecommendFeed(ctx, recommendReq(0, 3))
+	require.NoError(t, err)
+	require.False(t, resp.GetFail())
+	assert.Equal(t, []string{"1", "2"}, resp.GetPostIds()[:2], "正文按热度序")
+	assert.Len(t, resp.GetPostIds(), 3, "正文 2 + 探索位 1")
+	assert.NotNil(t, resp.GetCursor(), "批短但批内未用尽（3/5）→ 续游标")
+
+	// 二次请求：已曝光的不再出现（1,2 + 探索位已记账）
+	seen, err := u.Seen.Filter(ctx, 1, []int64{1, 2, 3, 4, 5})
+	require.NoError(t, err)
+	assert.True(t, seen[0] && seen[1], "产出即记账")
+}
+
+// TestGetRecommendFeedScatter 同作者打散：滑窗内同作者不相邻（quota=3）
+func TestGetRecommendFeedScatter(t *testing.T) {
+	u := newHotUsecase(t)
+	ctx := context.Background()
+	require.NoError(t, u.HotPool.Rebuild(ctx, []cache.HotEntry{
+		{PostID: 1, AuthorID: 10, Score: 5},
+		{PostID: 2, AuthorID: 10, Score: 4}, // 同作者连续
+		{PostID: 3, AuthorID: 30, Score: 3},
+		{PostID: 4, AuthorID: 40, Score: 2},
+		{PostID: 5, AuthorID: 50, Score: 1},
+	}))
+
+	// limit=4 → quota=3：(1,10)(2,10)(3,30) → 打散 2 号与 3 号换位
+	resp, err := u.GetRecommendFeed(ctx, recommendReq(0, 4))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"1", "3", "2"}, resp.GetPostIds()[:3], "窗口内同作者不相邻")
+}
+
+// TestGetRecommendFeedEnd 到底语义：扫到池尾（批短且批内用尽）→ 游标置空；
+// 批内未用尽 → 续游标继续（短取 ≠ 到底）
+func TestGetRecommendFeedEnd(t *testing.T) {
+	u := newHotUsecase(t)
+	ctx := context.Background()
+	require.NoError(t, u.HotPool.Rebuild(ctx, []cache.HotEntry{
+		{PostID: 1, AuthorID: 10, Score: 5},
+		{PostID: 2, AuthorID: 20, Score: 4},
+	}))
+
+	// limit=10：scanBatch=30 > 池 2 条 → 批短；quota=9 收 2 条 → 批内用尽 → 到底
+	resp, err := u.GetRecommendFeed(ctx, recommendReq(0, 10))
+	require.NoError(t, err)
+	assert.Len(t, resp.GetPostIds(), 2)
+	assert.Nil(t, resp.GetCursor(), "扫尾到底，游标置空")
+
+	// 空池后续：空页空游标
+	resp, err = u.GetRecommendFeed(ctx, recommendReq(2, 10))
+	require.NoError(t, err)
+	assert.Empty(t, resp.GetPostIds())
+	assert.Nil(t, resp.GetCursor())
+}
+
+// TestGetRecommendFeedInvalidUID 非法 uid 拒绝
+func TestGetRecommendFeedInvalidUID(t *testing.T) {
+	u := newHotUsecase(t)
+	resp, err := u.GetRecommendFeed(context.Background(), &discoverv1.GetRecommendFeedRequest{Uid: "abc"})
+	require.NoError(t, err)
+	assert.True(t, resp.GetFail())
 }
