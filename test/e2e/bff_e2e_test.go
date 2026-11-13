@@ -544,7 +544,7 @@ func TestBFFE2EVisibilityAndLists(t *testing.T) {
 
 // ==================== E8 鉴权矩阵 ====================
 
-// TestBFFE2EAuthMatrix E8：20 个需会话 rpc 在无 token / 伪造 token / 过期 token 下一律 Unauthorized。
+// TestBFFE2EAuthMatrix E8：需会话 rpc 在无 token / 伪造 token / 过期 token 下一律 Unauthorized。
 // 免会话设计（固化为契约）：Register/Login（E1 覆盖）、GetMediaAssetStatus（只读轮询，见 bff.md）。
 func TestBFFE2EAuthMatrix(t *testing.T) {
 	client := newBFFClient(t)
@@ -655,6 +655,18 @@ func TestBFFE2EAuthMatrix(t *testing.T) {
 		}},
 		{"ChangePassword", func(tok string) (bool, *commonv1.Error, error) {
 			r, err := client.ChangePassword(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.ChangePasswordRequest{OldPassword: "OldPassw0rd", NewPassword: "NewPassw0rd"}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
+		{"GetFollowingFeed", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.GetFollowingFeed(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.GetFollowingFeedRequest{}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
+		{"GetHotPosts", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.GetHotPosts(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.GetHotPostsRequest{}), tok))
+			return r.Msg.GetFail(), r.Msg.GetErr(), err
+		}},
+		{"GetRecommendFeed", func(tok string) (bool, *commonv1.Error, error) {
+			r, err := client.GetRecommendFeed(ctxOrBackground(), withBearer(connect.NewRequest(&bffv1.GetRecommendFeedRequest{}), tok))
 			return r.Msg.GetFail(), r.Msg.GetErr(), err
 		}},
 	}
