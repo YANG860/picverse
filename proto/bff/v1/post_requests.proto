@@ -204,3 +204,81 @@ message GetMyFavouritePostIDsResponse {
   repeated string post_ids = 3;
   common.v1.Cursor cursor = 4;
 }
+
+// ==================== 评论 ====================
+// 口径：uid 来自会话；同步校验+审核由 post 服务在创建请求内完成；
+// 删除软删、删一级评论级联软删整楼；响应带帖子最新 comment_count
+
+// AddComment 发表一级评论
+message AddCommentRequest {
+  string post_id = 1 [(buf.validate.field).string.min_len = 1];
+  string content = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message AddCommentResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  CommentView comment = 3;
+  // 帖子最新总评论数（一级 + 回复）
+  int64 comment_count = 4;
+}
+
+// ReplyComment 回复（楼中楼：parent 可为一级评论或楼内回复，展示 @reply_to）
+message ReplyCommentRequest {
+  string post_id = 1 [(buf.validate.field).string.min_len = 1];
+  string parent_id = 2 [(buf.validate.field).string.min_len = 1];
+  string content = 3 [(buf.validate.field).string.min_len = 1];
+}
+
+message ReplyCommentResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  CommentView comment = 3;
+  int64 comment_count = 4;
+}
+
+// DeleteCommentRequest 删除评论（软删；评论作者或帖子作者可删，否则 Forbidden；
+// 删一级评论级联软删整楼；幂等：重复删除成功且不重复减计数）
+message DeleteCommentRequest {
+  string comment_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message DeleteCommentResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  int64 comment_count = 3;
+  bool deleted = 4;
+}
+
+// GetCommentsRequest 帖子一级评论分页（created_at DESC 游标；每条带楼层 reply_count）
+message GetCommentsRequest {
+  string post_id = 1 [(buf.validate.field).string.min_len = 1];
+  common.v1.Cursor cursor = 2;
+}
+
+message GetCommentsResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 翻页到底/暂无内容：列表为空且 cursor 为空（不以 NotFound 表达空页）
+  repeated CommentView comments = 3;
+  common.v1.Cursor cursor = 4;
+}
+
+// GetRepliesRequest 楼内回复分页（root_id = 楼层 id；平铺含"回复的回复"）
+message GetRepliesRequest {
+  string root_id = 1 [(buf.validate.field).string.min_len = 1];
+  common.v1.Cursor cursor = 2;
+}
+
+message GetRepliesResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 翻页到底/暂无内容：列表为空且 cursor 为空
+  repeated CommentView replies = 3;
+  common.v1.Cursor cursor = 4;
+}

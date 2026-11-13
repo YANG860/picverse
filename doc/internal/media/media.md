@@ -54,7 +54,7 @@ proto 枚举取值（注意取值非连续）：
 | `GetMediaAsset` | 按 ID 获取单个资产（单值结果，非法 ID → `InvalidID`，未命中 → `NotFound`） |
 | `GetMediaAssetFiles` | 按 `(id, type)` 批量获取文件（逐项 `MediaAssetFileResult`） |
 | `GetMediaAssetFile` | 按 `(id, type)` 获取单个文件（单值结果，非法 ID → `InvalidID`，未命中 → `NotFound`） |
-| `SignMediaFileURLs` | 批量签发展示 GET URL（逐项 `fail`，TTL 分级：默认 24h / 显式至 7d 上限，超限 `InvalidArgument`；纯读不改引用计数，BFF 聚合后内嵌 MediaView） |
+| `SignMediaFileURLs` | 批量签发展示 GET URL（逐项独立签发、非原子——部分失败为正常语义，逐项 `fail`，TTL 分级：默认 24h / 显式至 7d 上限，超限 `InvalidArgument`；纯读不改引用计数，BFF 聚合后内嵌 MediaView） |
 | `ListMediaAssetsBefore` | 按时间游标分页列资产 |
 | `BanMedia` | 封禁（置 `BANNED` + 发 MQ 消息删对象） |
 | `ModifyMediaAssetRefCount` | 原子修改引用计数（全成功或全失败） |

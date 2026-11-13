@@ -109,3 +109,24 @@ message ProfileView {
   UserProfile profile = 1;
   Relation relation = 2;
 }
+
+// CommentView 面客评论视图（post.v1.Comment 的降维：uid 聚合为 UserBrief，存储坐标不面客）。
+// 两级楼中楼：root_id 恒为楼层 id（一级评论 = 自身 comment_id）；parent_id / reply_to_user 一级评论为空。
+message CommentView {
+  string comment_id = 1;
+  // 楼层 id（一级评论 = 自身 comment_id）
+  string root_id = 2;
+  // 被回复评论 id（一级评论为空串）
+  string parent_id = 3;
+
+  // 评论者（批量取简视图，缺失降级为空不打挂列表）
+  UserBrief user = 4;
+  // 被回复者（一级评论为空）
+  UserBrief reply_to_user = 5;
+
+  string content = 6;
+  // 楼层回复数（仅一级评论有意义，回复恒 0）
+  int64 reply_count = 7;
+  // 创建时间：unix 毫秒时间戳的字符串形式
+  string created_at = 8;
+}

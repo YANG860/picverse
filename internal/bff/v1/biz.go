@@ -63,6 +63,28 @@ type BFFUsecase interface {
 	SearchPosts(ctx context.Context, req *bffv1.SearchPostsRequest) (*bffv1.SearchPostsResponse, error)
 
 	// ==================== 信息流 ====================
+
+	// GetFollowingFeed 关注流：拉全量关注（封顶）→ discover 推拉归并 → 组装卡片
+	GetFollowingFeed(ctx context.Context, req *bffv1.GetFollowingFeedRequest) (*bffv1.GetFollowingFeedResponse, error)
+	// GetHotPosts 热榜：discover 热池全序翻页 → 组装卡片（榜单语义，不做去重）
+	GetHotPosts(ctx context.Context, req *bffv1.GetHotPostsRequest) (*bffv1.GetHotPostsResponse, error)
+	// GetRecommendFeed 推荐流：discover 推荐取数（seen/打散/探索位）→ 组装卡片
+	GetRecommendFeed(ctx context.Context, req *bffv1.GetRecommendFeedRequest) (*bffv1.GetRecommendFeedResponse, error)
+
+	// ==================== 评论 ====================
+
+	// AddComment 发表一级评论（uid 来自会话；同步校验+审核由下游完成；响应带最新 comment_count）
+	AddComment(ctx context.Context, req *bffv1.AddCommentRequest) (*bffv1.AddCommentResponse, error)
+	// ReplyComment 回复（楼中楼：parent 可为一级评论或楼内回复）
+	ReplyComment(ctx context.Context, req *bffv1.ReplyCommentRequest) (*bffv1.ReplyCommentResponse, error)
+	// DeleteComment 删除评论（软删；删一级评论级联软删整楼，幂等）
+	DeleteComment(ctx context.Context, req *bffv1.DeleteCommentRequest) (*bffv1.DeleteCommentResponse, error)
+	// GetComments 帖子一级评论分页（created_at DESC 游标；每条带楼层 reply_count）
+	GetComments(ctx context.Context, req *bffv1.GetCommentsRequest) (*bffv1.GetCommentsResponse, error)
+	// GetReplies 楼内回复分页（root_id = 楼层 id）
+	GetReplies(ctx context.Context, req *bffv1.GetRepliesRequest) (*bffv1.GetRepliesResponse, error)
+
+	// ==================== 信息流 ====================
 	// GetFollowingFeed（关注流）尚未实现
 
 }

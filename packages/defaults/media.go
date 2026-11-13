@@ -25,3 +25,8 @@ var (
 	// AvatarAssetID 默认头像资产 ID（部署预置的真实资产，注册时统一挂 216 变体）
 	AvatarAssetID = "2115637161121284096"
 )
+
+// FallbackCoverURL 媒体签名失败时的默认失败占位图（前端静态资源，面客展示兜底）。
+// 签发逐项非原子（部分失败正常语义）：失败项替换为占位图而非缺格，
+// 由面客前端在自身域名托管该路径静态资源
+const FallbackCoverURL = "/static/img/fallback-cover.png"

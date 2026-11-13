@@ -9,6 +9,7 @@ import (
 	bffv1 "rednote/gen/go/bff/v1"
 	commonv1 "rednote/gen/go/common/v1"
 	mediav1 "rednote/gen/go/media/v1"
+	"rednote/packages/defaults"
 	"rednote/packages/errmsg"
 
 	"github.com/stretchr/testify/assert"
@@ -154,7 +155,7 @@ func TestBFFSignMediaViews(t *testing.T) {
 		media := &fakeMediaClient{}
 		u := newBFFForTest(&fakeUserClient{}, media)
 
-		views, errCode := u.signMediaViews(context.Background(), publicMediaTTL, []*mediav1.MediaFile{file})
+		views, errCode := u.signMediaViews(context.Background(), publicMediaTTL, []*mediav1.MediaFile{file}, false)
 		require.Nil(t, errCode)
 		require.Len(t, views, 1)
 		assert.Equal(t, "a1", views[0].GetAssetId())
@@ -169,9 +170,9 @@ func TestBFFSignMediaViews(t *testing.T) {
 		media := &fakeMediaClient{}
 		u := newBFFForTest(&fakeUserClient{}, media)
 
-		_, errCode := u.signMediaViews(context.Background(), publicMediaTTL, []*mediav1.MediaFile{file})
+		_, errCode := u.signMediaViews(context.Background(), publicMediaTTL, []*mediav1.MediaFile{file}, false)
 		require.Nil(t, errCode)
-		_, errCode = u.signMediaViews(context.Background(), privateMediaTTL, []*mediav1.MediaFile{file})
+		_, errCode = u.signMediaViews(context.Background(), privateMediaTTL, []*mediav1.MediaFile{file}, false)
 		require.Nil(t, errCode)
 
 		require.Len(t, media.gotSignTTLs, 2)
@@ -183,7 +184,7 @@ func TestBFFSignMediaViews(t *testing.T) {
 		media := &fakeMediaClient{}
 		u := newBFFForTest(&fakeUserClient{}, media)
 
-		views, errCode := u.signMediaViews(context.Background(), publicMediaTTL, []*mediav1.MediaFile{nil})
+		views, errCode := u.signMediaViews(context.Background(), publicMediaTTL, []*mediav1.MediaFile{nil}, false)
 		require.Nil(t, errCode)
 		require.Len(t, views, 1)
 		assert.Nil(t, views[0])
@@ -194,16 +195,41 @@ func TestBFFSignMediaViews(t *testing.T) {
 		media := &fakeMediaClient{signFailIDs: map[string]*commonv1.Error{"a1": errmsg.NotFound}}
 		u := newBFFForTest(&fakeUserClient{}, media)
 
-		views, errCode := u.signMediaViews(context.Background(), publicMediaTTL, []*mediav1.MediaFile{file})
+		views, errCode := u.signMediaViews(context.Background(), publicMediaTTL, []*mediav1.MediaFile{file}, false)
 		assert.Nil(t, views)
 		assert.Equal(t, errmsg.InternalError.Code, errCode.GetCode(), "签发失败不得返回半残 URL")
+	})
+
+	t.Run("failOpen：单项失败替换默认失败占位图，好项保留（关键回归：脏资产不拖垮整页）", func(t *testing.T) {
+		bad := &mediav1.MediaFile{AssetId: "bad", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_540, Meta: meta}
+		media := &fakeMediaClient{signFailIDs: map[string]*commonv1.Error{"bad": errmsg.NotFound}}
+		u := newBFFForTest(&fakeUserClient{}, media)
+
+		views, errCode := u.signMediaViews(context.Background(), publicMediaTTL,
+			[]*mediav1.MediaFile{file, bad}, true)
+		require.Nil(t, errCode, "单项脏资产不得整体报错")
+		require.Len(t, views, 2)
+		require.NotNil(t, views[0], "好项保留")
+		assert.Equal(t, "https://signed/a1", views[0].GetUrl())
+		require.NotNil(t, views[1], "失败项不缺格")
+		assert.Equal(t, defaults.FallbackCoverURL, views[1].GetUrl(), "失败项替换默认失败占位图")
+		assert.Equal(t, "bad", views[1].GetAssetId(), "保留原资产坐标供追溯")
+	})
+
+	t.Run("failOpen：RPC 级失败仍整体报错（非单项降级范围）", func(t *testing.T) {
+		media := &fakeMediaClient{signRPCErr: errors.New("dial fail")}
+		u := newBFFForTest(&fakeUserClient{}, media)
+
+		views, errCode := u.signMediaViews(context.Background(), publicMediaTTL, []*mediav1.MediaFile{file}, true)
+		assert.Nil(t, views)
+		assert.Equal(t, errmsg.InternalError.Code, errCode.GetCode())
 	})
 
 	t.Run("连接层错误归为 InternalError", func(t *testing.T) {
 		media := &fakeMediaClient{signRPCErr: errors.New("dial fail")}
 		u := newBFFForTest(&fakeUserClient{}, media)
 
-		views, errCode := u.signMediaViews(context.Background(), publicMediaTTL, []*mediav1.MediaFile{file})
+		views, errCode := u.signMediaViews(context.Background(), publicMediaTTL, []*mediav1.MediaFile{file}, false)
 		assert.Nil(t, views)
 		assert.Equal(t, errmsg.InternalError.Code, errCode.GetCode())
 	})

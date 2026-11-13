@@ -105,6 +105,9 @@ message SignMediaFileURLsRequest {
   int64 ttl_seconds = 2 [(buf.validate.field).int64.gte = 0];
 }
 
+// SignMediaFileURLsResponse 逐项独立签发结果。签发非原子：各项独立成败，
+// 部分失败是正常语义——urls 逐项返回 fail/err，调用方按项处理（降级/占位），
+// 不因单项失败丢弃其余结果；顶层 fail 仅表达请求级错误（如 TTL 越界）。
 message SignMediaFileURLsResponse {
   bool fail = 1;
   common.v1.Error err = 2;

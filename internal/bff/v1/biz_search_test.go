@@ -42,22 +42,22 @@ func (f *fakeDiscoverClient) SearchPosts(_ context.Context, req *connect.Request
 	return connect.NewResponse(&discoverv1.SearchPostsResponse{Hits: f.hits, Cursor: f.cursor}), nil
 }
 
-// fakeSearchPostClient 扩展 fakePostClient 支持搜索回查 GetPostsByIDs。
+// fakeSearchPostClient 扩展 fakePostClient 支持面客批量回查 ViewPostsByIDs。
 // 独立类型以保持 fakePostClient 不实现该方法的既有回归守卫（见 TestBFFGetMyPosts 注释）
 type fakeSearchPostClient struct {
 	fakePostClient
 
-	byIDsResults []*postv1.PostResult
-	byIDsRPCErr  error
-	gotByIDs     *postv1.GetPostsByIDsRequest
+	viewResults []*postv1.PostBriefResult
+	viewRPCErr  error
+	gotViewReq  *postv1.ViewPostsByIDsRequest
 }
 
-func (f *fakeSearchPostClient) GetPostsByIDs(_ context.Context, req *connect.Request[postv1.GetPostsByIDsRequest]) (*connect.Response[postv1.GetPostsByIDsResponse], error) {
-	f.gotByIDs = req.Msg
-	if f.byIDsRPCErr != nil {
-		return nil, f.byIDsRPCErr
+func (f *fakeSearchPostClient) ViewPostsByIDs(_ context.Context, req *connect.Request[postv1.ViewPostsByIDsRequest]) (*connect.Response[postv1.ViewPostsByIDsResponse], error) {
+	f.gotViewReq = req.Msg
+	if f.viewRPCErr != nil {
+		return nil, f.viewRPCErr
 	}
-	return connect.NewResponse(&postv1.GetPostsByIDsResponse{Results: f.byIDsResults}), nil
+	return connect.NewResponse(&postv1.ViewPostsByIDsResponse{Results: f.viewResults}), nil
 }
 
 func newBFFForSearchTest(user *fakeUserClient, media *fakeMediaClient, post *fakeSearchPostClient, discover *fakeDiscoverClient) *BFFUsecaseImpl {
@@ -68,17 +68,25 @@ func newBFFForSearchTest(user *fakeUserClient, media *fakeMediaClient, post *fak
 	}
 }
 
-// publishedSearchPost 构造 PUBLISHED 帖子实体（含首图封面）
-func publishedSearchPost(id, author, title string) *postv1.Post {
-	return &postv1.Post{
-		PostId:    id,
-		Title:     title,
-		AuthorId:  author,
-		CreatedAt: "1700000000123",
-		PostStat:  &postv1.PostStat{LikeCount: 5},
-		Status:    postv1.PostStatus_POST_STATUS_PUBLISHED,
-		Medias:    []*mediav1.MediaFile{{AssetId: "c-" + id, Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_540}},
+// visibleBrief 构造可见（PUBLISHED）帖子的面客批量查看结果（含首图封面）
+func visibleBrief(id, author, title string) *postv1.PostBriefResult {
+	return &postv1.PostBriefResult{
+		PostId: id,
+		Post: &postv1.PostBrief{
+			PostId:    id,
+			Title:     title,
+			AuthorId:  author,
+			CreatedAt: "1700000000123",
+			Stat:      &postv1.PostStat{LikeCount: 5},
+			Status:    postv1.PostStatus_POST_STATUS_PUBLISHED,
+			Cover:     &mediav1.MediaFile{AssetId: "c-" + id, Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_540},
+		},
 	}
+}
+
+// invisibleBrief 不可见结果（ViewPostsByIDs 口径：fail + NotFound，不暴露状态存在性）
+func invisibleBrief(id string) *postv1.PostBriefResult {
+	return &postv1.PostBriefResult{PostId: id, Fail: true, Err: errmsg.NotFound}
 }
 
 // TestBFFSearchPosts 搜索聚合：命中顺序保持 + 回查组装 + 游标/请求透传
@@ -91,10 +99,10 @@ func TestBFFSearchPosts(t *testing.T) {
 			},
 			cursor: &commonv1.Cursor{Str: "2", Limit: 10},
 		}
-		// 回查结果故意乱序（GetPostsByIDs 不保证顺序），断言面客序 = 命中序
-		post := &fakeSearchPostClient{byIDsResults: []*postv1.PostResult{
-			{PostId: "p2", Post: publishedSearchPost("p2", "u2", "第二")},
-			{PostId: "p1", Post: publishedSearchPost("p1", "u1", "第一")},
+		// 回查结果故意乱序（ViewPostsByIDs 不保证序），断言面客序 = 命中序
+		post := &fakeSearchPostClient{viewResults: []*postv1.PostBriefResult{
+			visibleBrief("p2", "u2", "第二"),
+			visibleBrief("p1", "u1", "第一"),
 		}}
 		user := &fakeUserClient{briefResults: []*userv1.UserBriefResult{
 			{Uid: "u1", Brief: &userv1.UserBrief{Uid: "u1", Name: "a"}},
@@ -115,8 +123,8 @@ func TestBFFSearchPosts(t *testing.T) {
 		assert.Equal(t, "关键词", disc.gotReq.GetKeyword())
 		assert.Equal(t, discoverv1.SearchSort_SEARCH_SORT_LATEST, disc.gotReq.GetSort())
 		assert.Equal(t, "0", disc.gotReq.GetCursor().GetStr())
-		require.NotNil(t, post.gotByIDs)
-		assert.ElementsMatch(t, []string{"p1", "p2"}, post.gotByIDs.GetPostIds())
+		require.NotNil(t, post.gotViewReq)
+		assert.ElementsMatch(t, []string{"p1", "p2"}, post.gotViewReq.GetPostIds())
 
 		// 命中顺序保持（p1 在前）
 		require.Len(t, resp.GetPosts(), 2)
@@ -131,11 +139,9 @@ func TestBFFSearchPosts(t *testing.T) {
 
 	t.Run("同步窗口内非 PUBLISHED 命中被过滤", func(t *testing.T) {
 		disc := &fakeDiscoverClient{hits: []*discoverv1.SearchHit{{PostId: "p1"}, {PostId: "p2"}}}
-		deleted := publishedSearchPost("p2", "u2", "已删")
-		deleted.Status = postv1.PostStatus_POST_STATUS_DELETED
-		post := &fakeSearchPostClient{byIDsResults: []*postv1.PostResult{
-			{PostId: "p1", Post: publishedSearchPost("p1", "u1", "正常")},
-			{PostId: "p2", Post: deleted},
+		post := &fakeSearchPostClient{viewResults: []*postv1.PostBriefResult{
+			visibleBrief("p1", "u1", "正常"),
+			invisibleBrief("p2"),
 		}}
 		user := &fakeUserClient{briefResults: []*userv1.UserBriefResult{
 			{Uid: "u1", Brief: &userv1.UserBrief{Uid: "u1", Name: "a"}},
@@ -151,8 +157,7 @@ func TestBFFSearchPosts(t *testing.T) {
 
 	t.Run("整页被过滤：按翻页到底处理", func(t *testing.T) {
 		disc := &fakeDiscoverClient{hits: []*discoverv1.SearchHit{{PostId: "p1"}}, cursor: &commonv1.Cursor{Str: "1"}}
-		missing := &postv1.PostResult{PostId: "p1", Fail: true, Err: errmsg.NotFound}
-		post := &fakeSearchPostClient{byIDsResults: []*postv1.PostResult{missing}}
+		post := &fakeSearchPostClient{viewResults: []*postv1.PostBriefResult{invisibleBrief("p1")}}
 		u := newBFFForSearchTest(&fakeUserClient{}, &fakeMediaClient{}, post, disc)
 
 		resp, err := u.SearchPosts(ctxWithUID("u1"), &bffv1.SearchPostsRequest{Keyword: "kw"})
@@ -171,7 +176,7 @@ func TestBFFSearchPosts(t *testing.T) {
 		require.NoError(t, err)
 		require.False(t, resp.Fail)
 		assert.Empty(t, resp.GetPosts())
-		assert.Nil(t, post.gotByIDs)
+		assert.Nil(t, post.gotViewReq)
 	})
 
 	t.Run("discover 业务失败透传 / 连接层错误转 InternalError", func(t *testing.T) {
@@ -192,7 +197,7 @@ func TestBFFSearchPosts(t *testing.T) {
 
 	t.Run("回查失败转 InternalError", func(t *testing.T) {
 		disc := &fakeDiscoverClient{hits: []*discoverv1.SearchHit{{PostId: "p1"}}}
-		post := &fakeSearchPostClient{byIDsRPCErr: errors.New("down")}
+		post := &fakeSearchPostClient{viewRPCErr: errors.New("down")}
 		u := newBFFForSearchTest(&fakeUserClient{}, &fakeMediaClient{}, post, disc)
 
 		resp, err := u.SearchPosts(ctxWithUID("u1"), &bffv1.SearchPostsRequest{Keyword: "kw"})

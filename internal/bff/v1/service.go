@@ -126,6 +126,26 @@ func (s *BFFServiceHandler) SearchPosts(ctx context.Context, req *connect.Reques
 	return connect.NewResponse(resp), err
 }
 
+// --- 信息流 ---
+
+// GetFollowingFeed 关注流
+func (s *BFFServiceHandler) GetFollowingFeed(ctx context.Context, req *connect.Request[bffv1.GetFollowingFeedRequest]) (*connect.Response[bffv1.GetFollowingFeedResponse], error) {
+	resp, err := s.Biz.GetFollowingFeed(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+// GetHotPosts 热榜
+func (s *BFFServiceHandler) GetHotPosts(ctx context.Context, req *connect.Request[bffv1.GetHotPostsRequest]) (*connect.Response[bffv1.GetHotPostsResponse], error) {
+	resp, err := s.Biz.GetHotPosts(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+// GetRecommendFeed 推荐流
+func (s *BFFServiceHandler) GetRecommendFeed(ctx context.Context, req *connect.Request[bffv1.GetRecommendFeedRequest]) (*connect.Response[bffv1.GetRecommendFeedResponse], error) {
+	resp, err := s.Biz.GetRecommendFeed(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
 // --- 用户 ---
 
 // GetMyProfile 我的主页资料
@@ -211,5 +231,32 @@ func (s *BFFServiceHandler) GetMyLikedPostIDs(ctx context.Context, req *connect.
 
 func (s *BFFServiceHandler) GetMyFavouritePostIDs(ctx context.Context, req *connect.Request[bffv1.GetMyFavouritePostIDsRequest]) (*connect.Response[bffv1.GetMyFavouritePostIDsResponse], error) {
 	resp, err := s.Biz.GetMyFavouritePostIDs(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+// ==================== 评论 ====================
+
+func (s *BFFServiceHandler) AddComment(ctx context.Context, req *connect.Request[bffv1.AddCommentRequest]) (*connect.Response[bffv1.AddCommentResponse], error) {
+	resp, err := s.Biz.AddComment(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+func (s *BFFServiceHandler) ReplyComment(ctx context.Context, req *connect.Request[bffv1.ReplyCommentRequest]) (*connect.Response[bffv1.ReplyCommentResponse], error) {
+	resp, err := s.Biz.ReplyComment(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+func (s *BFFServiceHandler) DeleteComment(ctx context.Context, req *connect.Request[bffv1.DeleteCommentRequest]) (*connect.Response[bffv1.DeleteCommentResponse], error) {
+	resp, err := s.Biz.DeleteComment(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+func (s *BFFServiceHandler) GetComments(ctx context.Context, req *connect.Request[bffv1.GetCommentsRequest]) (*connect.Response[bffv1.GetCommentsResponse], error) {
+	resp, err := s.Biz.GetComments(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+func (s *BFFServiceHandler) GetReplies(ctx context.Context, req *connect.Request[bffv1.GetRepliesRequest]) (*connect.Response[bffv1.GetRepliesResponse], error) {
+	resp, err := s.Biz.GetReplies(ctx, req.Msg)
 	return connect.NewResponse(resp), err
 }

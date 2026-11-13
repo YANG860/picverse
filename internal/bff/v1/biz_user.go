@@ -43,7 +43,7 @@ func (u *BFFUsecaseImpl) userBriefsView(ctx context.Context, briefs []*userv1.Us
 	for i, b := range briefs {
 		files[i] = b.GetAvatar()
 	}
-	avatars, errCode := u.signMediaViews(ctx, publicMediaTTL, files)
+	avatars, errCode := u.signMediaViews(ctx, publicMediaTTL, files, true) // 批量卡片作者头像弱字段
 	if errCode != nil {
 		return nil, errCode
 	}
@@ -59,7 +59,7 @@ func (u *BFFUsecaseImpl) userProfileView(ctx context.Context, p *userv1.UserProf
 	brief := p.GetBrief()
 	var avatar *bffv1.MediaView
 	if brief.GetAvatar() != nil {
-		avatars, errCode := u.signMediaViews(ctx, publicMediaTTL, []*mediav1.MediaFile{brief.GetAvatar()})
+		avatars, errCode := u.signMediaViews(ctx, publicMediaTTL, []*mediav1.MediaFile{brief.GetAvatar()}, false)
 		if errCode != nil {
 			return nil, errCode
 		}

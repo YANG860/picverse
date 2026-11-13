@@ -11,7 +11,7 @@
 | 错误约定 | `fail` + `common.v1.Error`（可枚举错误码），连接层错误走原始 gRPC 错误 | `fail` + `common.v1.Error`；**连接层错误不外泄**：内部记录日志后返回 `InternalError`（见下文“错误处理”） |
 | 分页 | 相同：`common.v1.Cursor`，空页返回空列表 + 空游标 | 相同 |
 
-## 接口（BFFService，proto 现定义 31 rpc）
+## 接口（BFFService，proto 现定义 36 rpc）
 
 | 域 | rpc | 下游调用 | 聚合职责 |
 | --- | --- | --- | --- |
@@ -41,6 +41,9 @@
 | 帖子 | GetUserPosts | post.ViewPostByAuthor（viewer=会话用户） | 仅已发布，组装 `PostCard` |
 | 帖子 | LikePost / UnlikePost / FavouritePost / UnfavouritePost | post 同名透传 | uid 来自会话；幂等写（前端可重复动作收敛）；响应带最新计数 + `liked/favourited` 态位（前端同步本地集合）；收藏超容量返回 `FavouriteLimitExceeded` |
 | 帖子 | GetMyLikedPostIDs / GetMyFavouritePostIDs | post.ListLikedPostIDs / ListFavouritePostIDs | uid 来自会话；返回 post_ids 供前端预取本地判态（赞态近似、藏态精确），游标透传 |
+| 评论 | AddComment / ReplyComment | post.CreateComment / post.ReplyComment | uid 来自会话；同步校验+审核由下游在请求内完成；聚合 `CommentView`（评论者/被回复者 `UserBrief`），响应带最新 comment_count |
+| 评论 | DeleteComment | post.DeleteComment | uid 来自会话；删评权限（评论作者/楼主）与级联语义由下游裁决，幂等透传 |
+| 评论 | GetComments / GetReplies | post.ListComments / post.ListReplies | 游标透传；列表批量聚合简视图（去重一次批量，用户缺失降级置空不打挂列表）；一级评论带楼层 reply_count |
 | 搜索 | SearchPosts | discover.SearchPosts + post.GetPostsByIDs | 关键词命中（综合/最新双排序），按命中序回查组装 `PostCard`，过滤非 PUBLISHED 兑底同步窗口 |
 | 信息流 | GetFollowingFeed | user.GetFollowings + post.ViewPostByAuthor（逐作者） | 关注的人的已发布帖子按发布时间归并 |
 
@@ -102,7 +105,7 @@ BFF 由于面向前端，**不返回连接层 error**：下游连接层错误（
 
 ## 状态
 
-`internal/bff/v1/`（proto 现定义 31 rpc 全部实现：auth 5 + user 9 + media 2 + post 14 + search 1；单测 `biz_auth_test.go` / `biz_media_test.go` / `biz_user_test.go` / `biz_post_test.go` / `biz_search_test.go` 覆盖 auth/media/user/post/search 五域）：
+`internal/bff/v1/`（proto 现定义 36 rpc 全部实现：auth 5 + user 9 + media 2 + post 14 + comment 5 + search 1；单测 `biz_auth_test.go` / `biz_media_test.go` / `biz_user_test.go` / `biz_post_test.go` / `biz_comment_test.go` / `biz_search_test.go` 覆盖 auth/media/user/post/comment/search 六域）：
 
 - `service.go`：BFFServiceHandler 实现全部 rpc 并委托 biz 层
 - `biz.go`：`BFFUsecase` 接口 + `BFFUsecaseImpl`，身份经 `sessionUID`（jwt claims）注入：
@@ -114,6 +117,12 @@ BFF 由于面向前端，**不返回连接层 error**：下游连接层错误（
     GetPost（并行聚合作者/关系，NotFound 降级未关注）、GetMyPosts（状态随 `PostBrief` 返回，封面分级签发）、
     GetUserPosts（恒 PUBLISHED，公开 TTL）、
     SearchPosts（discover 检索 + 按命中序回查组装，过滤非 PUBLISHED 兑底同步窗口）
+  - 信息流（`biz_feed.go`）：GetFollowingFeed（拉全量关注（封顶）→ discover 推拉归并）、
+    GetHotPosts（discover 热池全序翻页）、GetRecommendFeed（discover 推荐取数，uid 会话注入）
+    ——三者共用 `postCardsByIDs` 组装：post.ViewPostsByIDs（仅 PUBLISHED，可见性裁决收敛服务端）
+    → 作者视图 → PostCard，游标透传 discover（过滤不吞页）。卡片封面/批量头像签发为弱字段
+    （failOpen：签名失败替换默认失败占位图 FallbackCoverURL，不拖垮整页不缺格——
+    签发逐项非原子，部分失败为正常语义），详情/资料页媒体保持严格签发
 - `repo.go`：`DownstreamRepo` 下游客户端集合
 
 `cmd/bff/main.go` 启动入口：`gen.InitializeBFFServiceHandler` 装配下游客户端 + MQ，

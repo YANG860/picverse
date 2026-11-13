@@ -240,9 +240,25 @@ var (
 	privateMediaTTL = defaults.MediaUrlTTL
 )
 
+// fallbackMediaView 构造默认失败占位图视图（签名失败项替换用）：保留原资产坐标供追溯，
+// URL 指向面客前端托管的静态占位图（零依赖，不走签名链路，避免占位再失败）
+func fallbackMediaView(f *mediav1.MediaFile) *bffv1.MediaView {
+	return &bffv1.MediaView{
+		AssetId:   f.GetAssetId(),
+		Type:      f.GetType(),
+		Url:       defaults.FallbackCoverURL,
+		Width:     f.GetMeta().GetWidth(),
+		Height:    f.GetMeta().GetHeight(),
+	}
+}
+
 // signMediaViews 批量把下游 MediaFile 降维为面客 MediaView（批量签发 + 尺寸抄入）。
-// 返回与 files 对齐（nil 对 nil）；签发任一项失败整体报错，不静默降级；存储坐标不进面客响应。
-func (u *BFFUsecaseImpl) signMediaViews(ctx context.Context, ttl time.Duration, files []*mediav1.MediaFile) ([]*bffv1.MediaView, *commonv1.Error) {
+// 返回与 files 对齐（nil 对 nil）；存储坐标不进面客响应。
+// 签发逐项非原子（部分失败正常语义，见 SignMediaFileURLsResponse 契约），按 failOpen 分消费口径：
+//   - failOpen=false（详情/列表媒体等强字段）：任一项失败整体报错，不返回半残 URL；
+//   - failOpen=true（feed 卡片封面等弱字段）：单项失败/缺失替换为默认失败占位图
+//     （FallbackCoverURL）——脏资产不拖垮整页也不缺格；RPC 级失败仍整体报错。
+func (u *BFFUsecaseImpl) signMediaViews(ctx context.Context, ttl time.Duration, files []*mediav1.MediaFile, failOpen bool) ([]*bffv1.MediaView, *commonv1.Error) {
 	views := make([]*bffv1.MediaView, len(files))
 
 	refs := make([]*mediav1.MediaAssetFileQuery, 0, len(files))
@@ -268,6 +284,10 @@ func (u *BFFUsecaseImpl) signMediaViews(ctx context.Context, ttl time.Duration, 
 	signed := make(map[string]*mediav1.MediaFileURL, len(resp.Msg.GetUrls()))
 	for _, s := range resp.Msg.GetUrls() {
 		if s.GetFail() {
+			if failOpen {
+				u.log.Warn("media sign item failed，替换失败占位图", "asset_id", s.GetAssetId(), "err_code", s.GetErr().GetCode())
+				continue
+			}
 			u.log.Error("media.SignMediaFileURLs item failed", "asset_id", s.GetAssetId(), "err_code", s.GetErr().GetCode())
 			return nil, errmsg.InternalError
 		}
@@ -280,6 +300,11 @@ func (u *BFFUsecaseImpl) signMediaViews(ctx context.Context, ttl time.Duration, 
 		}
 		s := signed[f.GetAssetId()+"/"+f.GetType().String()]
 		if s == nil {
+			if failOpen {
+				u.log.Warn("media sign missing item，替换失败占位图", "asset_id", f.GetAssetId(), "type", f.GetType())
+				views[i] = fallbackMediaView(f)
+				continue
+			}
 			u.log.Error("media.SignMediaFileURLs missing item", "asset_id", f.GetAssetId(), "type", f.GetType())
 			return nil, errmsg.InternalError
 		}

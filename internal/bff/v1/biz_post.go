@@ -29,7 +29,7 @@ func mediaTTLFor(status postv1.PostStatus) time.Duration {
 // postView 把下游 Post 降维为面客 PostView（草稿写入回显；作者即会话用户，不聚合作者/关系），
 // medias 经 signMediaViews 按状态分级签发。
 func (u *BFFUsecaseImpl) postView(ctx context.Context, p *postv1.Post) (*bffv1.PostView, *commonv1.Error) {
-	views, errCode := u.signMediaViews(ctx, mediaTTLFor(p.GetStatus()), p.GetMedias())
+	views, errCode := u.signMediaViews(ctx, mediaTTLFor(p.GetStatus()), p.GetMedias(), false)
 	if errCode != nil {
 		return nil, errCode
 	}
@@ -177,7 +177,7 @@ func (u *BFFUsecaseImpl) PublishDraft(ctx context.Context, req *bffv1.PublishDra
 
 // postDetail 组装面客 PostDetail：medias 按状态分级签发，作者/关系由调用方聚合后传入。
 func (u *BFFUsecaseImpl) postDetail(ctx context.Context, p *postv1.Post, author *bffv1.UserBrief, relation *bffv1.Relation) (*bffv1.PostDetail, *commonv1.Error) {
-	views, errCode := u.signMediaViews(ctx, mediaTTLFor(p.GetStatus()), p.GetMedias())
+	views, errCode := u.signMediaViews(ctx, mediaTTLFor(p.GetStatus()), p.GetMedias(), false)
 	if errCode != nil {
 		return nil, errCode
 	}
@@ -274,7 +274,7 @@ func (u *BFFUsecaseImpl) postCards(ctx context.Context, briefs []*postv1.PostBri
 		for j, i := range idxs {
 			files[j] = briefs[i].GetCover()
 		}
-		groupViews, errCode := u.signMediaViews(ctx, ttl, files)
+		groupViews, errCode := u.signMediaViews(ctx, ttl, files, true) // 卡片封面弱字段：脏资产降级不拖垮整页
 		if errCode != nil {
 			return errCode
 		}

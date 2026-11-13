@@ -3,6 +3,7 @@ syntax = "proto3";
 package bff.v1;
 
 import "bff/v1/auth_requests.proto";
+import "bff/v1/feed_requests.proto";
 import "bff/v1/media_requests.proto";
 import "bff/v1/post_requests.proto";
 import "bff/v1/search_requests.proto";
@@ -89,6 +90,18 @@ service BFFService {
   rpc GetMyLikedPostIDs(GetMyLikedPostIDsRequest) returns (GetMyLikedPostIDsResponse);
   rpc GetMyFavouritePostIDs(GetMyFavouritePostIDsRequest) returns (GetMyFavouritePostIDsResponse);
 
+  // ==================== 评论 ====================
+
+  // 发表一级评论（uid 来自会话；同步校验+审核；响应带最新 comment_count）
+  rpc AddComment(AddCommentRequest) returns (AddCommentResponse);
+  // 回复（楼中楼：parent 可为一级评论或楼内回复）
+  rpc ReplyComment(ReplyCommentRequest) returns (ReplyCommentResponse);
+  // 删除评论（软删；删一级评论级联软删整楼，幂等）
+  rpc DeleteComment(DeleteCommentRequest) returns (DeleteCommentResponse);
+  // 评论列表（一级评论 / 楼内回复，created_at DESC 游标）
+  rpc GetComments(GetCommentsRequest) returns (GetCommentsResponse);
+  rpc GetReplies(GetRepliesRequest) returns (GetRepliesResponse);
+
   // ==================== 搜索 ====================
 
   // 帖子搜索：关键词检索（Meilisearch），综合（相关度×时间衰减）/最新双排序，offset 游标
@@ -96,6 +109,10 @@ service BFFService {
 
   // ==================== 信息流 ====================
 
-  // 关注流：我关注的人的已发布帖子，按发布时间归并（推荐流由后续推荐服务另立接口）
-  // TODO: GetFollowingFeed 待实现（限制关注数全量归并 + 时间游标，设计已定稿）
+  // 关注流：我关注的人的已发布帖子，按发布时间归并（游标分页）
+  rpc GetFollowingFeed(GetFollowingFeedRequest) returns (GetFollowingFeedResponse);
+  // 热榜：全局热门帖子排行（热度降序，可重复看的榜单）
+  rpc GetHotPosts(GetHotPostsRequest) returns (GetHotPostsResponse);
+  // 推荐流：已曝光去重 + 同作者打散 + 探索位的推荐信息流
+  rpc GetRecommendFeed(GetRecommendFeedRequest) returns (GetRecommendFeedResponse);
 }

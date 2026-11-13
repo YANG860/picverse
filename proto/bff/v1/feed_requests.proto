@@ -19,3 +19,31 @@ message GetFollowingFeedResponse {
   repeated PostCard posts = 3;
   common.v1.Cursor cursor = 4;
 }
+
+// GetHotPostsRequest 热榜：全局热门帖子排行（热度降序，可重复看的榜单，不做去重/个性化）。
+message GetHotPostsRequest {
+  common.v1.Cursor cursor = 1;
+}
+
+message GetHotPostsResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 翻页到底/暂无内容：列表为空且 cursor 为空
+  repeated PostCard posts = 3;
+  common.v1.Cursor cursor = 4;
+}
+
+// GetRecommendFeedRequest 推荐流：已曝光去重 + 同作者打散 + 探索位的推荐信息流。
+message GetRecommendFeedRequest {
+  common.v1.Cursor cursor = 1;
+}
+
+message GetRecommendFeedResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 翻页到底/暂无内容：列表为空且 cursor 为空
+  repeated PostCard posts = 3;
+  common.v1.Cursor cursor = 4;
+}

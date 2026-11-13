@@ -61,6 +61,20 @@ type fakePostClient struct {
 	gotUnfavPost  *postv1.UnfavouritePostRequest
 	gotListLiked  *postv1.ListLikedPostIDsRequest
 	gotListFav    *postv1.ListFavouritePostIDsRequest
+
+	// 评论透传路径：共享错误注入 + 逐方法捕获入参
+	commentFail   *commonv1.Error
+	commentRPCErr error
+	commentResp   *postv1.Comment
+	commentCount  int64
+	commentList   []*postv1.Comment
+	commentCursor *commonv1.Cursor
+
+	gotCreateComment *postv1.CreateCommentRequest
+	gotReplyComment  *postv1.ReplyCommentRequest
+	gotDeleteComment *postv1.DeleteCommentRequest
+	gotListComments  *postv1.ListCommentsRequest
+	gotListReplies   *postv1.ListRepliesRequest
 }
 
 func (f *fakePostClient) CreateDraft(_ context.Context, req *connect.Request[postv1.CreateDraftRequest]) (*connect.Response[postv1.CreateDraftResponse], error) {
