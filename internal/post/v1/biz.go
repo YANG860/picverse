@@ -58,6 +58,8 @@ type PostUsecase interface {
 	GetPostStatus(ctx context.Context, req *postv1.GetPostStatusRequest) (*postv1.GetPostStatusResponse, error)
 	// ViewPost 查看帖子
 	ViewPost(ctx context.Context, req *postv1.ViewPostRequest) (*postv1.ViewPostResponse, error)
+	// ViewPostsByIDs 面客批量查看（仅 PUBLISHED，可见性裁决收敛服务端）
+	ViewPostsByIDs(ctx context.Context, req *postv1.ViewPostsByIDsRequest) (*postv1.ViewPostsByIDsResponse, error)
 
 	// ==================== 帖子管理 ====================
 
@@ -84,6 +86,22 @@ type PostUsecase interface {
 	ListLikedPostIDs(ctx context.Context, req *postv1.ListLikedPostIDsRequest) (*postv1.ListLikedPostIDsResponse, error)
 	// ListFavouritePostIDs 收藏的帖子 ID（同构；FavouriteCap 内一页可拉全）
 	ListFavouritePostIDs(ctx context.Context, req *postv1.ListFavouritePostIDsRequest) (*postv1.ListFavouritePostIDsResponse, error)
+
+	// ==================== 评论 ====================
+
+	// CreateComment 发表一级评论（同步链路：参数校验 + 内容审核 + 状态校验均在请求内完成，写入即可见；
+	// 仅 PUBLISHED 可评论，非 PUBLISHED → NotFound）
+	CreateComment(ctx context.Context, req *postv1.CreateCommentRequest) (*postv1.CreateCommentResponse, error)
+	// ReplyComment 回复（楼中楼：挂 parent 所在楼层，parent 可以是回复；同步链路同 CreateComment；
+	// parent 必须存在、同帖、未删，否则 NotFound）
+	ReplyComment(ctx context.Context, req *postv1.ReplyCommentRequest) (*postv1.ReplyCommentResponse, error)
+	// DeleteComment 删除评论（软删；评论作者或帖子作者可删，否则 Forbidden；删一级评论级联软删整楼；
+	// 幂等：重复删除成功且不重复减计数）
+	DeleteComment(ctx context.Context, req *postv1.DeleteCommentRequest) (*postv1.DeleteCommentResponse, error)
+	// ListComments 帖子一级评论分页（created_at DESC 游标；每条带楼层 reply_count；空页 = 空列表 + 空游标）
+	ListComments(ctx context.Context, req *postv1.ListCommentsRequest) (*postv1.ListCommentsResponse, error)
+	// ListReplies 楼内回复分页（root_id = 楼层 id；平铺含回复的回复；空页语义同上）
+	ListReplies(ctx context.Context, req *postv1.ListRepliesRequest) (*postv1.ListRepliesResponse, error)
 }
 
 // PostUsecaseImpl 帖子业务逻辑实现
@@ -591,6 +609,53 @@ func (u *PostUsecaseImpl) ViewPost(ctx context.Context, req *postv1.ViewPostRequ
 	}
 }
 
+// ViewPostsByIDs 面客批量查看（信息流等组装口径）：仅 PUBLISHED 可见，
+// 可见性裁决收敛服务端（与 GetPostsByIDs 内部取数（全状态）成对）。
+// 逐条结果（不保证与输入同序），key = post_id 定位：fail = 不可见/不存在（NotFound，
+// 不暴露状态存在性）/ 非法 id（InvalidID）；调用方按 post_id 对账，不依赖顺序
+func (u *PostUsecaseImpl) ViewPostsByIDs(ctx context.Context, req *postv1.ViewPostsByIDsRequest) (*postv1.ViewPostsByIDsResponse, error) {
+	ids := make([]int64, 0, len(req.GetPostIds()))
+	for _, id := range req.GetPostIds() {
+		parsedID, err := snowflake.ParseString(id)
+		if err != nil {
+			continue
+		}
+		ids = append(ids, parsedID.Int64())
+	}
+
+	posts, err := u.Repo.GetPosts(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get posts: %w", err)
+	}
+
+	// 命中且 PUBLISHED 的出 brief；其余（不存在/非 PUBLISHED）统一 NotFound——不暴露状态存在性
+	results := make([]*postv1.PostBriefResult, 0, len(ids))
+	visible := make(map[int64]struct{}, len(posts))
+	for _, p := range posts {
+		if p.Status != postv1.PostStatus_POST_STATUS_PUBLISHED {
+			continue
+		}
+		results = append(results, &postv1.PostBriefResult{
+			PostId: snowflake.ParseInt64(p.ID).String(),
+			Post:   p.ToBrief(),
+		})
+		visible[p.ID] = struct{}{}
+	}
+
+	// ID 合法但不可见（不存在/非 PUBLISHED）逐条 fail 提示定位
+	for _, id := range ids {
+		if _, ok := visible[id]; !ok {
+			results = append(results, &postv1.PostBriefResult{PostId: snowflake.ParseInt64(id).String(), Fail: true, Err: errmsg.NotFound})
+		}
+	}
+	for _, id := range req.GetPostIds() {
+		if _, err := snowflake.ParseString(id); err != nil {
+			results = append(results, &postv1.PostBriefResult{PostId: id, Fail: true, Err: errmsg.InvalidID})
+		}
+	}
+	return &postv1.ViewPostsByIDsResponse{Results: results}, nil
+}
+
 func (u *PostUsecaseImpl) GetPostStatus(ctx context.Context, req *postv1.GetPostStatusRequest) (*postv1.GetPostStatusResponse, error) {
 
 	postID, err := snowflake.ParseString(req.GetPostId())
@@ -844,6 +909,14 @@ func interactionStat(ctx context.Context, repo PostRepository, postID int64) (*p
 	return stats[0], nil
 }
 
+// auditComment 评论内容同步审核（占位：当前直接放行，对齐 posts 审核占位口径）。
+// 口径：评论不走 outbox 异步审核链路，创建/回复请求内同步完成校验 + 审核，写入即可见（无 AUDITING 态）；
+// 后续接入内容审核服务时原地替换本函数即可，不改调用方
+func auditComment(content string) error {
+	// TODO: 接入内容审核服务后在此同步调用，拒绝时返回 errNotAudited 类错误
+	return nil
+}
+
 // LikePost 点赞（幂等：重复点赞返回成功且不重复计数；明细为准 + 同事务条件计数，强一致）
 func (u *PostUsecaseImpl) LikePost(ctx context.Context, req *postv1.LikePostRequest) (*postv1.LikePostResponse, error) {
 	uid, err := snowflake.ParseString(req.GetUid())
@@ -1076,4 +1149,339 @@ func (u *PostUsecaseImpl) ListFavouritePostIDs(ctx context.Context, req *postv1.
 	}
 
 	return &postv1.ListFavouritePostIDsResponse{PostIds: ids, Cursor: cursor}, nil
+}
+
+// ==================== 评论 ====================
+
+// CreateComment 发表一级评论（同步链路：格式校验 + 同步审核 + 状态校验均在请求内完成，写入即可见）；
+// 明细为准 + 同事务条件计数（强一致，与点赞同口径）
+func (u *PostUsecaseImpl) CreateComment(ctx context.Context, req *postv1.CreateCommentRequest) (*postv1.CreateCommentResponse, error) {
+	uid, err := snowflake.ParseString(req.GetUid())
+	if err != nil {
+		return &postv1.CreateCommentResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+	postID, err := snowflake.ParseString(req.GetPostId())
+	if err != nil {
+		return &postv1.CreateCommentResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+
+	// 同步链路：格式校验 + 内容审核（占位）在请求内完成，不走 outbox 异步审核
+	if !utils.ValidateComment(req.GetContent()) {
+		return &postv1.CreateCommentResponse{Fail: true, Err: errmsg.InvalidComment}, nil
+	}
+	if err := auditComment(req.GetContent()); err != nil {
+		return &postv1.CreateCommentResponse{Fail: true, Err: errmsg.InvalidComment}, nil
+	}
+
+	comment := &post.PostComment{
+		PostID:  postID.Int64(),
+		UserID:  uid.Int64(),
+		Content: req.GetContent(),
+		Status:  postv1.CommentStatus_COMMENT_STATUS_NORMAL,
+	}
+
+	var stat *post.PostStat
+	err = u.Repo.Transaction(func(repo PostRepository) error {
+		if err := assertInteractable(ctx, repo, postID.Int64()); err != nil {
+			return err
+		}
+		if err := repo.CreateComment(ctx, comment); err != nil {
+			return err
+		}
+		info, err := repo.IncPostCommentCount(ctx, postID.Int64())
+		if err != nil {
+			return err
+		}
+		if info.RowsAffected == 0 {
+			return errNotFound
+		}
+		stat, err = interactionStat(ctx, repo, postID.Int64())
+		return err
+	})
+	if errors.Is(err, errNotFound) {
+		return &postv1.CreateCommentResponse{Fail: true, Err: errmsg.NotFound}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to create comment: %w", err)
+	}
+
+	return &postv1.CreateCommentResponse{Comment: comment.ToProto(), CommentCount: stat.CommentCount}, nil
+}
+
+// ReplyComment 回复（楼中楼：挂 parent 所在楼层，parent 可以是回复；同步链路同 CreateComment）。
+// 楼层行锁串行化与删楼的竞态：锁内断言楼层 NORMAL，防向已删楼插孤儿回复
+func (u *PostUsecaseImpl) ReplyComment(ctx context.Context, req *postv1.ReplyCommentRequest) (*postv1.ReplyCommentResponse, error) {
+	uid, err := snowflake.ParseString(req.GetUid())
+	if err != nil {
+		return &postv1.ReplyCommentResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+	postID, err := snowflake.ParseString(req.GetPostId())
+	if err != nil {
+		return &postv1.ReplyCommentResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+	parentID, err := snowflake.ParseString(req.GetParentId())
+	if err != nil {
+		return &postv1.ReplyCommentResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+
+	if !utils.ValidateComment(req.GetContent()) {
+		return &postv1.ReplyCommentResponse{Fail: true, Err: errmsg.InvalidComment}, nil
+	}
+	if err := auditComment(req.GetContent()); err != nil {
+		return &postv1.ReplyCommentResponse{Fail: true, Err: errmsg.InvalidComment}, nil
+	}
+
+	comment := &post.PostComment{
+		PostID:   postID.Int64(),
+		UserID:   uid.Int64(),
+		ParentID: parentID.Int64(),
+		Content:  req.GetContent(),
+		Status:   postv1.CommentStatus_COMMENT_STATUS_NORMAL,
+	}
+
+	var stat *post.PostStat
+	err = u.Repo.Transaction(func(repo PostRepository) error {
+		if err := assertInteractable(ctx, repo, postID.Int64()); err != nil {
+			return err
+		}
+		// parent 非锁定读：存在、同帖、未删（并发被删时回复仍成立，@展示降级，设计口径）
+		ok, parent, err := repo.GetComment(ctx, parentID.Int64())
+		if err != nil {
+			return err
+		}
+		if !ok || parent.PostID != postID.Int64() || parent.Status != postv1.CommentStatus_COMMENT_STATUS_NORMAL {
+			return errNotFound
+		}
+		rootID := parent.RootID
+		if rootID == 0 {
+			rootID = parent.ID
+		}
+		// 楼层行锁（锁序恒为单行）：与删楼（DeleteComment 级联）串行化，锁内断言 NORMAL
+		locked, root, err := repo.LockCommentForUpdate(ctx, rootID)
+		if err != nil {
+			return err
+		}
+		if !locked || root.Status != postv1.CommentStatus_COMMENT_STATUS_NORMAL {
+			return errNotFound
+		}
+
+		comment.RootID = rootID
+		comment.ReplyToUserID = parent.UserID
+		if err := repo.CreateComment(ctx, comment); err != nil {
+			return err
+		}
+		info, err := repo.IncCommentReplyCount(ctx, rootID)
+		if err != nil {
+			return err
+		}
+		if info.RowsAffected == 0 {
+			return errNotFound
+		}
+		info, err = repo.IncPostCommentCount(ctx, postID.Int64())
+		if err != nil {
+			return err
+		}
+		if info.RowsAffected == 0 {
+			return errNotFound
+		}
+		stat, err = interactionStat(ctx, repo, postID.Int64())
+		return err
+	})
+	if errors.Is(err, errNotFound) {
+		return &postv1.ReplyCommentResponse{Fail: true, Err: errmsg.NotFound}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to reply comment: %w", err)
+	}
+
+	return &postv1.ReplyCommentResponse{Comment: comment.ToProto(), CommentCount: stat.CommentCount}, nil
+}
+
+// DeleteComment 删除评论（软删；评论作者或帖子作者可删；删一级评论级联软删整楼）。
+// 计数回收以实际删除行数为准（条件软删 RowsAffected），重复删除 0 行命中即幂等不减
+func (u *PostUsecaseImpl) DeleteComment(ctx context.Context, req *postv1.DeleteCommentRequest) (*postv1.DeleteCommentResponse, error) {
+	uid, err := snowflake.ParseString(req.GetUid())
+	if err != nil {
+		return &postv1.DeleteCommentResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+	commentID, err := snowflake.ParseString(req.GetCommentId())
+	if err != nil {
+		return &postv1.DeleteCommentResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+
+	var commentCount int64
+	err = u.Repo.Transaction(func(repo PostRepository) error {
+		ok, target, err := repo.GetComment(ctx, commentID.Int64())
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errNotFound
+		}
+		if target.Status == postv1.CommentStatus_COMMENT_STATUS_DELETED {
+			// 幂等：重复删除不重复减计数，回读当前计数
+			stat, err := interactionStat(ctx, repo, target.PostID)
+			if err != nil {
+				return err
+			}
+			commentCount = stat.CommentCount
+			return nil
+		}
+
+		// 权限：评论作者或帖子作者（楼主删评），否则 Forbidden
+		isAuthor, authorID, err := repo.GetAuthorID(ctx, target.PostID)
+		if err != nil {
+			return err
+		}
+		if !isAuthor {
+			return errNotFound
+		}
+		if uid.Int64() != target.UserID && uid.Int64() != authorID {
+			return errNotAuthor
+		}
+
+		if target.RootID == 0 {
+			// 删一级评论：行锁串行化与发回复 → 级联软删整楼，按实际删除行数回收计数
+			locked, root, err := repo.LockCommentForUpdate(ctx, target.ID)
+			if err != nil {
+				return err
+			}
+			if !locked || root.Status != postv1.CommentStatus_COMMENT_STATUS_NORMAL {
+				// 并发已删：幂等成功（锁内重读为准）
+				stat, err := interactionStat(ctx, repo, target.PostID)
+				if err != nil {
+					return err
+				}
+				commentCount = stat.CommentCount
+				return nil
+			}
+			info, err := repo.SetCommentDeleted(ctx, target.ID)
+			if err != nil {
+				return err
+			}
+			total := info.RowsAffected
+			info, err = repo.SetCommentsDeletedByRoot(ctx, target.ID)
+			if err != nil {
+				return err
+			}
+			total += info.RowsAffected
+			info, err = repo.DecPostCommentCount(ctx, target.PostID, total)
+			if err != nil {
+				return err
+			}
+			if info.RowsAffected == 0 {
+				return errNotFound
+			}
+		} else {
+			// 删回复：条件软删自身，实际删中才回收楼层/帖子计数（并发已删即幂等）
+			info, err := repo.SetCommentDeleted(ctx, target.ID)
+			if err != nil {
+				return err
+			}
+			if info.RowsAffected > 0 {
+				if _, err := repo.DecCommentReplyCount(ctx, target.RootID); err != nil {
+					return err
+				}
+				info, err = repo.DecPostCommentCount(ctx, target.PostID, 1)
+				if err != nil {
+					return err
+				}
+				if info.RowsAffected == 0 {
+					return errNotFound
+				}
+			}
+		}
+
+		stat, err := interactionStat(ctx, repo, target.PostID)
+		if err != nil {
+			return err
+		}
+		commentCount = stat.CommentCount
+		return nil
+	})
+	if errors.Is(err, errNotFound) {
+		return &postv1.DeleteCommentResponse{Fail: true, Err: errmsg.NotFound}, nil
+	}
+	if errors.Is(err, errNotAuthor) {
+		return &postv1.DeleteCommentResponse{Fail: true, Err: errmsg.Forbidden}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete comment: %w", err)
+	}
+
+	return &postv1.DeleteCommentResponse{CommentCount: commentCount, Deleted: true}, nil
+}
+
+// ListComments 帖子一级评论分页（created_at DESC 时间游标；状态裁决复用互动口径，非 PUBLISHED 一律 NotFound）
+func (u *PostUsecaseImpl) ListComments(ctx context.Context, req *postv1.ListCommentsRequest) (*postv1.ListCommentsResponse, error) {
+	postID, err := snowflake.ParseString(req.GetPostId())
+	if err != nil {
+		return &postv1.ListCommentsResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+
+	if err := assertInteractable(ctx, u.Repo, postID.Int64()); err != nil {
+		if errors.Is(err, errNotFound) {
+			return &postv1.ListCommentsResponse{Fail: true, Err: errmsg.NotFound}, nil
+		}
+		return nil, fmt.Errorf("failed to list comments: %w", err)
+	}
+
+	before, limit := utils.ParseTimeCursor(req.GetCursor())
+	rows, err := u.Repo.ListComments(ctx, postID.Int64(), before, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list comments: %w", err)
+	}
+
+	// 空页语义（与 ViewPostByAuthor 一致）：列表为空且 cursor 为空，调用方按空列表终止翻页
+	comments := make([]*postv1.Comment, 0, len(rows))
+	for _, v := range rows {
+		comments = append(comments, v.ToProto())
+	}
+	var cursor *commonv1.Cursor
+	if len(rows) > 0 {
+		cursor = utils.NewTimeCursor(rows[len(rows)-1].CreatedAt, limit)
+	}
+
+	return &postv1.ListCommentsResponse{Comments: comments, Cursor: cursor}, nil
+}
+
+// ListReplies 楼内回复分页（created_at DESC 时间游标；平铺含回复的回复，带 reply_to_user_id 供 @展示）。
+// 楼层不存在/已删 → NotFound（读侧不泄露已删内容），帖子状态裁决同 ListComments
+func (u *PostUsecaseImpl) ListReplies(ctx context.Context, req *postv1.ListRepliesRequest) (*postv1.ListRepliesResponse, error) {
+	rootID, err := snowflake.ParseString(req.GetRootId())
+	if err != nil {
+		return &postv1.ListRepliesResponse{Fail: true, Err: errmsg.InvalidID}, nil
+	}
+
+	ok, root, err := u.Repo.GetComment(ctx, rootID.Int64())
+	if err != nil {
+		return nil, fmt.Errorf("failed to list replies: %w", err)
+	}
+	if !ok || root.RootID != 0 || root.Status != postv1.CommentStatus_COMMENT_STATUS_NORMAL {
+		// root_id 必须指向一级评论（楼层）；不存在/已删/传了回复 id 一律 NotFound
+		return &postv1.ListRepliesResponse{Fail: true, Err: errmsg.NotFound}, nil
+	}
+	if err := assertInteractable(ctx, u.Repo, root.PostID); err != nil {
+		if errors.Is(err, errNotFound) {
+			return &postv1.ListRepliesResponse{Fail: true, Err: errmsg.NotFound}, nil
+		}
+		return nil, fmt.Errorf("failed to list replies: %w", err)
+	}
+
+	before, limit := utils.ParseTimeCursor(req.GetCursor())
+	rows, err := u.Repo.ListReplies(ctx, rootID.Int64(), before, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list replies: %w", err)
+	}
+
+	replies := make([]*postv1.Comment, 0, len(rows))
+	for _, v := range rows {
+		replies = append(replies, v.ToProto())
+	}
+	var cursor *commonv1.Cursor
+	if len(rows) > 0 {
+		cursor = utils.NewTimeCursor(rows[len(rows)-1].CreatedAt, limit)
+	}
+
+	return &postv1.ListRepliesResponse{Replies: replies, Cursor: cursor}, nil
 }

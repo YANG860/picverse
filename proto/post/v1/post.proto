@@ -52,3 +52,33 @@ enum PostStatus {
   POST_STATUS_BANNED = 4;
   POST_STATUS_DELETED = 5;
 }
+
+// Comment 评论（两级楼中楼：一级评论 + 回复，回复间平级、parent_id 指向被回复者）。
+// root_id 恒为楼层 id（一级评论 = 自身 comment_id）；parent_id / reply_to_user_id 一级评论为空串。
+// 软删行不出现在任何列表/详情，status 不面客。
+message Comment {
+  string comment_id = 1;
+  string post_id = 2;
+
+  // 楼层 id（一级评论 = 自身 comment_id）
+  string root_id = 3;
+  // 被回复评论 id（一级评论为空串；回复的回复指向楼内被回复的那条）
+  string parent_id = 4;
+
+  string user_id = 5;
+  // 被回复者 uid（一级评论为空串），展示 @name 用
+  string reply_to_user_id = 6;
+
+  string content = 7;
+  // 楼层回复数（仅一级评论有意义，回复恒 0）
+  int64 reply_count = 8;
+  // 创建时间：unix 毫秒时间戳的字符串形式，同 Post.created_at 口径
+  string created_at = 9;
+}
+
+// 评论状态（NORMAL / DELETED 软删；BANNED 为枚举位预留，暂不使用）
+enum CommentStatus {
+  COMMENT_STATUS_UNSPECIFIED = 0;
+  COMMENT_STATUS_NORMAL = 1;
+  COMMENT_STATUS_DELETED = 2;
+}

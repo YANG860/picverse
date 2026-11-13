@@ -20,7 +20,9 @@
 
 `models.PostMedia`（表 `post_medias`）：帖子↔媒体关联，嵌入 `media.MediaFile`（列前缀 `media_`），`SortOrder` 为展示顺序，**首张即封面**。
 
-## 接口（PostService，19 rpc）
+`models.PostComment`（表 `post_comments`，一级评论 + 楼内回复同表）：`RootID` 为楼层 ID（一级评论落库 `0` 哨兵，`ToProto` 转为自身 id；回复为顶层评论 id）、`ParentID`/`ReplyToUserID` 为被回复评论/被回复者（一级为 0），`Status` 为 `CommentStatus`（NORMAL / DELETED 软删），`ReplyCount` 为楼层回复数（仅一级评论有意义）。
+
+## 接口（PostService，24 rpc）
 
 | RPC | 状态 | 说明 |
 | --- | --- | --- |
@@ -39,6 +41,11 @@
 | `FavouritePost` / `UnfavouritePost` | ✅ | 收藏/取消（幂等；新增收藏校验 `FavouriteCap`，超限 `FavouriteLimitExceeded(1306)` 整体回滚）；响应 `{favourite_count, favourited}` |
 | `ListLikedPostIDs` | ✅ | 最近点赞的帖子 ID（内部接口，BFF 会话注入 uid 转发；前端预取判态，`created_at DESC` 时间游标） |
 | `ListFavouritePostIDs` | ✅ | 收藏的帖子 ID（同构；`FavouriteCap` 内一页可拉全） |
+| `CreateComment` | ✅ | 发表一级评论（同步链路：校验+审核+状态裁决均在请求内完成，写入即可见）；响应带 `comment` + 最新 `comment_count` |
+| `ReplyComment` | ✅ | 回复（楼中楼：挂 parent 所在楼层，parent 可为回复；parent 必须存在、同帖、未删） |
+| `DeleteComment` | ✅ | 删评（软删，评论作者或帖子作者可删否则 `Forbidden`；删一级评论级联软删整楼；幂等重复删不重复减计数） |
+| `ListComments` | ✅ | 一级评论分页（`created_at DESC` 时间游标，每条带楼层 `reply_count`；空页返回空列表 + 空游标） |
+| `ListReplies` | ✅ | 楼内回复分页（root_id = 楼层 id，平铺含回复的回复；同构） |
 
 ## 关键逻辑
 
@@ -64,7 +71,7 @@
 当前审核为**占位实现**：`PublishDraft` 不校验“图片审核通过”、consumer `handleAuditPost` 无实质审核逻辑（TODO 保留），审核完直接流转 `PUBLISHED`；待审核链路完善后补。
 
 ### 删帖/封禁消息链路（consumer）
-`DeletePost` 软删（事务内发 `DeletePost` 消息）→ consumer `handleDeletePost` 同事务**物理回收**软删（DELETED 状态）帖子行与其媒体关联，重复投递幂等；`repo.DeletePost` 带 `status=DELETED` 守卫，不会误删未删帖的裸行。**资产计数回收**在同链路闭环：`DeletePostMedias` 先查后删返回被删关联的资产 ID，按槽位同事务写 outbox `deref_media` 消息（media consumer 递减引用计数），删几槽减几槽，重复投递时 0 行命中即不重复减。`BanPost`（软封禁）与发布后的 `PublishPost` 消息目前由 consumer 占位消费（日志留痕 + ACK，对齐 media 侧 `HandlePublishMedia` 模式），下游逻辑（媒体资产处置/通知等）待需求明确后补。
+`DeletePost` 软删（事务内发 `DeletePost` 消息）→ consumer `handleDeletePost` 同事务**物理回收**软删（DELETED 状态）帖子行、其媒体关联与该帖**全部评论行**（任意状态一并清，`comment_count` 随帖子行消失无需回收），重复投递幂等；`repo.DeletePost` 带 `status=DELETED` 守卫，不会误删未删帖的裸行。**资产计数回收**在同链路闭环：`DeletePostMedias` 先查后删返回被删关联的资产 ID，按槽位同事务写 outbox `deref_media` 消息（media consumer 递减引用计数），删几槽减几槽，重复投递时 0 行命中即不重复减。`BanPost`（软封禁）与发布后的 `PublishPost` 消息目前由 consumer 占位消费（日志留痕 + ACK，对齐 media 侧 `HandlePublishMedia` 模式），下游逻辑（媒体资产处置/通知等）待需求明确后补。
 
 ### 互动（点赞/收藏/浏览计数）
 - **强一致计数**：明细为准（`post_likes`/`post_favourites` 唯一约束 `(post_id, user_id)` + `OnConflict DoNothing` 幂等锚点），明细增删与 `posts.like_count`/`favourite_count` 条件更新同事务；减法为防负条件更新（仅计数 > 0 才减）。
@@ -73,6 +80,14 @@
 - **收藏夹容量**：`defaults.FavouriteCap`（1000）；仅新增收藏校验（同事务计数含自身，超限回滚插入）；已藏重复调用幂等成功不报满。
 - **浏览计数 PV 近似（Redis 批量写回）**：BFF `GetPost` 他人访问时经 `PostEntityCache.IncrPostViewCount` 计数 +1（作者自访不计，失败仅 Warn 不打挂详情）；`internal/poller.RedisPoller`（cmd/poller 常驻）定时（`config.post.view_flush_interval`，默认 30s）原子取走（GETDEL）增量写回 `posts.view_count`。只丢不重：取走在前写库在后，失败丢该批增量；不建 view 明细表，`view_count` 为近似值（计数器约定见 [packages/cache/cache.md](../../packages/cache/cache.md)）。
 - **判态列表**：`ListLikedPostIDs`/`ListFavouritePostIDs` 供前端预取 post_ids 本地判态（赞态近似、藏态精确）；时间游标严格小于边界，同毫秒并列行在页边界可能落页外（与现有列表翻页同口径）。
+
+### 评论（两级楼中楼）
+- **同步链路**：`CreateComment`/`ReplyComment` 的内容校验（`utils.ValidateComment`，≤500 rune）+ 审核（`auditComment` 占位，直接放行）+ 状态裁决均在请求内同步完成，不走 outbox 异步审核（与帖子发布审核链路不同），写入即可见；后续接内容审核服务时原地替换 `auditComment` 即可。
+- **层级口径**：一级评论落库 `root_id=0`（哨兵，proto 层转为自身 id），回复 `root_id=楼层 id`、`parent_id=被回复评论`（回复的回复平级挂同一楼，`reply_to_user_id` 供 @展示）；楼内回复由 `reply_count`（同事务维护）判断有无，展开才拉 `ListReplies`（前端无 N+1 轮询）。
+- **计数强一致**：`comment_count` = 一级 + 回复总条数（明细为准，同事务条件增减，减法防负）；删评按**实际删除行数**（条件软删 `RowsAffected`）回收计数，重复删 0 行命中即幂等。
+- **删楼与发回复的竞态**：共用楼层单行锁（`LockCommentForUpdate`，锁序恒为单行无死锁面）：发回复锁内断言楼层 NORMAL 防向已删楼插孤儿回复；删楼锁内重读防重复减计数。
+- **删除权限**：评论作者或帖子作者（楼主删评）可删，否则 `Forbidden`；不存在 → `NotFound`，已删 → 幂等成功（回读当前计数）。
+- **列表口径**：仅 NORMAL 行出列表（软删不泄露，读侧楼层/parent 不存在或已删一律 `NotFound`）；状态裁决复用互动口径（仅 PUBLISHED 可见，非 PUBLISHED 一律 `NotFound`）；`created_at DESC` 时间游标，同毫秒并列行页边界可能落页外（全项目统一取舍）。
 
 ## 依赖
 
@@ -83,6 +98,6 @@
 
 ## 状态
 
-`PostService` 的 17 个 rpc **全部已实现**：草稿链路（`CreateDraft` / `UpdateDraft` / `UpdateDraftMedias` / `PublishDraft`）、查询（`GetPostsByIDs` / `GetPostStatus` / `ViewPost` / `ViewPostByAuthor`）、管理（`DeletePost` / `BanPost` / `SyncPostStat`）、互动（`LikePost` / `UnlikePost` / `FavouritePost` / `UnfavouritePost` / `ListLikedPostIDs` / `ListFavouritePostIDs`）。
+`PostService` 的 24 个 rpc **全部已实现**：草稿链路（`CreateDraft` / `UpdateDraft` / `UpdateDraftMedias` / `PublishDraft`）、查询（`GetPostsByIDs` / `ViewPostsByIDs` / `GetPostStatus` / `ViewPost` / `ViewPostByAuthor`）、管理（`DeletePost` / `BanPost` / `SyncPostStat`）、互动（`LikePost` / `UnlikePost` / `FavouritePost` / `UnfavouritePost` / `ListLikedPostIDs` / `ListFavouritePostIDs`）、评论（`CreateComment` / `ReplyComment` / `DeleteComment` / `ListComments` / `ListReplies`）。
 
 测试：`internal/post/v1` 含 repo 层与 biz 层集成测试（`repo_test.go` / `biz_test.go`，真实 testdb 模板库克隆 + testmq 内存模拟，覆盖正常/边界/错误路径与状态机），依赖 `test/testdb`。

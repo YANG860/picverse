@@ -473,3 +473,66 @@ func (r *CachedPostRepo) ListFavouritePostIDs(ctx context.Context, userID int64,
 func (r *CachedPostRepo) IncPostViewCount(ctx context.Context, postID int64, delta int64) (gen.ResultInfo, error) {
 	return r.inner.IncPostViewCount(ctx, postID, delta)
 }
+
+// ==================== 评论 ====================
+// 全部直通转发：评论明细不入缓存，计数列不缓存（同 UpdatePostCommentCount 口径），无失效需求
+
+// CreateComment 直通（追加插入）
+func (r *CachedPostRepo) CreateComment(ctx context.Context, comment *models.PostComment) error {
+	return r.inner.CreateComment(ctx, comment)
+}
+
+// GetComment 直通
+func (r *CachedPostRepo) GetComment(ctx context.Context, commentID int64) (bool, *models.PostComment, error) {
+	return r.inner.GetComment(ctx, commentID)
+}
+
+// LockCommentForUpdate 直通
+func (r *CachedPostRepo) LockCommentForUpdate(ctx context.Context, commentID int64) (bool, *models.PostComment, error) {
+	return r.inner.LockCommentForUpdate(ctx, commentID)
+}
+
+// SetCommentDeleted 直通
+func (r *CachedPostRepo) SetCommentDeleted(ctx context.Context, commentID int64) (gen.ResultInfo, error) {
+	return r.inner.SetCommentDeleted(ctx, commentID)
+}
+
+// SetCommentsDeletedByRoot 直通
+func (r *CachedPostRepo) SetCommentsDeletedByRoot(ctx context.Context, rootID int64) (gen.ResultInfo, error) {
+	return r.inner.SetCommentsDeletedByRoot(ctx, rootID)
+}
+
+// IncCommentReplyCount 直通
+func (r *CachedPostRepo) IncCommentReplyCount(ctx context.Context, commentID int64) (gen.ResultInfo, error) {
+	return r.inner.IncCommentReplyCount(ctx, commentID)
+}
+
+// DecCommentReplyCount 直通
+func (r *CachedPostRepo) DecCommentReplyCount(ctx context.Context, commentID int64) (gen.ResultInfo, error) {
+	return r.inner.DecCommentReplyCount(ctx, commentID)
+}
+
+// IncPostCommentCount 直通（计数不触碰缓存）
+func (r *CachedPostRepo) IncPostCommentCount(ctx context.Context, postID int64) (gen.ResultInfo, error) {
+	return r.inner.IncPostCommentCount(ctx, postID)
+}
+
+// DecPostCommentCount 直通
+func (r *CachedPostRepo) DecPostCommentCount(ctx context.Context, postID int64, n int64) (gen.ResultInfo, error) {
+	return r.inner.DecPostCommentCount(ctx, postID, n)
+}
+
+// ListComments 直通（评论不在缓存范围）
+func (r *CachedPostRepo) ListComments(ctx context.Context, postID int64, before int64, limit int64) ([]*models.PostComment, error) {
+	return r.inner.ListComments(ctx, postID, before, limit)
+}
+
+// ListReplies 直通
+func (r *CachedPostRepo) ListReplies(ctx context.Context, rootID int64, before int64, limit int64) ([]*models.PostComment, error) {
+	return r.inner.ListReplies(ctx, rootID, before, limit)
+}
+
+// DeletePostComments 直通（物理回收不触碰缓存）
+func (r *CachedPostRepo) DeletePostComments(ctx context.Context, postID int64) (gen.ResultInfo, error) {
+	return r.inner.DeletePostComments(ctx, postID)
+}

@@ -113,6 +113,34 @@ type PostRepository interface {
 	ListFavouritePostIDs(ctx context.Context, userID int64, before int64, limit int64) ([]*models.PostFavourite, error)
 	// IncPostViewCount 浏览数增量累加（不校验帖子状态，计数尽力而为）
 	IncPostViewCount(ctx context.Context, postID int64, delta int64) (gen.ResultInfo, error)
+
+	// ==================== 评论 ====================
+	// CreateComment 插入评论/回复明细（追加型，无幂等锚点；RootID=0 为一级评论哨兵，落库即 NORMAL）
+	CreateComment(ctx context.Context, comment *models.PostComment) error
+	// GetComment 按 ID 获取评论（任意状态）；ok 为 false 表示不存在
+	GetComment(ctx context.Context, commentID int64) (bool, *models.PostComment, error)
+	// LockCommentForUpdate 对评论行加行锁并回读（发回复/删楼串行化用）；ok 为 false 表示不存在。
+	// 注意：聚合查询不能携带 FOR UPDATE（PG SQLSTATE 0A000），必须用非聚合查询锁行
+	LockCommentForUpdate(ctx context.Context, commentID int64) (bool, *models.PostComment, error)
+	// SetCommentDeleted 软删单条评论（条件更新，仅 NORMAL 生效）；RowsAffected=0 即已删或不存在（幂等锚点）
+	SetCommentDeleted(ctx context.Context, commentID int64) (gen.ResultInfo, error)
+	// SetCommentsDeletedByRoot 级联软删整楼回复（条件更新，仅 NORMAL 生效）；RowsAffected 即实际删除行数
+	SetCommentsDeletedByRoot(ctx context.Context, rootID int64) (gen.ResultInfo, error)
+	// IncCommentReplyCount 楼层回复数 +1（条件增量，仅 NORMAL 楼层生效；RowsAffected=0 即楼层已删/不存在）
+	IncCommentReplyCount(ctx context.Context, commentID int64) (gen.ResultInfo, error)
+	// DecCommentReplyCount 楼层回复数 -1（防负条件更新，同 DecPostLikeCount 口径）
+	DecCommentReplyCount(ctx context.Context, commentID int64) (gen.ResultInfo, error)
+	// IncPostCommentCount 帖子评论数 +1（条件增量；RowsAffected=0 即帖子不存在）
+	IncPostCommentCount(ctx context.Context, postID int64) (gen.ResultInfo, error)
+	// DecPostCommentCount 帖子评论数 -n（防负条件更新：仅 comment_count >= n 才减；计数不足时按帖子存在性回报）
+	DecPostCommentCount(ctx context.Context, postID int64, n int64) (gen.ResultInfo, error)
+	// ListComments 帖子一级评论游标分页（root_id=0、仅 NORMAL；created_at DESC, id DESC）
+	ListComments(ctx context.Context, postID int64, before int64, limit int64) ([]*models.PostComment, error)
+	// ListReplies 楼内回复游标分页（root_id=楼层、仅 NORMAL；created_at DESC, id DESC）
+	ListReplies(ctx context.Context, rootID int64, before int64, limit int64) ([]*models.PostComment, error)
+	// DeletePostComments 物理删除帖子下全部评论行（删帖回收链路调用，任意状态一并清）；
+	// 重复投递时 0 行命中即幂等，帖子行已物理删除故无需回收计数
+	DeletePostComments(ctx context.Context, postID int64) (gen.ResultInfo, error)
 }
 
 var _ PostRepository = (*PostRepoImpl)(nil)
@@ -613,10 +641,161 @@ func (r *PostRepoImpl) ListFavouritePostIDs(ctx context.Context, userID int64, b
 
 // IncPostViewCount 浏览数增量累加（不校验帖子状态，计数尽力而为）
 func (r *PostRepoImpl) IncPostViewCount(ctx context.Context, postID int64, delta int64) (gen.ResultInfo, error) {
-	q := query.PostDetail
+	q := r.q.PostDetail
 	info, err := q.WithContext(ctx).Where(q.ID.Eq(postID)).UpdateSimple(q.ViewCount.Add(delta))
 	if err != nil {
 		return gen.ResultInfo{}, fmt.Errorf("repo inc post view count %d: %w", postID, err)
 	}
 	return gen.ResultInfo{RowsAffected: info.RowsAffected}, nil
+}
+
+// ==================== 评论 ====================
+
+// CreateComment 插入评论/回复明细（BeforeCreate 钩子填雪花 ID 与时间戳）
+func (r *PostRepoImpl) CreateComment(ctx context.Context, comment *models.PostComment) error {
+	return r.q.PostComment.WithContext(ctx).Create(comment)
+}
+
+// GetComment 按 ID 获取评论（任意状态，含软删行）；ok 为 false 表示不存在
+func (r *PostRepoImpl) GetComment(ctx context.Context, commentID int64) (bool, *models.PostComment, error) {
+	rows, err := r.q.PostComment.WithContext(ctx).
+		Where(r.q.PostComment.ID.Eq(commentID)).
+		Find()
+	if err != nil {
+		return false, nil, fmt.Errorf("repo get comment %d: %w", commentID, err)
+	}
+	if len(rows) == 0 {
+		return false, nil, nil
+	}
+	return true, rows[0], nil
+}
+
+// LockCommentForUpdate 对评论行加行锁（SELECT ... FOR UPDATE）并回读；ok 为 false 表示不存在。
+// 发回复/删楼共用此锁串行化（锁序恒为单行，无死锁面）
+func (r *PostRepoImpl) LockCommentForUpdate(ctx context.Context, commentID int64) (bool, *models.PostComment, error) {
+	rows, err := r.q.PostComment.WithContext(ctx).
+		Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
+		Where(r.q.PostComment.ID.Eq(commentID)).
+		Find()
+	if err != nil {
+		return false, nil, fmt.Errorf("repo lock comment %d: %w", commentID, err)
+	}
+	if len(rows) == 0 {
+		return false, nil, nil
+	}
+	return true, rows[0], nil
+}
+
+// SetCommentDeleted 软删单条评论；WHERE 带 status=NORMAL 条件，已删行不被修改（RowsAffected=0 幂等锚点）
+func (r *PostRepoImpl) SetCommentDeleted(ctx context.Context, commentID int64) (gen.ResultInfo, error) {
+	return r.q.PostComment.WithContext(ctx).
+		Where(
+			r.q.PostComment.ID.Eq(commentID),
+			r.q.PostComment.Status.Eq(int32(postv1.CommentStatus_COMMENT_STATUS_NORMAL)),
+		).
+		Update(r.q.PostComment.Status, int32(postv1.CommentStatus_COMMENT_STATUS_DELETED))
+}
+
+// SetCommentsDeletedByRoot 级联软删整楼回复（不含楼层自身，root_id=哨兵语义）；
+// 条件更新仅 NORMAL 生效，RowsAffected 即实际删除行数（计数回收据此，不漂移）
+func (r *PostRepoImpl) SetCommentsDeletedByRoot(ctx context.Context, rootID int64) (gen.ResultInfo, error) {
+	return r.q.PostComment.WithContext(ctx).
+		Where(
+			r.q.PostComment.RootID.Eq(rootID),
+			r.q.PostComment.Status.Eq(int32(postv1.CommentStatus_COMMENT_STATUS_NORMAL)),
+		).
+		Update(r.q.PostComment.Status, int32(postv1.CommentStatus_COMMENT_STATUS_DELETED))
+}
+
+// IncCommentReplyCount 楼层回复数 +1；WHERE 带 status=NORMAL 条件，已删楼层不被修改
+func (r *PostRepoImpl) IncCommentReplyCount(ctx context.Context, commentID int64) (gen.ResultInfo, error) {
+	return r.q.PostComment.WithContext(ctx).
+		Where(
+			r.q.PostComment.ID.Eq(commentID),
+			r.q.PostComment.Status.Eq(int32(postv1.CommentStatus_COMMENT_STATUS_NORMAL)),
+		).
+		UpdateSimple(r.q.PostComment.ReplyCount.Add(1))
+}
+
+// DecCommentReplyCount 楼层回复数 -1（防负条件更新：仅 reply_count > 0 才减；
+// 计数已 0 时不减但按楼层存在性回报 RowsAffected，同 DecPostLikeCount 口径）
+func (r *PostRepoImpl) DecCommentReplyCount(ctx context.Context, commentID int64) (gen.ResultInfo, error) {
+	info, err := r.q.PostComment.WithContext(ctx).
+		Where(
+			r.q.PostComment.ID.Eq(commentID),
+			r.q.PostComment.Status.Eq(int32(postv1.CommentStatus_COMMENT_STATUS_NORMAL)),
+			r.q.PostComment.ReplyCount.Gt(0),
+		).
+		UpdateSimple(r.q.PostComment.ReplyCount.Sub(1))
+	if err != nil || info.RowsAffected > 0 {
+		return info, err
+	}
+	// 0 行两可：楼层已删/不存在（→0）或计数已 0（防负不减，存在 →1）
+	n, err := r.q.PostComment.WithContext(ctx).Where(r.q.PostComment.ID.Eq(commentID)).Count()
+	if err != nil {
+		return gen.ResultInfo{}, err
+	}
+	return gen.ResultInfo{RowsAffected: n}, nil
+}
+
+// IncPostCommentCount 帖子评论数 +1（条件增量，同 IncPostLikeCount 口径）
+func (r *PostRepoImpl) IncPostCommentCount(ctx context.Context, postID int64) (gen.ResultInfo, error) {
+	return r.q.PostDetail.WithContext(ctx).
+		Where(r.q.PostDetail.ID.Eq(postID)).
+		UpdateSimple(r.q.PostDetail.CommentCount.Add(1))
+}
+
+// DecPostCommentCount 帖子评论数 -n（防负条件更新：仅 comment_count >= n 才减；
+// 计数不足时按帖子存在性回报 RowsAffected，同 DecPostLikeCount 口径）
+func (r *PostRepoImpl) DecPostCommentCount(ctx context.Context, postID int64, n int64) (gen.ResultInfo, error) {
+	info, err := r.q.PostDetail.WithContext(ctx).
+		Where(
+			r.q.PostDetail.ID.Eq(postID),
+			r.q.PostDetail.CommentCount.Gte(n),
+		).
+		UpdateSimple(r.q.PostDetail.CommentCount.Sub(n))
+	if err != nil || info.RowsAffected > 0 {
+		return info, err
+	}
+	// 0 行两可：帖子不存在（→0）或计数不足 n（防负不减，存在 →1）
+	m, err := r.q.PostDetail.WithContext(ctx).Where(r.q.PostDetail.ID.Eq(postID)).Count()
+	if err != nil {
+		return gen.ResultInfo{}, err
+	}
+	return gen.ResultInfo{RowsAffected: m}, nil
+}
+
+// ListComments 帖子一级评论游标分页（root_id=0、仅 NORMAL；created_at DESC, id DESC）
+func (r *PostRepoImpl) ListComments(ctx context.Context, postID int64, before int64, limit int64) ([]*models.PostComment, error) {
+	return r.q.PostComment.WithContext(ctx).
+		Where(
+			r.q.PostComment.PostID.Eq(postID),
+			r.q.PostComment.RootID.Eq(0),
+			r.q.PostComment.Status.Eq(int32(postv1.CommentStatus_COMMENT_STATUS_NORMAL)),
+			r.q.PostComment.CreatedAt.Lt(before),
+		).
+		Order(r.q.PostComment.CreatedAt.Desc(), r.q.PostComment.ID.Desc()).
+		Limit(int(limit)).
+		Find()
+}
+
+// ListReplies 楼内回复游标分页（root_id=楼层、仅 NORMAL；created_at DESC, id DESC；平铺含回复的回复）
+func (r *PostRepoImpl) ListReplies(ctx context.Context, rootID int64, before int64, limit int64) ([]*models.PostComment, error) {
+	return r.q.PostComment.WithContext(ctx).
+		Where(
+			r.q.PostComment.RootID.Eq(rootID),
+			r.q.PostComment.Status.Eq(int32(postv1.CommentStatus_COMMENT_STATUS_NORMAL)),
+			r.q.PostComment.CreatedAt.Lt(before),
+		).
+		Order(r.q.PostComment.CreatedAt.Desc(), r.q.PostComment.ID.Desc()).
+		Limit(int(limit)).
+		Find()
+}
+
+// DeletePostComments 物理删除帖子下全部评论行（软删/正常一并清）；
+// 与 repo.DeletePost 同风格的幂等口径：重复投递时 0 行命中即成功
+func (r *PostRepoImpl) DeletePostComments(ctx context.Context, postID int64) (gen.ResultInfo, error) {
+	return r.q.PostComment.WithContext(ctx).
+		Where(r.q.PostComment.PostID.Eq(postID)).
+		Delete()
 }

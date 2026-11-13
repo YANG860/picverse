@@ -100,6 +100,30 @@ message GetPostsByIDsResponse {
   repeated PostResult results = 1;
 }
 
+// PostBriefResult PostBrief 逐条结果（key = post_id 定位；fail 提示该条不可见/非法）
+message PostBriefResult {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  string post_id = 3 [(buf.validate.field).string.min_len = 1];
+  PostBrief post = 4;
+}
+
+// ViewPostsByIDsRequest 面客批量查看帖子（信息流等组装口径）：仅返回 PUBLISHED，
+// 可见性裁决收敛服务端，调用方不自行过滤状态（与 GetPostsByIDs 内部取数（全状态）成对）。
+message ViewPostsByIDsRequest {
+  repeated string post_ids = 1 [(buf.validate.field).repeated.items.string.min_len = 1];
+}
+
+message ViewPostsByIDsResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 逐条结果（不保证与输入同序），key = post_id 定位：fail = 不可见/不存在（NotFound，
+  // 不暴露状态存在性）/ 非法 id（InvalidID）；调用方按 post_id 对账，不依赖顺序
+  repeated PostBriefResult results = 3;
+}
+
 message PostResult {
   bool fail = 1;
   common.v1.Error err = 2;
@@ -276,5 +300,92 @@ message ListFavouritePostIDsResponse {
 
   // 翻页到底/暂无内容：列表为空且 cursor 为空
   repeated string post_ids = 3;
+  common.v1.Cursor cursor = 4;
+}
+
+// ==================== 评论 ====================
+// 口径：仅 PUBLISHED 可评论/可读（非 PUBLISHED 一律 NotFound，不泄露帖子状态）；
+// 内容非空且 ≤ 500 rune（utils.ValidateComment）；
+// 删除软删、幂等（重复删除返回成功且不重复减计数），删一级评论级联软删整楼；
+// 响应带帖子最新 comment_count（同事务返回）
+
+// 发表一级评论（追加型，无幂等语义）
+message CreateCommentRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  string post_id = 2 [(buf.validate.field).string.min_len = 1];
+  string content = 3 [(buf.validate.field).string.min_len = 1];
+}
+
+message CreateCommentResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  Comment comment = 3;
+  // 帖子最新总评论数（一级 + 回复，同事务返回）
+  int64 comment_count = 4;
+}
+
+// 回复（楼中楼：挂在 parent 所在楼层；parent 可以是回复，展示 @reply_to）。
+// parent 必须存在、同帖、未删，否则 NotFound
+message ReplyCommentRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  string post_id = 2 [(buf.validate.field).string.min_len = 1];
+  // 被回复评论 id（一级评论或楼内回复均可）
+  string parent_id = 3 [(buf.validate.field).string.min_len = 1];
+  string content = 4 [(buf.validate.field).string.min_len = 1];
+}
+
+message ReplyCommentResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  Comment comment = 3;
+  int64 comment_count = 4;
+}
+
+// 删除评论（软删；评论作者或帖子作者可删，否则 Forbidden）。
+// 删一级评论级联软删整楼；按实际删除行数回收计数；重复删除成功幂等
+message DeleteCommentRequest {
+  string uid = 1 [(buf.validate.field).string.min_len = 1];
+  string comment_id = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message DeleteCommentResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 帖子最新总评论数
+  int64 comment_count = 3;
+  // 动作后态（幂等重复删除也报 true）
+  bool deleted = 4;
+}
+
+// 帖子一级评论分页（created_at DESC 时间游标）
+message ListCommentsRequest {
+  string post_id = 1 [(buf.validate.field).string.min_len = 1];
+  common.v1.Cursor cursor = 2;
+}
+
+message ListCommentsResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 翻页到底/暂无内容：列表为空且 cursor 为空（不以 NotFound 表达空页）
+  repeated Comment comments = 3;
+  common.v1.Cursor cursor = 4;
+}
+
+// 楼内回复分页（root_id = 楼层 id；平铺含"回复的回复"，带 reply_to_user_id 供 @展示，created_at DESC 时间游标）
+message ListRepliesRequest {
+  string root_id = 1 [(buf.validate.field).string.min_len = 1];
+  common.v1.Cursor cursor = 2;
+}
+
+message ListRepliesResponse {
+  bool fail = 1;
+  common.v1.Error err = 2;
+
+  // 翻页到底/暂无内容：列表为空且 cursor 为空
+  repeated Comment replies = 3;
   common.v1.Cursor cursor = 4;
 }

@@ -133,6 +133,69 @@ func (PostFavourite) TableName() string {
 	return "post_favourites"
 }
 
+// PostComment 帖子评论（一级评论 + 楼内回复同表，两级楼中楼）
+// 层级口径：一级评论 RootID=0（哨兵，ToProto 转为自身 id）、ParentID=0；
+// 回复 RootID=楼层 id、ParentID=被回复评论 id（回复的回复也平级挂同一楼层）、ReplyToUserID=被回复者；
+// 明细为准，comment_count = 该帖 status=NORMAL 的行数（一级 + 回复），同事务维护 posts.comment_count（强一致）；
+// 软删 status=DELETED，删一级评论级联软删整楼，按实际删除行数回收计数
+type PostComment struct {
+	common.BaseModel
+
+	// PostID 所属帖子ID
+	PostID int64 `gorm:"type:bigint;not null;index:idx_post_comments_post_root,priority:1;comment:帖子ID" json:"post_id"`
+	// UserID 评论者ID
+	UserID int64 `gorm:"type:bigint;not null;index:idx_post_comments_user;comment:评论者ID" json:"user_id"`
+	// RootID 楼层ID（一级评论=0，回复=顶层评论ID）
+	RootID int64 `gorm:"type:bigint;not null;default:0;index:idx_post_comments_post_root,priority:2;index:idx_post_comments_root,priority:1;comment:楼层ID" json:"root_id"`
+	// ParentID 被回复评论ID（一级评论=0）
+	ParentID int64 `gorm:"type:bigint;not null;default:0;comment:被回复评论ID" json:"parent_id"`
+	// ReplyToUserID 被回复者ID（一级评论=0）
+	ReplyToUserID int64 `gorm:"type:bigint;not null;default:0;comment:被回复者ID" json:"reply_to_user_id"`
+	// Content 评论内容（≤500 rune，utils.ValidateComment 校验）
+	Content string `gorm:"type:varchar(512);not null;default:'';comment:评论内容" json:"content"`
+	// Status 评论状态
+	Status postv1.CommentStatus `gorm:"type:integer;not null;default:0;comment:评论状态" json:"status"`
+	// ReplyCount 楼层回复数（仅一级评论有意义，回复恒 0）
+	ReplyCount int64 `gorm:"type:bigint;not null;default:0;comment:楼层回复数" json:"reply_count"`
+}
+
+// TableName 指定表名
+func (PostComment) TableName() string {
+	return "post_comments"
+}
+
+// ToProto 转 proto：RootID 哨兵 0 转为楼层 id（一级评论 = 自身 id），ParentID/ReplyToUserID 0 转空串
+func (c *PostComment) ToProto() *postv1.Comment {
+	if c == nil {
+		return nil
+	}
+
+	rootID := c.RootID
+	if rootID == 0 {
+		// 一级评论：楼层即自身
+		rootID = c.ID
+	}
+	var parentID, replyToUserID string
+	if c.ParentID != 0 {
+		parentID = snowflake.ParseInt64(c.ParentID).String()
+	}
+	if c.ReplyToUserID != 0 {
+		replyToUserID = snowflake.ParseInt64(c.ReplyToUserID).String()
+	}
+
+	return &postv1.Comment{
+		CommentId:     snowflake.ParseInt64(c.ID).String(),
+		PostId:        snowflake.ParseInt64(c.PostID).String(),
+		RootId:        snowflake.ParseInt64(rootID).String(),
+		ParentId:      parentID,
+		UserId:        snowflake.ParseInt64(c.UserID).String(),
+		ReplyToUserId: replyToUserID,
+		Content:       c.Content,
+		ReplyCount:    c.ReplyCount,
+		CreatedAt:     strconv.FormatInt(c.CreatedAt, 10),
+	}
+}
+
 func (p *PostDetail) ToBrief() *postv1.PostBrief {
 	if p == nil {
 		return nil

@@ -82,6 +82,12 @@ func (s *PostServiceHandler) ViewPost(ctx context.Context, req *connect.Request[
 	return connect.NewResponse(resp), err
 }
 
+// ViewPostsByIDs 批量查看帖子（面客组装口径，仅 PUBLISHED）
+func (s *PostServiceHandler) ViewPostsByIDs(ctx context.Context, req *connect.Request[postv1.ViewPostsByIDsRequest]) (*connect.Response[postv1.ViewPostsByIDsResponse], error) {
+	resp, err := s.Biz.ViewPostsByIDs(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
 func (s *PostServiceHandler) GetPostStatus(ctx context.Context, req *connect.Request[postv1.GetPostStatusRequest]) (*connect.Response[postv1.GetPostStatusResponse], error) {
 	resp, err := s.Biz.GetPostStatus(ctx, req.Msg)
 	return connect.NewResponse(resp), err
@@ -127,5 +133,32 @@ func (s *PostServiceHandler) ListLikedPostIDs(ctx context.Context, req *connect.
 
 func (s *PostServiceHandler) ListFavouritePostIDs(ctx context.Context, req *connect.Request[postv1.ListFavouritePostIDsRequest]) (*connect.Response[postv1.ListFavouritePostIDsResponse], error) {
 	resp, err := s.Biz.ListFavouritePostIDs(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+// ==================== 评论 ====================
+
+func (s *PostServiceHandler) CreateComment(ctx context.Context, req *connect.Request[postv1.CreateCommentRequest]) (*connect.Response[postv1.CreateCommentResponse], error) {
+	resp, err := s.Biz.CreateComment(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+func (s *PostServiceHandler) ReplyComment(ctx context.Context, req *connect.Request[postv1.ReplyCommentRequest]) (*connect.Response[postv1.ReplyCommentResponse], error) {
+	resp, err := s.Biz.ReplyComment(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+func (s *PostServiceHandler) DeleteComment(ctx context.Context, req *connect.Request[postv1.DeleteCommentRequest]) (*connect.Response[postv1.DeleteCommentResponse], error) {
+	resp, err := s.Biz.DeleteComment(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+func (s *PostServiceHandler) ListComments(ctx context.Context, req *connect.Request[postv1.ListCommentsRequest]) (*connect.Response[postv1.ListCommentsResponse], error) {
+	resp, err := s.Biz.ListComments(ctx, req.Msg)
+	return connect.NewResponse(resp), err
+}
+
+func (s *PostServiceHandler) ListReplies(ctx context.Context, req *connect.Request[postv1.ListRepliesRequest]) (*connect.Response[postv1.ListRepliesResponse], error) {
+	resp, err := s.Biz.ListReplies(ctx, req.Msg)
 	return connect.NewResponse(resp), err
 }

@@ -21,6 +21,8 @@ service PostService {
   rpc ViewPostByAuthor(ViewPostByAuthorRequest) returns (ViewPostByAuthorResponse);
   // 查看帖子，有鉴权，他人只看到已发布的内容
   rpc ViewPost(ViewPostRequest) returns (ViewPostResponse);
+  // 批量查看帖子（面客组装口径）：仅返回 PUBLISHED，可见性裁决收敛服务端（与 GetPostsByIDs 成对）
+  rpc ViewPostsByIDs(ViewPostsByIDsRequest) returns (ViewPostsByIDsResponse);
   // 删除帖子（用户删除自己的帖子，草稿与已发布均可删，软删）
   rpc DeletePost(DeletePostRequest) returns (DeletePostResponse);
   // 封禁帖子（内部管理）
@@ -36,4 +38,11 @@ service PostService {
   // 最近点赞/收藏的帖子 ID（内部接口，BFF 会话注入 uid 转发；前端预取判态）
   rpc ListLikedPostIDs(ListLikedPostIDsRequest) returns (ListLikedPostIDsResponse);
   rpc ListFavouritePostIDs(ListFavouritePostIDsRequest) returns (ListFavouritePostIDsResponse);
+  // 评论/回复/删除（仅 PUBLISHED 可评论；删除软删、删一级评论级联软删整楼，响应带最新 comment_count）
+  rpc CreateComment(CreateCommentRequest) returns (CreateCommentResponse);
+  rpc ReplyComment(ReplyCommentRequest) returns (ReplyCommentResponse);
+  rpc DeleteComment(DeleteCommentRequest) returns (DeleteCommentResponse);
+  // 评论列表（一级评论 / 楼内回复，created_at DESC 游标；空页返回空列表 + 空游标）
+  rpc ListComments(ListCommentsRequest) returns (ListCommentsResponse);
+  rpc ListReplies(ListRepliesRequest) returns (ListRepliesResponse);
 }

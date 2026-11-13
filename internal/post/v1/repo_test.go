@@ -937,3 +937,227 @@ func TestListLikedFavouritePostIDs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, empty)
 }
+
+// ---------- 评论（软删明细 + 条件计数 + 游标分页） ----------
+
+// seedComment 造一条评论明细（一级评论 rootID/parentID 传 0）
+func seedComment(t *testing.T, db *gorm.DB, id, postID, userID, rootID, parentID int64, status postv1.CommentStatus, createdAt int64) *models.PostComment {
+	t.Helper()
+	c := &models.PostComment{
+		BaseModel:     common.BaseModel{ID: id, CreatedAt: createdAt, UpdatedAt: createdAt},
+		PostID:        postID,
+		UserID:        userID,
+		RootID:        rootID,
+		ParentID:      parentID,
+		ReplyToUserID: userID,
+		Content:       "评论内容",
+		Status:        status,
+	}
+	require.NoError(t, db.Create(c).Error)
+	return c
+}
+
+// TestCommentDetailCRUD 软删条件更新（幂等锚点）+ 回复/评论计数（防负）+ 行锁回读
+func TestCommentDetailCRUD(t *testing.T) {
+	repo, db := newRepo(t)
+	ctx := context.Background()
+	seedPost(t, db, postID1, authorID1, postv1.PostStatus_POST_STATUS_PUBLISHED, 1000)
+	const uid = int64(6001)
+
+	// CreateComment：BeforeCreate 钩子填雪花 ID 与时间戳
+	c := &models.PostComment{
+		PostID:  postID1,
+		UserID:  uid,
+		Content: "沙发",
+		Status:  postv1.CommentStatus_COMMENT_STATUS_NORMAL,
+	}
+	require.NoError(t, repo.CreateComment(ctx, c))
+	assert.NotZero(t, c.ID, "创建后应自动填充雪花 ID")
+	assert.NotZero(t, c.CreatedAt, "创建后应自动填充 created_at")
+
+	// GetComment：命中（含软删行）/ 未命中
+	ok, got, err := repo.GetComment(ctx, c.ID)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, "沙发", got.Content)
+	assert.Equal(t, postv1.CommentStatus_COMMENT_STATUS_NORMAL, got.Status)
+	ok, _, err = repo.GetComment(ctx, 999999)
+	require.NoError(t, err)
+	assert.False(t, ok, "不存在返回 ok=false")
+
+	// LockCommentForUpdate：命中回读 / 未命中
+	ok, locked, err := repo.LockCommentForUpdate(ctx, c.ID)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, uid, locked.UserID)
+	assert.Equal(t, postID1, locked.PostID)
+	ok, _, err = repo.LockCommentForUpdate(ctx, 999999)
+	require.NoError(t, err)
+	assert.False(t, ok)
+
+	// SetCommentDeleted：条件软删，首次 1 行、重复 0 行（幂等锚点）；软删行保留可读
+	info, err := repo.SetCommentDeleted(ctx, c.ID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), info.RowsAffected)
+	info, err = repo.SetCommentDeleted(ctx, c.ID)
+	require.NoError(t, err)
+	assert.Zero(t, info.RowsAffected, "重复软删 0 行命中")
+	ok, got, err = repo.GetComment(ctx, c.ID)
+	require.NoError(t, err)
+	assert.True(t, ok, "软删行保留可读")
+	assert.Equal(t, postv1.CommentStatus_COMMENT_STATUS_DELETED, got.Status)
+
+	// IncCommentReplyCount：仅 NORMAL 楼层生效（c 已软删 → 0 行）
+	info, err = repo.IncCommentReplyCount(ctx, c.ID)
+	require.NoError(t, err)
+	assert.Zero(t, info.RowsAffected, "已删楼层不计回复数")
+
+	// 楼层回复计数增减（NORMAL 楼层）
+	root := seedComment(t, db, 9301, postID1, uid, 0, 0, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 1000)
+	info, err = repo.IncCommentReplyCount(ctx, root.ID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), info.RowsAffected)
+	info, err = repo.IncCommentReplyCount(ctx, root.ID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), info.RowsAffected)
+	info, err = repo.DecCommentReplyCount(ctx, root.ID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), info.RowsAffected)
+
+	// 防负条件更新：计数清 0 后再 -1 仍是 0，按楼层存在性回报
+	require.NoError(t, db.Model(&models.PostComment{}).Where("id = ?", root.ID).Update("reply_count", 0).Error)
+	info, err = repo.DecCommentReplyCount(ctx, root.ID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), info.RowsAffected, "计数已 0 时按楼层存在性回报")
+	var cntRow models.PostComment
+	require.NoError(t, db.First(&cntRow, root.ID).Error)
+	assert.Zero(t, cntRow.ReplyCount, "防负不减")
+
+	// IncPostCommentCount：存在 1 行 / 不存在 0 行（seedPost 起点 comment_count=3）
+	info, err = repo.IncPostCommentCount(ctx, postID1)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), info.RowsAffected)
+	info, err = repo.IncPostCommentCount(ctx, 999999)
+	require.NoError(t, err)
+	assert.Zero(t, info.RowsAffected)
+
+	// DecPostCommentCount(postID, n)：按实删行数回收（现值 4 → 2）；计数不足 n 不减但按存在性回报
+	info, err = repo.DecPostCommentCount(ctx, postID1, 2)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), info.RowsAffected)
+	var gotPost models.PostDetail
+	require.NoError(t, db.First(&gotPost, postID1).Error)
+	assert.Equal(t, int64(2), gotPost.CommentCount)
+	info, err = repo.DecPostCommentCount(ctx, postID1, 5)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), info.RowsAffected, "计数不足 n 时按帖子存在性回报")
+	require.NoError(t, db.First(&gotPost, postID1).Error)
+	assert.Equal(t, int64(2), gotPost.CommentCount, "防负不减")
+	info, err = repo.DecPostCommentCount(ctx, 999999, 1)
+	require.NoError(t, err)
+	assert.Zero(t, info.RowsAffected)
+
+	// SetCommentsDeletedByRoot：级联仅删 NORMAL 回复，RowsAffected 即实删行数（幂等）
+	seedComment(t, db, 9311, postID1, uid, 9301, 9301, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 1000)
+	seedComment(t, db, 9312, postID1, uid, 9301, 9311, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 1000)
+	seedComment(t, db, 9313, postID1, uid, 9301, 9301, postv1.CommentStatus_COMMENT_STATUS_DELETED, 1000)
+	info, err = repo.SetCommentsDeletedByRoot(ctx, 9301)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), info.RowsAffected, "只级联 NORMAL 回复")
+	info, err = repo.SetCommentsDeletedByRoot(ctx, 9301)
+	require.NoError(t, err)
+	assert.Zero(t, info.RowsAffected, "重复级联 0 行命中")
+}
+
+// TestListCommentsReplies 一级评论/楼内回复游标分页：root_id 过滤 + 仅 NORMAL + (created_at DESC, id DESC)
+func TestListCommentsReplies(t *testing.T) {
+	repo, db := newRepo(t)
+	ctx := context.Background()
+	seedPost(t, db, postID1, authorID1, postv1.PostStatus_POST_STATUS_PUBLISHED, 1000)
+	seedPost(t, db, postID2, authorID1, postv1.PostStatus_POST_STATUS_PUBLISHED, 1000)
+	const uid = int64(6001)
+
+	// 一级评论：同毫秒由 id 决序（雪花口径：id 大者新）；软删/他帖/回复混入均须被过滤
+	seedComment(t, db, 9501, postID1, uid, 0, 0, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 2000)
+	seedComment(t, db, 9502, postID1, uid, 0, 0, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 1000)
+	seedComment(t, db, 9503, postID1, uid, 0, 0, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 1000)
+	seedComment(t, db, 9504, postID1, uid, 0, 0, postv1.CommentStatus_COMMENT_STATUS_DELETED, 4000)
+	seedComment(t, db, 9505, postID2, uid, 0, 0, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 5000)
+	seedComment(t, db, 9506, postID1, uid, 0, 0, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 500)
+	seedComment(t, db, 9511, postID1, uid, 9501, 9501, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 6000)
+
+	got, err := repo.ListComments(ctx, postID1, 99999, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 4, "仅本帖一级评论且 NORMAL")
+	assert.Equal(t, []int64{9501, 9503, 9502, 9506},
+		[]int64{got[0].ID, got[1].ID, got[2].ID, got[3].ID}, "created_at DESC，并列按 id DESC")
+
+	// limit 翻页：首页 2 条，用末条 created_at 作 before 续翻。
+	// 时间游标口径为严格小于边界（与 GetPostBriefsByAuthor 现状一致）：
+	// 与页边界同毫秒的并列行（9502）落页外，与判态列表同款口径
+	got, err = repo.ListComments(ctx, postID1, 99999, 2)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, int64(9501), got[0].ID)
+	assert.Equal(t, int64(9503), got[1].ID)
+	next, err := repo.ListComments(ctx, postID1, got[1].CreatedAt, 2)
+	require.NoError(t, err)
+	require.Len(t, next, 1)
+	assert.Equal(t, int64(9506), next[0].ID, "严格小于边界，同毫秒并列行落页外")
+
+	// 空页
+	empty, err := repo.ListComments(ctx, postID1, 500, 10)
+	require.NoError(t, err)
+	assert.Empty(t, empty)
+
+	// 他帖一级评论互不串
+	other, err := repo.ListComments(ctx, postID2, 99999, 10)
+	require.NoError(t, err)
+	require.Len(t, other, 1)
+	assert.Equal(t, int64(9505), other[0].ID)
+
+	// 楼内回复：root_id 过滤 + 仅 NORMAL + (created_at DESC, id DESC)；平铺含回复的回复
+	seedComment(t, db, 9521, postID1, uid, 9501, 9501, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 3000)
+	seedComment(t, db, 9522, postID1, uid, 9501, 9521, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 3000)
+	seedComment(t, db, 9523, postID1, uid, 9501, 9501, postv1.CommentStatus_COMMENT_STATUS_DELETED, 7000)
+	seedComment(t, db, 9524, postID1, uid, 9502, 9502, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 8000)
+
+	replies, err := repo.ListReplies(ctx, 9501, 99999, 10)
+	require.NoError(t, err)
+	require.Len(t, replies, 3, "仅本楼回复且 NORMAL（含首段埋的 9511）")
+	assert.Equal(t, []int64{9511, 9522, 9521},
+		[]int64{replies[0].ID, replies[1].ID, replies[2].ID}, "created_at DESC，并列按 id DESC")
+	assert.Equal(t, int64(9521), replies[1].ParentID, "回复的回复平铺，parent 指向被回复者")
+
+	// 空页
+	emptyReplies, err := repo.ListReplies(ctx, 9501, 500, 10)
+	require.NoError(t, err)
+	assert.Empty(t, emptyReplies)
+}
+
+// TestDeletePostComments 删帖回收：物理删除帖子下全部评论行（软删/正常一并清），按帖隔离，重复 0 行幂等
+func TestDeletePostComments(t *testing.T) {
+	repo, db := newRepo(t)
+	ctx := context.Background()
+	seedPost(t, db, postID1, authorID1, postv1.PostStatus_POST_STATUS_DELETED, 1000)
+	seedPost(t, db, postID2, authorID1, postv1.PostStatus_POST_STATUS_PUBLISHED, 1000)
+
+	seedComment(t, db, 9801, postID1, 6001, 0, 0, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 1000)
+	seedComment(t, db, 9802, postID1, 6002, 9801, 9801, postv1.CommentStatus_COMMENT_STATUS_DELETED, 2000)
+	seedComment(t, db, 9803, postID1, 6002, 9801, 9801, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 3000)
+	seedComment(t, db, 9804, postID2, 6001, 0, 0, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 4000)
+
+	info, err := repo.DeletePostComments(ctx, postID1)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), info.RowsAffected, "软删/正常一并物理回收")
+
+	info, err = repo.DeletePostComments(ctx, postID1)
+	require.NoError(t, err)
+	assert.Zero(t, info.RowsAffected, "重复投递 0 行命中即幂等")
+
+	var cnt int64
+	require.NoError(t, db.Model(&models.PostComment{}).Where("post_id = ?", postID1).Count(&cnt).Error)
+	assert.Zero(t, cnt, "该帖评论物理清空")
+	require.NoError(t, db.Model(&models.PostComment{}).Where("post_id = ?", postID2).Count(&cnt).Error)
+	assert.Equal(t, int64(1), cnt, "他帖评论不受影响")
+}

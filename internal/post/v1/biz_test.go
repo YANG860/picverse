@@ -730,6 +730,52 @@ func TestPostUsecase_GetPostsByIDs(t *testing.T) {
 	})
 }
 
+// ---------- ViewPostsByIDs ----------
+
+func TestPostUsecase_ViewPostsByIDs(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("混合结果：仅 PUBLISHED 出 brief，其余逐条 fail（key=post_id 定位，不保证序）", func(t *testing.T) {
+		uc, db, _ := newUsecase(t)
+		seedPost(t, db, postID1, authorID1, postv1.PostStatus_POST_STATUS_PUBLISHED, time.Now().UnixMilli())
+		seedPost(t, db, postID2, authorID1, postv1.PostStatus_POST_STATUS_DELETED, time.Now().UnixMilli())
+
+		resp, err := uc.ViewPostsByIDs(ctx, &postv1.ViewPostsByIDsRequest{
+			PostIds: []string{"bad", strconv.FormatInt(postID1, 10), strconv.FormatInt(postID2, 10), "999999"},
+		})
+		require.NoError(t, err)
+		require.Len(t, resp.GetResults(), 4)
+
+		byID := make(map[string]*postv1.PostBriefResult, len(resp.GetResults()))
+		for _, r := range resp.GetResults() {
+			byID[r.GetPostId()] = r
+		}
+
+		// PUBLISHED：出 brief（全字段经 ToBrief）
+		ok := byID[strconv.FormatInt(postID1, 10)]
+		require.NotNil(t, ok)
+		assert.False(t, ok.GetFail())
+		require.NotNil(t, ok.GetPost())
+		assert.Equal(t, strconv.FormatInt(postID1, 10), ok.GetPost().GetPostId())
+
+		// 非 PUBLISHED 与不存在统一 NotFound（不暴露状态存在性）；非法雪花 id InvalidID——均 key 定位
+		assert.True(t, byID[strconv.FormatInt(postID2, 10)].GetFail())
+		assert.Equal(t, errmsg.NotFound, byID[strconv.FormatInt(postID2, 10)].GetErr())
+		assert.True(t, byID["999999"].GetFail(), "合法 id 未命中")
+		assert.Equal(t, errmsg.NotFound, byID["999999"].GetErr())
+		assert.True(t, byID["bad"].GetFail())
+		assert.Equal(t, errmsg.InvalidID, byID["bad"].GetErr())
+		assert.Equal(t, "bad", byID["bad"].GetPostId(), "非法 id 回填请求串")
+	})
+
+	t.Run("空入参返回空结果", func(t *testing.T) {
+		uc, _, _ := newUsecase(t)
+		resp, err := uc.ViewPostsByIDs(ctx, &postv1.ViewPostsByIDsRequest{})
+		require.NoError(t, err)
+		assert.Empty(t, resp.GetResults())
+	})
+}
+
 // ---------- ViewPostByAuthor ----------
 
 func TestPostUsecase_ViewPostByAuthor(t *testing.T) {
@@ -1363,4 +1409,261 @@ func TestPostUsecase_Interactions(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, next.GetPostIds())
 	})
+}
+
+// ---------- 评论 ----------
+
+// TestCommentCreateReply 发评/回复（同步链路：校验+审核+状态裁决）+ 计数强一致 + 楼中楼层级
+func TestCommentCreateReply(t *testing.T) {
+	u, db, _ := newUsecase(t)
+	ctx := context.Background()
+	seedPost(t, db, postID1, authorID1, postv1.PostStatus_POST_STATUS_PUBLISHED, 1000)
+	seedPost(t, db, postID2, authorID1, postv1.PostStatus_POST_STATUS_DRAFT, 1000)
+
+	// 发一级评论（seedPost 起点 comment_count=3 → 4）
+	resp, err := u.CreateComment(ctx, &postv1.CreateCommentRequest{
+		Uid: "6001", PostId: "2001", Content: "好帖，收藏了",
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.GetFail())
+	c := resp.GetComment()
+	require.NotNil(t, c)
+	assert.NotEmpty(t, c.GetCommentId())
+	assert.Equal(t, c.GetCommentId(), c.GetRootId(), "一级评论楼层即自身")
+	assert.Empty(t, c.GetParentId())
+	assert.Empty(t, c.GetReplyToUserId())
+	assert.Equal(t, "好帖，收藏了", c.GetContent())
+	assert.NotEmpty(t, c.GetCreatedAt())
+	assert.Zero(t, c.GetReplyCount())
+	assert.Equal(t, int64(4), resp.GetCommentCount())
+
+	// 落库哨兵口径：RootID=0 / ParentID=0 / NORMAL
+	var row models.PostComment
+	require.NoError(t, db.First(&row, mustParseID(t, c.GetCommentId())).Error)
+	assert.Zero(t, row.RootID, "一级评论 RootID 哨兵 0")
+	assert.Zero(t, row.ParentID)
+	assert.Equal(t, postv1.CommentStatus_COMMENT_STATUS_NORMAL, row.Status)
+
+	// 入参校验三态
+	bad, err := u.CreateComment(ctx, &postv1.CreateCommentRequest{Uid: "x", PostId: "2001", Content: "a"})
+	require.NoError(t, err)
+	assert.True(t, bad.GetFail())
+	assert.Equal(t, errmsg.InvalidID, bad.GetErr())
+	bad, err = u.CreateComment(ctx, &postv1.CreateCommentRequest{Uid: "6001", PostId: "x", Content: "a"})
+	require.NoError(t, err)
+	assert.Equal(t, errmsg.InvalidID, bad.GetErr())
+	bad, err = u.CreateComment(ctx, &postv1.CreateCommentRequest{Uid: "6001", PostId: "2001", Content: "   "})
+	require.NoError(t, err)
+	assert.Equal(t, errmsg.InvalidComment, bad.GetErr(), "空白内容非法")
+	bad, err = u.CreateComment(ctx, &postv1.CreateCommentRequest{Uid: "6001", PostId: "2001", Content: strings.Repeat("啊", 501)})
+	require.NoError(t, err)
+	assert.Equal(t, errmsg.InvalidComment, bad.GetErr(), "超 500 rune 非法")
+	bad, err = u.CreateComment(ctx, &postv1.CreateCommentRequest{Uid: "6001", PostId: "2001", Content: "a\x01b"})
+	require.NoError(t, err)
+	assert.Equal(t, errmsg.InvalidComment, bad.GetErr(), "控制字符非法")
+
+	// 状态裁决：非 PUBLISHED 一律 NotFound（不泄露帖子状态）
+	bad, err = u.CreateComment(ctx, &postv1.CreateCommentRequest{Uid: "6001", PostId: "2002", Content: "草稿评论"})
+	require.NoError(t, err)
+	assert.Equal(t, errmsg.NotFound, bad.GetErr())
+
+	// 回复一级评论（挂楼层，reply_to=被回复者，comment_count 4→5）
+	r1, err := u.ReplyComment(ctx, &postv1.ReplyCommentRequest{
+		Uid: "6002", PostId: "2001", ParentId: c.GetCommentId(), Content: "同问",
+	})
+	require.NoError(t, err)
+	assert.False(t, r1.GetFail())
+	assert.Equal(t, c.GetCommentId(), r1.GetComment().GetRootId(), "回复挂 parent 所在楼层")
+	assert.Equal(t, c.GetCommentId(), r1.GetComment().GetParentId())
+	assert.Equal(t, "6001", r1.GetComment().GetReplyToUserId())
+	assert.Equal(t, int64(5), r1.GetCommentCount())
+
+	// 回复的回复（平级挂同一楼，root 不变）
+	r2, err := u.ReplyComment(ctx, &postv1.ReplyCommentRequest{
+		Uid: "6003", PostId: "2001", ParentId: r1.GetComment().GetCommentId(), Content: "回复你",
+	})
+	require.NoError(t, err)
+	assert.False(t, r2.GetFail())
+	assert.Equal(t, c.GetCommentId(), r2.GetComment().GetRootId(), "回复的回复仍挂同一楼")
+	assert.Equal(t, r1.GetComment().GetCommentId(), r2.GetComment().GetParentId())
+	assert.Equal(t, "6002", r2.GetComment().GetReplyToUserId())
+	assert.Equal(t, int64(6), r2.GetCommentCount())
+
+	// 楼层 reply_count 同步（2 条回复）
+	require.NoError(t, db.First(&row, mustParseID(t, c.GetCommentId())).Error)
+	assert.Equal(t, int64(2), row.ReplyCount)
+
+	// parent 错误分支：不存在 / 已删 → NotFound
+	badR, err := u.ReplyComment(ctx, &postv1.ReplyCommentRequest{
+		Uid: "6002", PostId: "2001", ParentId: "999999", Content: "x",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, errmsg.NotFound, badR.GetErr())
+	_, err = u.DeleteComment(ctx, &postv1.DeleteCommentRequest{Uid: "6003", CommentId: r2.GetComment().GetCommentId()})
+	require.NoError(t, err)
+	badR, err = u.ReplyComment(ctx, &postv1.ReplyCommentRequest{
+		Uid: "6002", PostId: "2001", ParentId: r2.GetComment().GetCommentId(), Content: "x",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, errmsg.NotFound, badR.GetErr(), "parent 已删 → NotFound")
+
+	// parent 跨帖 → NotFound
+	seedPost(t, db, postID3, authorID1, postv1.PostStatus_POST_STATUS_PUBLISHED, 1000)
+	otherC, err := u.CreateComment(ctx, &postv1.CreateCommentRequest{Uid: "6001", PostId: "2003", Content: "他帖评论"})
+	require.NoError(t, err)
+	badR, err = u.ReplyComment(ctx, &postv1.ReplyCommentRequest{
+		Uid: "6002", PostId: "2001", ParentId: otherC.GetComment().GetCommentId(), Content: "x",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, errmsg.NotFound, badR.GetErr(), "parent 跨帖 → NotFound")
+}
+
+// TestCommentDelete 删评权限三态 + 计数按实删行数回收 + 删楼级联 + 幂等
+func TestCommentDelete(t *testing.T) {
+	u, db, _ := newUsecase(t)
+	ctx := context.Background()
+	seedPost(t, db, postID1, authorID1, postv1.PostStatus_POST_STATUS_PUBLISHED, 1000)
+
+	// root（6001）+ 两条回复（6002），楼层 reply_count=2、帖子 comment_count=5
+	seedComment(t, db, 9601, postID1, 6001, 0, 0, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 1000)
+	seedComment(t, db, 9602, postID1, 6002, 9601, 9601, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 2000)
+	seedComment(t, db, 9603, postID1, 6002, 9601, 9602, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 3000)
+	require.NoError(t, db.Model(&models.PostComment{}).Where("id = ?", 9601).Update("reply_count", 2).Error)
+	require.NoError(t, db.Model(&models.PostDetail{}).Where("id = ?", postID1).Update("comment_count", 5).Error)
+
+	// 删回复（评论作者）：楼层 reply_count 2→1，帖子 comment_count 5→4
+	resp, err := u.DeleteComment(ctx, &postv1.DeleteCommentRequest{Uid: "6002", CommentId: "9602"})
+	require.NoError(t, err)
+	assert.False(t, resp.GetFail())
+	assert.True(t, resp.GetDeleted())
+	assert.Equal(t, int64(4), resp.GetCommentCount())
+	// GORM 惯例坑：First 的 dest 非零主键会并入 WHERE 条件，复用结构体跨主键查询前须清零
+	var row models.PostComment
+	require.NoError(t, db.First(&row, 9602).Error)
+	assert.Equal(t, postv1.CommentStatus_COMMENT_STATUS_DELETED, row.Status)
+	row = models.PostComment{}
+	require.NoError(t, db.First(&row, 9601).Error)
+	assert.Equal(t, int64(1), row.ReplyCount)
+
+	// 幂等：重复删除成功且不重复减计数
+	resp, err = u.DeleteComment(ctx, &postv1.DeleteCommentRequest{Uid: "6002", CommentId: "9602"})
+	require.NoError(t, err)
+	assert.False(t, resp.GetFail())
+	assert.True(t, resp.GetDeleted())
+	assert.Equal(t, int64(4), resp.GetCommentCount(), "重复删除不重复减计数")
+
+	// 权限三态：他人 Forbidden；楼主（帖子作者）可删他人评论
+	bad, err := u.DeleteComment(ctx, &postv1.DeleteCommentRequest{Uid: "6009", CommentId: "9603"})
+	require.NoError(t, err)
+	assert.True(t, bad.GetFail())
+	assert.Equal(t, errmsg.Forbidden, bad.GetErr())
+	resp, err = u.DeleteComment(ctx, &postv1.DeleteCommentRequest{Uid: "3001", CommentId: "9603"})
+	require.NoError(t, err)
+	assert.False(t, resp.GetFail())
+	assert.Equal(t, int64(3), resp.GetCommentCount(), "楼主删评：计数 -1")
+	row = models.PostComment{}
+	require.NoError(t, db.First(&row, 9601).Error)
+	assert.Zero(t, row.ReplyCount)
+
+	// 删一级评论：级联软删整楼（1 层 + 2 回复 = 3 行），计数按实删行数 -3
+	seedComment(t, db, 9611, postID1, 6001, 0, 0, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 4000)
+	seedComment(t, db, 9612, postID1, 6002, 9611, 9611, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 5000)
+	seedComment(t, db, 9613, postID1, 6002, 9611, 9612, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 6000)
+	require.NoError(t, db.Model(&models.PostComment{}).Where("id = ?", 9611).Update("reply_count", 2).Error)
+	require.NoError(t, db.Model(&models.PostDetail{}).Where("id = ?", postID1).Update("comment_count", 10).Error)
+
+	resp, err = u.DeleteComment(ctx, &postv1.DeleteCommentRequest{Uid: "6001", CommentId: "9611"})
+	require.NoError(t, err)
+	assert.False(t, resp.GetFail())
+	assert.Equal(t, int64(7), resp.GetCommentCount(), "级联 1+2 行，计数 -3")
+	var normal int64
+	require.NoError(t, db.Model(&models.PostComment{}).
+		Where("root_id = ? AND status = ?", 9611, postv1.CommentStatus_COMMENT_STATUS_NORMAL).Count(&normal).Error)
+	assert.Zero(t, normal, "整楼级联软删")
+	row = models.PostComment{}
+	require.NoError(t, db.First(&row, 9611).Error)
+	assert.Equal(t, postv1.CommentStatus_COMMENT_STATUS_DELETED, row.Status)
+
+	// 幂等：重复删楼成功且计数不变
+	resp, err = u.DeleteComment(ctx, &postv1.DeleteCommentRequest{Uid: "6001", CommentId: "9611"})
+	require.NoError(t, err)
+	assert.True(t, resp.GetDeleted())
+	assert.Equal(t, int64(7), resp.GetCommentCount())
+
+	// 不存在 → NotFound
+	bad, err = u.DeleteComment(ctx, &postv1.DeleteCommentRequest{Uid: "6001", CommentId: "999999"})
+	require.NoError(t, err)
+	assert.Equal(t, errmsg.NotFound, bad.GetErr())
+}
+
+// TestCommentList 一级评论/楼内回复列表：过滤口径 + reply_count 下发 + 空页语义 + 状态裁决
+func TestCommentList(t *testing.T) {
+	u, db, _ := newUsecase(t)
+	ctx := context.Background()
+	seedPost(t, db, postID1, authorID1, postv1.PostStatus_POST_STATUS_PUBLISHED, 1000)
+	seedPost(t, db, postID2, authorID1, postv1.PostStatus_POST_STATUS_DRAFT, 1000)
+
+	// 一楼（含 2 回复，其一软删）+ 二楼 + 软删楼 + 楼层下回复混入
+	seedComment(t, db, 9701, postID1, 6001, 0, 0, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 2000)
+	seedComment(t, db, 9702, postID1, 6001, 0, 0, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 1000)
+	seedComment(t, db, 9703, postID1, 6001, 0, 0, postv1.CommentStatus_COMMENT_STATUS_DELETED, 5000)
+	seedComment(t, db, 9711, postID1, 6002, 9701, 9701, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 3000)
+	// 构造 reply_to 指向被回复者（root 作者 6001），而非 seed 默认的评论者自身
+	require.NoError(t, db.Model(&models.PostComment{}).Where("id = ?", 9711).Update("reply_to_user_id", 6001).Error)
+	seedComment(t, db, 9712, postID1, 6002, 9701, 9701, postv1.CommentStatus_COMMENT_STATUS_DELETED, 4000)
+	seedComment(t, db, 9721, postID1, 6002, 9702, 9702, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 6000)
+	require.NoError(t, db.Model(&models.PostComment{}).Where("id = ?", 9701).Update("reply_count", 2).Error)
+
+	// 一级评论：仅 root_id=0 且 NORMAL，created_at DESC；reply_count 随列表下发
+	resp, err := u.ListComments(ctx, &postv1.ListCommentsRequest{PostId: "2001"})
+	require.NoError(t, err)
+	assert.False(t, resp.GetFail())
+	require.Len(t, resp.GetComments(), 2, "软删楼与回复不出现")
+	assert.Equal(t, "9701", resp.GetComments()[0].GetCommentId())
+	assert.Equal(t, "9702", resp.GetComments()[1].GetCommentId())
+	assert.Equal(t, int64(2), resp.GetComments()[0].GetReplyCount(), "楼层回复数下发")
+	require.NotNil(t, resp.GetCursor())
+
+	// 游标翻页到底：空列表 + 空游标（不以 NotFound 表达空页）
+	next, err := u.ListComments(ctx, &postv1.ListCommentsRequest{PostId: "2001", Cursor: &commonv1.Cursor{Str: "1500", Limit: 10}})
+	require.NoError(t, err)
+	assert.False(t, next.GetFail())
+	require.Len(t, next.GetComments(), 1, "严格小于时间边界")
+	assert.Equal(t, "9702", next.GetComments()[0].GetCommentId())
+	last, err := u.ListComments(ctx, &postv1.ListCommentsRequest{PostId: "2001", Cursor: &commonv1.Cursor{Str: "1000", Limit: 10}})
+	require.NoError(t, err)
+	assert.Empty(t, last.GetComments())
+	assert.Nil(t, last.GetCursor(), "空页 = 空列表 + 空游标")
+
+	// 状态裁决：非 PUBLISHED / 不存在 → NotFound
+	bad, err := u.ListComments(ctx, &postv1.ListCommentsRequest{PostId: "2002"})
+	require.NoError(t, err)
+	assert.Equal(t, errmsg.NotFound, bad.GetErr())
+	bad, err = u.ListComments(ctx, &postv1.ListCommentsRequest{PostId: "999999"})
+	require.NoError(t, err)
+	assert.Equal(t, errmsg.NotFound, bad.GetErr())
+
+	// 楼内回复：仅本楼 NORMAL，平铺含回复的回复，reply_to 下发
+	rr, err := u.ListReplies(ctx, &postv1.ListRepliesRequest{RootId: "9701"})
+	require.NoError(t, err)
+	assert.False(t, rr.GetFail())
+	require.Len(t, rr.GetReplies(), 1, "软删回复不出现")
+	assert.Equal(t, "9711", rr.GetReplies()[0].GetCommentId())
+	assert.Equal(t, "9701", rr.GetReplies()[0].GetRootId())
+	assert.Equal(t, "6001", rr.GetReplies()[0].GetReplyToUserId())
+
+	// 楼层口径：回复 id 非楼层 / 不存在 / 楼层已删 / 帖子非 PUBLISHED → NotFound
+	badR, err := u.ListReplies(ctx, &postv1.ListRepliesRequest{RootId: "9711"})
+	require.NoError(t, err)
+	assert.Equal(t, errmsg.NotFound, badR.GetErr(), "root_id 必须指向楼层")
+	badR, err = u.ListReplies(ctx, &postv1.ListRepliesRequest{RootId: "999999"})
+	require.NoError(t, err)
+	assert.Equal(t, errmsg.NotFound, badR.GetErr())
+	badR, err = u.ListReplies(ctx, &postv1.ListRepliesRequest{RootId: "9703"})
+	require.NoError(t, err)
+	assert.Equal(t, errmsg.NotFound, badR.GetErr(), "楼层已删 → NotFound")
+	seedComment(t, db, 9731, postID2, 6001, 0, 0, postv1.CommentStatus_COMMENT_STATUS_NORMAL, 7000)
+	badR, err = u.ListReplies(ctx, &postv1.ListRepliesRequest{RootId: "9731"})
+	require.NoError(t, err)
+	assert.Equal(t, errmsg.NotFound, badR.GetErr(), "帖子非 PUBLISHED → NotFound")
 }
