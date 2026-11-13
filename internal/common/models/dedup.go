@@ -5,7 +5,8 @@ package common
 // TODO: 保留 7 天后清理（远超 ack_wait × max_deliver 重投窗口）；当前无定时巡检任务可挂载，
 // 表稳态极小，暂不清理。
 type ProcessedMessage struct {
+	// 幂等粒度 = (MessageID, Handler) 复合主键：同一消息可被多个消费点各自独立幂等，互不误杀
 	MessageID   int64  `gorm:"primaryKey;comment:MQMessage.ID(雪花ID)" json:"message_id"`
-	Handler     string `gorm:"type:varchar(64);not null;comment:处理器标识" json:"handler"`
+	Handler     string `gorm:"primaryKey;type:varchar(64);not null;comment:处理器标识" json:"handler"`
 	ProcessedAt int64  `gorm:"not null;comment:处理时间(unix毫秒)" json:"processed_at"`
 }

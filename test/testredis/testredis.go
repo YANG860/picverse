@@ -4,6 +4,7 @@ package testredis
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -201,6 +202,27 @@ func (c *Client) ZAdd(ctx context.Context, key string, members []cache.ZMember, 
 	return nil
 }
 
+// ZAddNX 仅不存在的成员写入（不覆盖已有 score）并刷新 TTL（过期 key 视为不存在重建）
+func (c *Client) ZAddNX(ctx context.Context, key string, members []cache.ZMember, ttl time.Duration) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ze, ok := c.z[key]
+	if !ok || c.zExpired(ze) {
+		ze = zsetEntry{members: make(map[string]float64)}
+	}
+	for _, m := range members {
+		if _, exists := ze.members[m.Member]; !exists {
+			ze.members[m.Member] = m.Score
+		}
+	}
+	ze.expiresAt = time.Time{}
+	if ttl > 0 {
+		ze.expiresAt = time.Now().Add(ttl)
+	}
+	c.z[key] = ze
+	return nil
+}
+
 // ZRevRangeByScore 按 score 降序取 [min, max] 闭区间至多 count 名（同 score member 字典序降序）
 func (c *Client) ZRevRangeByScore(ctx context.Context, key string, max, min float64, count int) ([]cache.ZMember, error) {
 	c.mu.Lock()
@@ -278,6 +300,110 @@ func (c *Client) ZRemRangeByScore(ctx context.Context, key string, max, min floa
 			delete(ze.members, member)
 		}
 	}
+	return nil
+}
+
+// ZRevRange 按 score 降序排名取 [start, stop] 闭区间（负数自尾部；同 score member 字典序降序）
+func (c *Client) ZRevRange(ctx context.Context, key string, start, stop int) ([]cache.ZMember, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ze, ok := c.z[key]
+	if !ok || c.zExpired(ze) {
+		if ok {
+			delete(c.z, key)
+		}
+		return nil, nil
+	}
+	ordered := zsetRankOrder(ze.members) // 升序；倒序遍历 = 降序排名 0 起
+	n := len(ordered)
+	if start < 0 {
+		start += n
+	}
+	if stop < 0 {
+		stop += n
+	}
+	if start < 0 {
+		start = 0
+	}
+	if stop >= n {
+		stop = n - 1
+	}
+	if start > stop || start >= n {
+		return nil, nil
+	}
+	out := make([]cache.ZMember, 0, stop-start+1)
+	for i := n - 1 - start; i >= n-1-stop; i-- { // 降序排名 start..stop
+		out = append(out, ordered[i])
+	}
+	return out, nil
+}
+
+// ZRandMember 采样至多 count 名（count <= 0 返回空）。
+// 替身取确定性前序（zsetRankOrder 序截取）而非随机——测试可重复（FIRST-R）；
+// 真实随机语义由真实 Redis 提供，替身只保证接口形状与集合语义
+func (c *Client) ZRandMember(ctx context.Context, key string, count int) ([]cache.ZMember, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ze, ok := c.z[key]
+	if !ok || c.zExpired(ze) {
+		if ok {
+			delete(c.z, key)
+		}
+		return nil, nil
+	}
+	ordered := zsetRankOrder(ze.members)
+	if count > len(ordered) {
+		count = len(ordered)
+	}
+	if count <= 0 {
+		return nil, nil
+	}
+	out := make([]cache.ZMember, 0, count)
+	out = append(out, ordered[:count]...)
+	return out, nil
+}
+
+// ZMScore 批量判定成员存在性（结果等长对齐；过期 key 视为不存在）
+func (c *Client) ZMScore(ctx context.Context, key string, members []string) ([]bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]bool, len(members))
+	ze, ok := c.z[key]
+	if !ok || c.zExpired(ze) {
+		if ok {
+			delete(c.z, key)
+		}
+		return out, nil
+	}
+	for i, m := range members {
+		_, out[i] = ze.members[m]
+	}
+	return out, nil
+}
+
+// Rename 原子换 key（dst 原值覆盖，TTL 跟随 src；KV 与 ZSET 同命名空间）；src 不存在报错
+func (c *Client) Rename(ctx context.Context, src, dst string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	kv, kvOK := c.m[src]
+	ze, zOK := c.z[src]
+	if (!kvOK || c.expired(kv)) && (!zOK || c.zExpired(ze)) {
+		delete(c.m, src)
+		delete(c.z, src)
+		return fmt.Errorf("testredis rename: no such key %s", src)
+	}
+	if kvOK && !c.expired(kv) {
+		c.m[dst] = kv
+	} else {
+		delete(c.m, dst)
+	}
+	if zOK && !c.zExpired(ze) {
+		c.z[dst] = ze
+	} else {
+		delete(c.z, dst)
+	}
+	delete(c.m, src)
+	delete(c.z, src)
 	return nil
 }
 

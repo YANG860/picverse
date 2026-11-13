@@ -76,4 +76,34 @@ func TestExecuteIdempotent(t *testing.T) {
 		assert.True(t, applied, "失败回滚后同一消息应可重试")
 		assert.Equal(t, 1, ran)
 	})
+
+	t.Run("同消息不同 handler 各自独立幂等，互不误杀（关键回归）", func(t *testing.T) {
+		// 回归背景：幂等粒度曾为 message_id 单主键，同一 MQ 消息被 fanout 与索引两个消费点
+		// 处理时，后到的 handler 被前者的登记误判重复而丢扇出
+		var ranFanout, ranIndex int
+		applied, err := repo.ExecuteIdempotent(ctx, 9004, "fanout_publish", func(tx *gorm.DB) error {
+			ranFanout++
+			return nil
+		})
+		require.NoError(t, err)
+		assert.True(t, applied)
+
+		applied, err = repo.ExecuteIdempotent(ctx, 9004, "upsert_post_index", func(tx *gorm.DB) error {
+			ranIndex++
+			return nil
+		})
+		require.NoError(t, err)
+		assert.True(t, applied, "同消息的另一 handler 不应被误判重复")
+		assert.Equal(t, 1, ranFanout)
+		assert.Equal(t, 1, ranIndex)
+
+		// 各自重复投递仍各自去重
+		applied, err = repo.ExecuteIdempotent(ctx, 9004, "fanout_publish", func(tx *gorm.DB) error {
+			ranFanout++
+			return nil
+		})
+		require.NoError(t, err)
+		assert.False(t, applied, "同 handler 重复投递应去重")
+		assert.Equal(t, 1, ranFanout)
+	})
 }

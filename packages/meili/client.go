@@ -27,9 +27,10 @@ type MeiliRepo interface {
 	HealthCheck(ctx context.Context) error
 	// EnsureIndex 幂等确保索引存在并应用设置（primary key + settings），阻塞至设置生效
 	EnsureIndex(ctx context.Context, index, primaryKey string, settings *ms.Settings) error
-	// UpsertDocuments 批量整文档覆盖写入（按索引主键 upsert，天然幂等），阻塞至写入生效
+	// UpsertDocuments 批量整文档覆盖写入（按索引主键 upsert，天然幂等），阻塞至写入生效；
+	// 显式携带 primaryKey：写入时索引不存在可正确自动建索引（无显式主键时多 id 字段推断失败）
 	// documents 为文档切片（如 []T），元素字段经 JSON 序列化入库
-	UpsertDocuments(ctx context.Context, index string, documents any) error
+	UpsertDocuments(ctx context.Context, index, primaryKey string, documents any) error
 	// DeleteDocuments 按主键批量删除文档（天然幂等），阻塞至删除生效
 	DeleteDocuments(ctx context.Context, index string, primaryKeys []string) error
 	// Search 执行索引检索：命中为 schemaless（ms.Hit），调用方经 Hit.DecodeInto 解码到目标结构
@@ -132,9 +133,10 @@ func (m *MeiliClient) EnsureIndex(ctx context.Context, index, primaryKey string,
 	return nil
 }
 
-// UpsertDocuments 批量整文档覆盖写入（AddDocuments 按主键全量替换语义）
-func (m *MeiliClient) UpsertDocuments(ctx context.Context, index string, documents any) error {
-	task, err := m.Index(index).AddDocumentsWithContext(ctx, documents, nil)
+// UpsertDocuments 批量整文档覆盖写入（AddDocuments 按主键全量替换语义）；
+// 显式携带 primaryKey：索引不存在时由写入方定义主键自动建索引，避免多 id 字段推断失败
+func (m *MeiliClient) UpsertDocuments(ctx context.Context, index, primaryKey string, documents any) error {
+	task, err := m.Index(index).AddDocumentsWithContext(ctx, documents, &ms.DocumentOptions{PrimaryKey: &primaryKey})
 	if err != nil {
 		return fmt.Errorf("upsert documents %q: %w", index, err)
 	}
@@ -172,7 +174,7 @@ func (m *MeiliClient) EnsurePostsIndex(ctx context.Context) error {
 
 // UpsertPost 单条帖子索引写入（按主键全量覆盖，天然幂等）
 func (m *MeiliClient) UpsertPost(ctx context.Context, doc PostIndexDoc) error {
-	return m.UpsertDocuments(ctx, PostsIndex, []PostIndexDoc{doc})
+	return m.UpsertDocuments(ctx, PostsIndex, PostsIndexPrimaryKey, []PostIndexDoc{doc})
 }
 
 // RemovePost 删除帖子索引文档（删不存在的键为 no-op，天然幂等）

@@ -13,9 +13,12 @@ DROP TABLE IF EXISTS consumer_processed_messages;
 --    保留 7 天（远超 ack_wait × max_deliver 重投窗口），待巡检任务建立后清理
 -- -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS processed_messages (
-    message_id   BIGINT      NOT NULL PRIMARY KEY,                -- MQMessage.ID（雪花ID）
-    handler      VARCHAR(64) NOT NULL,                            -- 处理器标识（如 deref_media）
-    processed_at BIGINT      NOT NULL DEFAULT 0                   -- 处理时间(unix毫秒)
+    message_id   BIGINT      NOT NULL,                               -- MQMessage.ID（雪花ID）
+    handler      VARCHAR(64) NOT NULL,                               -- 处理器标识（如 deref_media）
+    processed_at BIGINT      NOT NULL DEFAULT 0,                     -- 处理时间(unix毫秒)
+    -- 幂等粒度 = (message_id, handler) 复合：同一消息可被多个消费点（fanout/索引等）
+    -- 各自独立幂等，互不误杀
+    PRIMARY KEY (message_id, handler)
 );
 
 CREATE INDEX IF NOT EXISTS idx_processed_messages_processed_at
