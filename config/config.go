@@ -167,6 +167,9 @@ type ServerConfig struct {
 	Post     string `mapstructure:"post"`
 	Bff      string `mapstructure:"bff"`
 	Discover string `mapstructure:"discover"`
+	// Reflection 调试开关：true 时 bff 挂载 gRPC 服务端反射（grpcurl/buf curl 免 schema 直查）。
+	// 反射暴露服务/消息元数据，生产面客端口应关闭
+	Reflection bool `mapstructure:"reflection"`
 }
 
 // S3Config S3/Minio 对象存储配置

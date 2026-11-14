@@ -20,6 +20,9 @@ server:
   post: ":8082"
   bff: ":8084"
   discover: ":8085"
+  # 调试开关：true 时 bff 挂 gRPC 服务端反射（grpcurl / buf curl 免 schema 直查）；
+  # 反射暴露服务/消息元数据，生产面客端口应关闭
+  reflection: true
 
 services:
   # 下游服务地址（packages/discovery 静态实现）。
