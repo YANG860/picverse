@@ -136,3 +136,13 @@ main 挂 trace + `jwt.NewServerInterceptor`（token 存在才注入，认证由�
 3. **删帖后的资产计数**（✅ 已闭环）：DeletePost 软删事务内发 `DeletePost` 消息 → consumer 物理回收时按被删媒体关联逐槽位同事务写 outbox `deref_media` 消息（media consumer 递减引用计数），删几槽减几槽、重复投递不重复减，必达不漏（见 [consumer](../consumer/consumer.md)）。
 4. **粉丝列表**（✅ 已闭环）：下游 `user.GetFollowers` 已补齐（游标分页，与 `GetFollowings` 关系反向对称），BFF `GetFollowerList` 已按透传游标实现（与 `GetFollowingList` 同构）。
 5. **默认头像资产预置**：Register 固定挂 `packages/defaults.AvatarAssetID`（`"default-avatar"`）的 216 变体，需运维/种子预置该资产并闭环 `packages/defaults/media.go` 的 TODO；预置前无头像注册会因资产查无而失败（已回滚账户，无残留）。
+
+### 调试：gRPC 服务端反射
+
+`server.reflection: true` 时挂载 gRPC 服务端反射（v1 + v1alpha，wire 兼容 grpcurl/grpcui/Postman）
+并启用明文 HTTP/2（`http.Protocols.SetUnencryptedHTTP2`，`grpcurl -plaintext` 依赖；HTTP/1.1 不受影响）。
+反射暴露服务/消息元数据，生产面客端口应关闭：
+
+    buf curl --http2-prior-knowledge --list-services http://<host>:8084
+    buf curl --http2-prior-knowledge http://<host>:8084/bff.v1.BFFService/GetHotPosts \
+      -d '{"cursor":{"limit":3}}' -H "Authorization: Bearer <token>"

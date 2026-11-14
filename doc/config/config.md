@@ -39,6 +39,8 @@ recommend:   # 推荐流（seen 去重/打散/探索位）
 
 ### server — 各服务监听地址
 
+含 `reflection` 调试开关：为 `true` 时 bff 挂载 gRPC 服务端反射 + 明文 HTTP/2（grpcurl/buf curl 免 schema 直查），生产面客端口应关闭
+
 多进程共用同一配置文件，各服务取自己的条目；缺失时该服务无法启动。
 
 | 键 | 类型 | 说明 |
