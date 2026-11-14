@@ -98,7 +98,7 @@ type PostUsecase interface {
 	// DeleteComment 删除评论（软删；评论作者或帖子作者可删，否则 Forbidden；删一级评论级联软删整楼；
 	// 幂等：重复删除成功且不重复减计数）
 	DeleteComment(ctx context.Context, req *postv1.DeleteCommentRequest) (*postv1.DeleteCommentResponse, error)
-	// ListComments 帖子一级评论分页（created_at DESC 游标；每条带楼层 reply_count；空页 = 空列表 + 空游标）
+	// ListComments 帖子一级评论分页（created_at DESC 游标；每条带楼层 reply_count；游标为空即到底（末页可带数据））
 	ListComments(ctx context.Context, req *postv1.ListCommentsRequest) (*postv1.ListCommentsResponse, error)
 	// ListReplies 楼内回复分页（root_id = 楼层 id；平铺含回复的回复；空页语义同上）
 	ListReplies(ctx context.Context, req *postv1.ListRepliesRequest) (*postv1.ListRepliesResponse, error)
@@ -1432,13 +1432,13 @@ func (u *PostUsecaseImpl) ListComments(ctx context.Context, req *postv1.ListComm
 		return nil, fmt.Errorf("failed to list comments: %w", err)
 	}
 
-	// 空页语义（与 ViewPostByAuthor 一致）：列表为空且 cursor 为空，调用方按空列表终止翻页
+	// 游标语义与信息流一致：短取即到底——短页（< limit）带数据回空游标，满页才回 next 游标
 	comments := make([]*postv1.Comment, 0, len(rows))
 	for _, v := range rows {
 		comments = append(comments, v.ToProto())
 	}
 	var cursor *commonv1.Cursor
-	if len(rows) > 0 {
+	if int64(len(rows)) >= limit {
 		cursor = utils.NewTimeCursor(rows[len(rows)-1].CreatedAt, limit)
 	}
 
@@ -1474,12 +1474,13 @@ func (u *PostUsecaseImpl) ListReplies(ctx context.Context, req *postv1.ListRepli
 		return nil, fmt.Errorf("failed to list replies: %w", err)
 	}
 
+	// 游标语义与信息流一致：短取即到底（同 ListComments）
 	replies := make([]*postv1.Comment, 0, len(rows))
 	for _, v := range rows {
 		replies = append(replies, v.ToProto())
 	}
 	var cursor *commonv1.Cursor
-	if len(rows) > 0 {
+	if int64(len(rows)) >= limit {
 		cursor = utils.NewTimeCursor(rows[len(rows)-1].CreatedAt, limit)
 	}
 

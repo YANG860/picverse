@@ -44,7 +44,7 @@
 | `CreateComment` | ✅ | 发表一级评论（同步链路：校验+审核+状态裁决均在请求内完成，写入即可见）；响应带 `comment` + 最新 `comment_count` |
 | `ReplyComment` | ✅ | 回复（楼中楼：挂 parent 所在楼层，parent 可为回复；parent 必须存在、同帖、未删） |
 | `DeleteComment` | ✅ | 删评（软删，评论作者或帖子作者可删否则 `Forbidden`；删一级评论级联软删整楼；幂等重复删不重复减计数） |
-| `ListComments` | ✅ | 一级评论分页（`created_at DESC` 时间游标，每条带楼层 `reply_count`；空页返回空列表 + 空游标） |
+| `ListComments` | ✅ | 一级评论分页（`created_at DESC` 时间游标，每条带楼层 `reply_count`；游标为空即到底（末页可带数据，与信息流口径一致）） |
 | `ListReplies` | ✅ | 楼内回复分页（root_id = 楼层 id，平铺含回复的回复；同构） |
 
 ## 关键逻辑

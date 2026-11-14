@@ -1622,9 +1622,9 @@ func TestCommentList(t *testing.T) {
 	assert.Equal(t, "9701", resp.GetComments()[0].GetCommentId())
 	assert.Equal(t, "9702", resp.GetComments()[1].GetCommentId())
 	assert.Equal(t, int64(2), resp.GetComments()[0].GetReplyCount(), "楼层回复数下发")
-	require.NotNil(t, resp.GetCursor())
+	require.Nil(t, resp.GetCursor(), "短取即到底：短页（< limit）带数据回空游标（与信息流口径一致）")
 
-	// 游标翻页到底：空列表 + 空游标（不以 NotFound 表达空页）
+	// 游标翻页到底：短取即到底（末页带数据回空游标，空页同样回空游标）
 	next, err := u.ListComments(ctx, &postv1.ListCommentsRequest{PostId: "2001", Cursor: &commonv1.Cursor{Str: "1500", Limit: 10}})
 	require.NoError(t, err)
 	assert.False(t, next.GetFail())
@@ -1633,7 +1633,13 @@ func TestCommentList(t *testing.T) {
 	last, err := u.ListComments(ctx, &postv1.ListCommentsRequest{PostId: "2001", Cursor: &commonv1.Cursor{Str: "1000", Limit: 10}})
 	require.NoError(t, err)
 	assert.Empty(t, last.GetComments())
-	assert.Nil(t, last.GetCursor(), "空页 = 空列表 + 空游标")
+	assert.Nil(t, last.GetCursor(), "空页 = 空列表 + 空游标（到底）")
+
+	// 满页才回 next 游标（短取即到底的正向面）
+	full, err := u.ListComments(ctx, &postv1.ListCommentsRequest{PostId: "2001", Cursor: &commonv1.Cursor{Limit: 1}})
+	require.NoError(t, err)
+	require.Len(t, full.GetComments(), 1, "满页（== limit）")
+	require.NotNil(t, full.GetCursor(), "满页回 next 游标")
 
 	// 状态裁决：非 PUBLISHED / 不存在 → NotFound
 	bad, err := u.ListComments(ctx, &postv1.ListCommentsRequest{PostId: "2002"})
