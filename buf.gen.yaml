@@ -19,3 +19,15 @@ plugins:
     out: gen/go
     opt: paths=source_relative
 
+  # 前端 playground 用：ESM 消息与类型（js 运行时 + d.ts 类型声明）
+  - remote: buf.build/bufbuild/es
+    out: gen/ts
+    opt:
+      - target=js+dts
+      - import_extension=.js
+  # ConnectRPC 客户端（面向前端 fetch/浏览器传输层）
+  - remote: buf.build/connectrpc/es:v1.6.1
+    out: gen/ts
+    opt:
+      - target=js+dts
+      - import_extension=.js
