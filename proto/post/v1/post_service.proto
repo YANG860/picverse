@@ -42,7 +42,7 @@ service PostService {
   rpc CreateComment(CreateCommentRequest) returns (CreateCommentResponse);
   rpc ReplyComment(ReplyCommentRequest) returns (ReplyCommentResponse);
   rpc DeleteComment(DeleteCommentRequest) returns (DeleteCommentResponse);
-  // 评论列表（一级评论 / 楼内回复，created_at DESC 游标；空页返回空列表 + 空游标）
+  // 评论列表（一级评论 / 楼内回复，created_at DESC 游标；游标为空即到底（末页可带数据，与信息流口径一致））
   rpc ListComments(ListCommentsRequest) returns (ListCommentsResponse);
   rpc ListReplies(ListRepliesRequest) returns (ListRepliesResponse);
 }

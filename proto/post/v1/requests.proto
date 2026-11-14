@@ -78,17 +78,6 @@ message PublishDraftResponse {
   common.v1.Error err = 2;
 }
 
-// SetPostStatusDraftRequest 将已发布帖子转回草稿（发布后修改场景：转回草稿 → UpdateDraft 修改 → 重新发布；仅 PUBLISHED 可转回）
-message SetPostStatusDraftRequest {
-  string uid = 1 [(buf.validate.field).string.min_len = 1];
-  string post_id = 2 [(buf.validate.field).string.min_len = 1];
-}
-
-message SetPostStatusDraftResponse {
-  bool fail = 1;
-  common.v1.Error err = 2;
-}
-
 // ==================== 帖子查询 ====================
 
 // 按ID批量获取帖子（内部接口，BFF 内网调用；本身就无鉴权/可见性过滤，返回任意状态的帖子）
