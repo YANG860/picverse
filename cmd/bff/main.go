@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"connectrpc.com/grpcreflect"
 	"connectrpc.com/validate"
 	"rednote/gen/go/bff/v1/bffv1connect"
 	"rednote/packages/trace"
@@ -41,10 +42,24 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle(path, handler)
 
-	srv := &http.Server{
-		Addr:    cfg.Server.Bff,
-		Handler: mux,
+	// gRPC 服务端反射（调试开关）：grpcurl / grpcui / buf curl 等工具免 schema 直查。
+	// 仅 reflection: true 时挂载——反射暴露服务/消息元数据，生产面客端口应关闭；
+	// 同时启用 h2c（明文 HTTP/2），grpcurl -plaintext 依赖它（HTTP/1.1 客户端不受影响）
+	if cfg.Server.Reflection {
+		reflector := grpcreflect.NewStaticReflector("bff.v1.BFFService")
+		mux.Handle(grpcreflect.NewHandlerV1(reflector))
+		mux.Handle(grpcreflect.NewHandlerV1Alpha(reflector))
 	}
+
+	srv := &http.Server{
+		Addr: cfg.Server.Bff,
+		// 明文 HTTP/2（h2c）：grpcurl -plaintext / buf curl --http2-prior-knowledge 依赖；
+		// http.Protocols 为 Go 1.24+ 标准姿势（h2c 包已 deprecated），HTTP/1.1 客户端不受影响
+		Protocols: new(http.Protocols),
+	}
+	srv.Protocols.SetHTTP1(true)
+	srv.Protocols.SetUnencryptedHTTP2(true)
+	srv.Handler = mux
 
 	// 启动服务
 	go func() {
