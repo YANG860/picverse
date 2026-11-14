@@ -44,7 +44,7 @@ func ValidatePassword(pw string) bool {
 	hasUpper := regexp.MustCompile(`[A-Z]`).MatchString(pw)
 	hasLower := regexp.MustCompile(`[a-z]`).MatchString(pw)
 	hasDigit := regexp.MustCompile(`[0-9]`).MatchString(pw)
-	return hasUpper && hasLower && hasDigit
+	return (hasUpper || hasLower) && hasDigit
 }
 
 func ValidateImage(ImgData []byte, meta *mediav1.MediaMetaData) (err error) {
@@ -128,6 +128,22 @@ func ValidateContent(content string) bool {
 	// TODO:检验内容
 	n := utf8.RuneCountInString(content)
 	return n > 0 && n <= 1000
+}
+
+// CommentMaxLen 评论内容长度上限（rune 计数，与 VARCHAR(512) 列宽对齐），评论比正文短故独立上限
+const CommentMaxLen = 500
+
+// ValidateComment 评论校验：去除首尾空白后非空、长度 ≤ 500、除换行/回车/制表符外不含控制字符（对齐 ValidateBio 手法）
+func ValidateComment(content string) bool {
+	if strings.TrimSpace(content) == "" {
+		return false
+	}
+	if utf8.RuneCountInString(content) > CommentMaxLen {
+		return false
+	}
+	return !strings.ContainsFunc(content, func(r rune) bool {
+		return unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t'
+	})
 }
 func ValidateMedia(media *mediav1.MediaFile) bool {
 	// 仅做对象键非空的基础校验：媒体文件的存在性、归属校验与资产引用计数由 BFF 侧统一维护

@@ -40,6 +40,8 @@ var (
 	Banned         = New(1305, errors.New("post banned"))
 	// FavouriteLimitExceeded 收藏夹容量上限（默认 1000，见 defaults.FavouriteCap）
 	FavouriteLimitExceeded = New(1306, errors.New("favourite limit exceeded"))
+	// InvalidComment 评论内容非法（空/超 500 rune/含控制字符，见 utils.ValidateComment）
+	InvalidComment = New(1307, errors.New("invalid comment"))
 )
 
 // user
