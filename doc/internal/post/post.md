@@ -33,7 +33,7 @@
 | `GetPostsByIDs` | ✅ | 批量获取（内部接口，BFF 内网调用；本身就无鉴权/可见性过滤，返回任意状态的帖子；`PostResult` 逐项 `fail`/`err`） |
 | `GetPostStatus` | ✅ | 帖子状态查询 |
 | `ViewPost` | ✅ | 查看帖子（非发布状态仅作者可见，软删对外隐藏，封禁返回 `Banned`） |
-| `ViewPostByAuthor` | ✅ | 按作者游标分页（空页返回空列表 + 空游标，不以 NotFound 表达翻页到底）；`PostBrief` 携带 `status`，供 BFF 直接组装 `PostCard` 无需二次查询 |
+| `ViewPostByAuthor` | ✅ | 按作者游标分页（游标为空即到底（末页可带数据）——短取（< limit）即到底，不以 NotFound 表达翻页到底）；`PostBrief` 携带 `status`，供 BFF 直接组装 `PostCard` 无需二次查询 |
 | `DeletePost` | ✅ | 用户删帖（软删 → DELETED，事务内发 `DeletePost` 消息，consumer 物理回收） |
 | `BanPost` | ✅ | 封禁帖子（管理侧，无 uid 校验；软封禁 → BANNED + outbox 发 `BanPost` 消息） |
 | `SyncPostStat` | ✅ | 统计列同步（异步链路；逐字段部分更新，nil 不修改，设置则覆盖该列（含 0），仅统计不改状态） |

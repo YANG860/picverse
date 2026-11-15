@@ -24,6 +24,7 @@ service MediaService {
   rpc SignMediaFileURLs(SignMediaFileURLsRequest) returns (SignMediaFileURLsResponse);
 
   // 按时间列举媒体资产
+  // 按时间倒序取历史资产（游标分页）：短取即到底（末页可带数据回空游标）；空结果回空列表 + 空游标（不以 NotFound 表达空页）
   rpc ListMediaAssetsBefore(ListMediaAssetsBeforeRequest) returns (ListMediaAssetsBeforeResponse);
 
   // 封禁媒体

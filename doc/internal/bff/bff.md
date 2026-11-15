@@ -9,7 +9,7 @@
 | 身份 | 请求体携带 `uid` | **请求体零 uid**，除 Register/Login 外一律由会话解析（BFF 鉴权拦截器校验 token 后注入下游调用），杜绝伪造他人身份 |
 | 视图形状 | 服务的表结构投影 | 按客户端页面组装（`PostCard` / `PostDetail` / `ProfileView` / `Relation`），下游多次调用收敛为一次请求 |
 | 错误约定 | `fail` + `common.v1.Error`（可枚举错误码），连接层错误走原始 gRPC 错误 | `fail` + `common.v1.Error`；**连接层错误不外泄**：内部记录日志后返回 `InternalError`（见下文“错误处理”） |
-| 分页 | 相同：`common.v1.Cursor`，空页返回空列表 + 空游标 | 相同 |
+| 分页 | 相同：`common.v1.Cursor`，游标为空即到底（末页可带数据）——短取（< limit）即到底 | 相同 |
 
 ## 接口（BFFService，proto 现定义 36 rpc）
 

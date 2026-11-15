@@ -134,6 +134,7 @@ message GetFollowingsResponse {
   common.v1.Error err = 2;
 
   repeated UserBrief user_briefs = 3;
+  // 翻页到底：游标为空即到底（末页可带数据）——短取（< limit）即到底
   common.v1.Cursor cursor = 4;
 }
 
@@ -147,7 +148,7 @@ message GetFollowersResponse {
   bool fail = 1;
   common.v1.Error err = 2;
 
-  // 翻页到底/暂无粉丝：列表为空且 cursor 为空（与 GetFollowingsResponse 一致）
+  // 翻页到底：游标为空即到底（末页可带数据）——短取（< limit）即到底
   repeated UserBrief user_briefs = 3;
   common.v1.Cursor cursor = 4;
 }

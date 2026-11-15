@@ -77,7 +77,7 @@ GetFollowingFeed(uid, following_ids, cursor)
 
 **全局单游标** `(created_at, post_id)`（`utils.ParseMergeCursor`/`NewMergeCursor`，编码 "ts:id"）：
 各路同游标严格早于过滤，翻页游标 = 本页末条元组；到底判定 = 产出 < limit 即到底（游标置空，
-proto：`post_ids` 空且 `cursor` 空 = 到底）。删帖行不剔除（`post_ids` 原样返回，BFF 回查过滤兜底）。
+proto：游标为空即到底（末页可带数据））。删帖行不剔除（`post_ids` 原样返回，BFF 回查过滤兜底）。
 
 容错口径：缓存读失败不当作 miss（会丢大V供给线）→ 整体失败重试。
 

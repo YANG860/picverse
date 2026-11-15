@@ -24,7 +24,7 @@ message GetFollowingFeedResponse {
 
   // 已按 (发布时间, id) 归并排序的帖子 ID
   repeated string post_ids = 3;
-  // 翻页到底/暂无内容：post_ids 为空且 cursor 为空
+  // 翻页到底：游标为空即到底（末页可带数据）——短取（< limit）即到底
   common.v1.Cursor cursor = 4;
 }
 
@@ -42,7 +42,7 @@ message GetHotPostsResponse {
 
   // 已按热度降序的帖子 ID
   repeated string post_ids = 3;
-  // 翻页到底/暂无内容：post_ids 为空且 cursor 为空
+  // 翻页到底：游标为空即到底（末页可带数据）——短取（< limit）即到底
   common.v1.Cursor cursor = 4;
 }
 
@@ -96,6 +96,6 @@ message SearchPostsResponse {
   common.v1.Error err = 2;
 
   repeated SearchHit hits = 3;
-  // 翻页到底/暂无内容：hits 为空且 cursor 为空
+  // 翻页到底：游标为空才是到底——短取 ≠ 到底（本页不满可能仍有后续），继续翻页判定只看游标
   common.v1.Cursor cursor = 4;
 }

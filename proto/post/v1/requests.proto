@@ -142,9 +142,7 @@ message ViewPostByAuthorRequest {
 message ViewPostByAuthorResponse {
   bool fail = 1;
   common.v1.Error err = 2;
-
-  // 翻页到底/暂无内容：posts 为空且 cursor 为空（不以 NotFound 表达空页），
-  // 调用方按 posts 为空终止翻页
+  // 翻页到底：游标为空即到底（末页可带数据）——短取（< limit）即到底
   repeated PostBrief posts = 3;
   common.v1.Cursor cursor = 4;
 }
@@ -271,8 +269,7 @@ message ListLikedPostIDsRequest {
 message ListLikedPostIDsResponse {
   bool fail = 1;
   common.v1.Error err = 2;
-
-  // 翻页到底/暂无内容：列表为空且 cursor 为空
+  // 翻页到底：游标为空即到底（末页可带数据）——短取（< limit）即到底
   repeated string post_ids = 3;
   common.v1.Cursor cursor = 4;
 }
@@ -286,8 +283,7 @@ message ListFavouritePostIDsRequest {
 message ListFavouritePostIDsResponse {
   bool fail = 1;
   common.v1.Error err = 2;
-
-  // 翻页到底/暂无内容：列表为空且 cursor 为空
+  // 翻页到底：游标为空即到底（末页可带数据）——短取（< limit）即到底
   repeated string post_ids = 3;
   common.v1.Cursor cursor = 4;
 }
@@ -358,8 +354,7 @@ message ListCommentsRequest {
 message ListCommentsResponse {
   bool fail = 1;
   common.v1.Error err = 2;
-
-  // 翻页到底/暂无内容：列表为空且 cursor 为空（不以 NotFound 表达空页）
+  // 翻页到底：游标为空即到底（末页可带数据）——短取（< limit）即到底
   repeated Comment comments = 3;
   common.v1.Cursor cursor = 4;
 }
@@ -373,8 +368,7 @@ message ListRepliesRequest {
 message ListRepliesResponse {
   bool fail = 1;
   common.v1.Error err = 2;
-
-  // 翻页到底/暂无内容：列表为空且 cursor 为空
+  // 翻页到底：游标为空即到底（末页可带数据）——短取（< limit）即到底
   repeated Comment replies = 3;
   common.v1.Cursor cursor = 4;
 }

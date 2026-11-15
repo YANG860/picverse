@@ -14,8 +14,7 @@ message GetFollowingFeedRequest {
 message GetFollowingFeedResponse {
   bool fail = 1;
   common.v1.Error err = 2;
-
-  // 翻页到底/暂无内容：列表为空且 cursor 为空
+  // 翻页到底：游标为空即到底（末页可带数据）——短取（< limit）即到底
   repeated PostCard posts = 3;
   common.v1.Cursor cursor = 4;
 }
@@ -28,8 +27,7 @@ message GetHotPostsRequest {
 message GetHotPostsResponse {
   bool fail = 1;
   common.v1.Error err = 2;
-
-  // 翻页到底/暂无内容：列表为空且 cursor 为空
+  // 翻页到底：游标为空即到底（末页可带数据）——短取（< limit）即到底
   repeated PostCard posts = 3;
   common.v1.Cursor cursor = 4;
 }
@@ -42,8 +40,7 @@ message GetRecommendFeedRequest {
 message GetRecommendFeedResponse {
   bool fail = 1;
   common.v1.Error err = 2;
-
-  // 翻页到底/暂无内容：列表为空且 cursor 为空
+  // 翻页到底：游标为空才是到底——短取 ≠ 到底（本页不满可能仍有后续），继续翻页判定只看游标
   repeated PostCard posts = 3;
   common.v1.Cursor cursor = 4;
 }

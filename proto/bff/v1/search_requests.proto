@@ -22,6 +22,6 @@ message SearchPostsResponse {
 
   // 命中帖子卡片（保持搜索排序序；同步窗口内已删/封禁的命中已过滤，页内条数可能少于 limit）
   repeated PostCard posts = 3;
-  // 翻页到底/暂无内容：posts 为空且 cursor 为空
+  // 翻页到底：游标为空才是到底——短取 ≠ 到底（本页不满可能仍有后续），继续翻页判定只看游标
   common.v1.Cursor cursor = 4;
 }
