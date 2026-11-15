@@ -345,24 +345,25 @@ func TestMediaUsecase_ListMediaAssetsBefore(t *testing.T) {
 		seedAsset(t, db, assetID2, mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_ACTIVE, 0, time.Now().Add(-time.Minute).UnixMilli())
 
 		resp, err := uc.ListMediaAssetsBefore(ctx, &mediav1.ListMediaAssetsBeforeRequest{
-			Cursor: &commonv1.Cursor{Str: strconv.FormatInt(time.Now().UnixMilli(), 10), Limit: 10},
+			Cursor: &commonv1.Cursor{Str: strconv.FormatInt(time.Now().UnixMilli(), 10), Limit: 2},
 		})
 		require.NoError(t, err)
 		require.False(t, resp.GetFail())
 		require.Len(t, resp.GetAssets(), 2)
-		require.NotNil(t, resp.GetCursor(), "有数据时应返回游标")
+		require.NotNil(t, resp.GetCursor(), "满页（== limit）回 next 游标")
 		assert.Equal(t,
 			strconv.FormatInt(resp.GetAssets()[1].GetBase().GetCreatedAt(), 10),
 			resp.GetCursor().GetStr(),
 			"游标应为最后一条的 created_at")
 	})
 
-	t.Run("无数据返回 NotFound", func(t *testing.T) {
+	t.Run("空结果回空列表+空游标（不以 NotFound 表达空页）", func(t *testing.T) {
 		uc, _, _, _ := newUsecase(t)
 		resp, err := uc.ListMediaAssetsBefore(ctx, &mediav1.ListMediaAssetsBeforeRequest{})
 		require.NoError(t, err)
-		assert.True(t, resp.GetFail())
-		assert.Equal(t, errmsg.NotFound, resp.GetErr())
+		assert.False(t, resp.GetFail())
+		assert.Empty(t, resp.GetAssets())
+		assert.Nil(t, resp.GetCursor(), "短取即到底：空页空游标")
 	})
 }
 

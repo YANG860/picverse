@@ -470,7 +470,7 @@ func (u *UserUsecaseImpl) GetFollowings(ctx context.Context, req *userv1.GetFoll
 	}
 
 	var cursor *commonv1.Cursor
-	if len(follows) > 0 {
+	if int64(len(follows)) >= limit {
 		cursor = utils.NewTimeCursor(follows[len(follows)-1].CreatedAt, limit)
 	}
 
@@ -503,7 +503,7 @@ func (u *UserUsecaseImpl) GetFollowers(ctx context.Context, req *userv1.GetFollo
 	}
 
 	var cursor *commonv1.Cursor
-	if len(follows) > 0 {
+	if int64(len(follows)) >= limit {
 		cursor = utils.NewTimeCursor(follows[len(follows)-1].CreatedAt, limit)
 	}
 

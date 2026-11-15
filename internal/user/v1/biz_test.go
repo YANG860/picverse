@@ -595,7 +595,7 @@ func TestUserUsecase_GetFollowings(t *testing.T) {
 		require.Len(t, resp.GetUserBriefs(), 1)
 		assert.Equal(t, "3002", resp.GetUserBriefs()[0].GetUid())
 		assert.Equal(t, "target", resp.GetUserBriefs()[0].GetName())
-		assert.NotNil(t, resp.GetCursor(), "有数据时应返回游标")
+		assert.Nil(t, resp.GetCursor(), "短取即到底：短页（< limit）带数据回空游标")
 	})
 
 	t.Run("无关注返回空列表且无游标", func(t *testing.T) {

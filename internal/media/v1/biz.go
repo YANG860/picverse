@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	commonv1 "rednote/gen/go/common/v1"
 	mediav1 "rednote/gen/go/media/v1"
 	models "rednote/internal/media/models"
 	"rednote/packages/defaults"
@@ -350,12 +351,12 @@ func (u *MediaUsecaseImpl) ListMediaAssetsBefore(ctx context.Context, req *media
 		results = append(results, v.ToProto())
 	}
 
-	if len(results) == 0 {
-		return &mediav1.ListMediaAssetsBeforeResponse{Fail: true, Err: errmsg.NotFound}, nil
+	// 到底口径与列表系一致：短取即到底（末页可带数据回空游标）；空结果回空列表 + 空游标（不以 NotFound 表达空页）
+	var cursor *commonv1.Cursor
+	if int64(len(results)) >= limit {
+		stamp = results[len(results)-1].GetBase().GetCreatedAt()
+		cursor = utils.NewTimeCursor(stamp, limit)
 	}
-
-	stamp = results[len(results)-1].GetBase().GetCreatedAt()
-	cursor := utils.NewTimeCursor(stamp, limit)
 
 	return &mediav1.ListMediaAssetsBeforeResponse{
 		Assets: results,

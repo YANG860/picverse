@@ -19,6 +19,7 @@ import (
 	"rednote/test/testmq"
 	"rednote/test/testsnowflake"
 
+	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -882,15 +883,8 @@ func TestPostUsecase_ViewPostByAuthor(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Len(t, last.GetPosts(), 1)
-
-		end, err := uc.ViewPostByAuthor(ctx, &postv1.ViewPostByAuthorRequest{
-			ViewerId: self, AuthorId: author, Cursor: last.GetCursor(),
-		})
-		require.NoError(t, err)
-		assert.False(t, end.GetFail())
-		assert.Empty(t, end.GetPosts(), "翻页到底应返回空列表")
-		assert.Nil(t, end.GetCursor(), "翻页到底应返回空游标")
-		assert.Nil(t, end.GetErr())
+		assert.Nil(t, last.GetCursor(), "短取即到底：末页带数据回空游标（不再续翻）")
+		assert.Nil(t, last.GetErr())
 	})
 
 	t.Run("无内容返回空列表（非 NotFound）", func(t *testing.T) {
@@ -930,6 +924,18 @@ func TestPostUsecase_ViewPost(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, resp.GetFail())
 		assert.Equal(t, errmsg.NotFound, resp.GetErr())
+	})
+
+	t.Run("未知状态兜底走连接层 CodeInternal（回归）", func(t *testing.T) {
+		uc, db, _ := newUsecase(t)
+		seedPost(t, db, postID1, authorID1, postv1.PostStatus(99), time.Now().UnixMilli())
+
+		resp, err := uc.ViewPost(ctx, &postv1.ViewPostRequest{ViewerId: self, PostId: postID})
+		require.Error(t, err)
+		assert.Nil(t, resp)
+		var ce *connect.Error
+		require.True(t, errors.As(err, &ce))
+		assert.Equal(t, connect.CodeInternal, ce.Code())
 	})
 
 	t.Run("已发布他人可见（全字段）", func(t *testing.T) {
@@ -1398,7 +1404,7 @@ func TestPostUsecase_Interactions(t *testing.T) {
 		require.False(t, got.GetFail())
 		assert.Equal(t, []string{strconv.FormatInt(postID2, 10), postIDStr}, got.GetPostIds(),
 			"created_at 并列按 id DESC（94002 > 94001）")
-		require.NotNil(t, got.GetCursor())
+		assert.Nil(t, got.GetCursor(), "短取即到底：短页（< limit）带数据回空游标")
 
 		// 游标续翻：时间游标严格小于边界（与现有帖子列表翻页同口径），
 		// 同毫秒并列行落页外为已知现状（判态场景可接受）

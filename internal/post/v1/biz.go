@@ -15,6 +15,7 @@ import (
 	"rednote/packages/mq"
 	"rednote/packages/utils"
 
+	"connectrpc.com/connect"
 	"github.com/bwmarrin/snowflake"
 	"gorm.io/datatypes"
 )
@@ -555,7 +556,7 @@ func (u *PostUsecaseImpl) ViewPostByAuthor(ctx context.Context, req *postv1.View
 	// 空页语义（与 user.GetFollowings 一致）：翻页到底/暂无内容返回空列表 + 空游标，
 	// 不再以 NotFound 表达空页；调用方按 posts 为空终止翻页
 	var cursor *commonv1.Cursor
-	if len(posts) > 0 {
+	if int64(len(posts)) >= limit {
 		cursor = utils.NewTimeCursor(posts[len(posts)-1].CreatedAt, limit)
 	}
 	briefs := make([]*postv1.PostBrief, 0, len(posts))
@@ -605,7 +606,9 @@ func (u *PostUsecaseImpl) ViewPost(ctx context.Context, req *postv1.ViewPostRequ
 		return &postv1.ViewPostResponse{Fail: true, Err: errmsg.NotFound}, nil
 
 	default:
-		return &postv1.ViewPostResponse{Fail: true, Err: errmsg.InternalError}, nil
+		// 未知状态 = 程序不变量问题（非业务裁决），走连接层 CodeInternal（契约见 doc/proto/proto.md）
+		return nil, connect.NewError(connect.CodeInternal,
+			fmt.Errorf("unknown post status %v for post %d", post.Status, postID.Int64()))
 	}
 }
 
@@ -1119,7 +1122,7 @@ func (u *PostUsecaseImpl) ListLikedPostIDs(ctx context.Context, req *postv1.List
 		ids = append(ids, snowflake.ParseInt64(v.PostID).String())
 	}
 	var cursor *commonv1.Cursor
-	if len(rows) > 0 {
+	if int64(len(rows)) >= limit {
 		cursor = utils.NewTimeCursor(rows[len(rows)-1].CreatedAt, limit)
 	}
 
@@ -1144,7 +1147,7 @@ func (u *PostUsecaseImpl) ListFavouritePostIDs(ctx context.Context, req *postv1.
 		ids = append(ids, snowflake.ParseInt64(v.PostID).String())
 	}
 	var cursor *commonv1.Cursor
-	if len(rows) > 0 {
+	if int64(len(rows)) >= limit {
 		cursor = utils.NewTimeCursor(rows[len(rows)-1].CreatedAt, limit)
 	}
 
