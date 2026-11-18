@@ -92,3 +92,4 @@ vendor/
 dist/
 build/
 out/
+deploy/**/.env

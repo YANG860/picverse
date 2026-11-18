@@ -19,15 +19,18 @@ plugins:
     out: gen/go
     opt: paths=source_relative
 
-  # 前端 playground 用：ESM 消息与类型（js 运行时 + d.ts 类型声明）
-  - remote: buf.build/bufbuild/es
-    out: gen/ts
+  # 前端代码：输出到 web/src/gen（生成物必须位于 web 依赖树内，
+  # 否则裸导入 @bufbuild/protobuf 无法从 gen/ 向上解析 node_modules）
+  - remote: buf.build/bufbuild/es:v2.17.0
+    out: web/src/gen
+    # 生成依赖（protovalidate 的 buf/validate/validate_pb）的 TS 产物，否则 import 悬空
+    include_imports: true
     opt:
       - target=js+dts
       - import_extension=.js
   # ConnectRPC 客户端（面向前端 fetch/浏览器传输层）
   - remote: buf.build/connectrpc/es:v1.6.1
-    out: gen/ts
+    out: web/src/gen
     opt:
       - target=js+dts
       - import_extension=.js
