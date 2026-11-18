@@ -87,6 +87,16 @@ func publishedPost(postID string) *postv1.Post {
 
 const testMsgID = "1700000000000000009"
 
+// TestHandleUpsertPostIndex_PermanentError 下游连接层永久错误（InvalidArgument 等）→ ACK 丢弃不重投
+func TestHandleUpsertPostIndex_PermanentError(t *testing.T) {
+	p := &fakePostService{err: connect.NewError(connect.CodeInvalidArgument, errors.New("bad request"))}
+	c := newTestIndexConsumer(&fakeMeili{}, p, &fakeDedup{applied: true})
+
+	ack, err := c.handleUpsertPostIndex(context.Background(), &postv1.PublishPost{PostId: "1700000000000000001"}, testMsgID)
+	assert.True(t, ack, "永久错误不重投")
+	require.ErrorContains(t, err, "GetPostsByIDs")
+}
+
 // TestHandleUpsertPostIndex 发布 → 文档组装与字段映射正确、幂等登记 handler 名正确
 func TestHandleUpsertPostIndex(t *testing.T) {
 	const postID = "1700000000000000001"

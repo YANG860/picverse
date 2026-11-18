@@ -13,6 +13,7 @@ import (
 	discoverv1 "rednote/internal/discover/v1"
 	"rednote/packages/cache"
 	"rednote/packages/defaults"
+	"rednote/packages/errmsg"
 	"rednote/packages/logger"
 	"rednote/packages/mq"
 	"strconv"
@@ -55,7 +56,7 @@ func NewFanoutConsumer(mqClient mq.MQClient, lf logger.LoggerFactory, cfg *confi
 		fanoutCap:   fanoutCap,
 	}
 	c.MessageLoop = NewMessageLoop(
-		newConsumer(cfg.Consumer.Discover.Fanout.Name, cfg.Consumer.Discover.Fanout.MaxRetry, "",
+		newConsumer(cfg.Consumer.Discover.Fanout.Name, cfg.Consumer.Discover.Fanout.MaxRetry, "", cfg.Consumer.HandleTimeout,
 			mqClient, lf, "fanout_consumer"),
 		defaults.PostStream,
 		func() *postv1.PostMessage { return &postv1.PostMessage{} },
@@ -99,7 +100,7 @@ func (c *FanoutConsumer) handlePublishFanout(ctx context.Context, msg *postv1.Pu
 		PostIds: []string{postID},
 	}))
 	if err != nil {
-		return RETRY, fmt.Errorf("post.GetPostsByIDs failed: %w", err)
+		return classifyErr(err), fmt.Errorf("post.GetPostsByIDs failed: %w", err)
 	}
 	var post *postv1.Post
 	for _, r := range resp.Msg.GetResults() {
@@ -122,10 +123,17 @@ func (c *FanoutConsumer) handlePublishFanout(ctx context.Context, msg *postv1.Pu
 	// 粉丝数（分流判定输入）；取帖/取数间粉丝激增由扇出拉取的安全阀兑底
 	profResp, err := c.UserService.GetUserProfile(ctx, connect.NewRequest(&userv1.GetUserProfileRequest{Uid: authorID}))
 	if err != nil {
-		return RETRY, fmt.Errorf("user.GetUserProfile failed: %w", err)
+		return classifyErr(err), fmt.Errorf("user.GetUserProfile failed: %w", err)
 	}
 	if profResp.Msg.GetFail() {
-		return RETRY, fmt.Errorf("user.GetUserProfile fail: %s", profResp.Msg.GetErr().GetMsg())
+		// 业务 fail 是终态（重投只会得到同样裁决）：NotFound（作者不存在）降级跳过扇出；
+		// InvalidID（消息数据坏）/ 未知业务码 ACK 丢弃并留 Error 人工关注
+		code := profResp.Msg.GetErr().GetCode()
+		if code == errmsg.NotFound.Code {
+			c.log.Warn("author not found，降级跳过扇出", "id", messageID, "author_id", authorID)
+			return ACK, nil
+		}
+		return ACK, fmt.Errorf("user.GetUserProfile fail: code=%d msg=%s", code, profResp.Msg.GetErr().GetMsg())
 	}
 	followers := profResp.Msg.GetProfile().GetStat().GetFollowers()
 
@@ -140,7 +148,8 @@ func (c *FanoutConsumer) handlePublishFanout(ctx context.Context, msg *postv1.Pu
 		return nil
 	})
 	if err != nil {
-		return RETRY, err
+		// 依赖瞬时故障 → RETRY；下游业务终态（errBizFail）→ ACK，不无谓重投
+		return classifyErr(err), err
 	}
 	if !applied {
 		c.log.Info("fanout skipped duplicate", "id", messageID, "post_id", postID)
@@ -224,7 +233,9 @@ func (c *FanoutConsumer) fetchFollowers(ctx context.Context, authorID int64) ([]
 			return nil, fmt.Errorf("user.GetFollowers failed: %w", err)
 		}
 		if resp.Msg.GetFail() {
-			return nil, fmt.Errorf("user.GetFollowers fail: %s", resp.Msg.GetErr().GetMsg())
+			// 业务 fail 是终态：携带 errBizFail 哨兵，上层 classifyErr 分类为 ACK 丢弃
+			return nil, fmt.Errorf("user.GetFollowers fail: code=%d msg=%s: %w",
+				resp.Msg.GetErr().GetCode(), resp.Msg.GetErr().GetMsg(), errBizFail)
 		}
 		briefs := resp.Msg.GetUserBriefs()
 		for _, b := range briefs {

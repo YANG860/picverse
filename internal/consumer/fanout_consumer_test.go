@@ -16,6 +16,7 @@ import (
 	commonv1 "rednote/internal/common/v1"
 	discoverv1 "rednote/internal/discover/v1"
 	"rednote/packages/cache"
+	"rednote/packages/errmsg"
 	"rednote/test/testredis"
 
 	"github.com/stretchr/testify/assert"
@@ -25,14 +26,19 @@ import (
 type fakeUserClient struct {
 	userv1connect.UserServiceClient
 
-	followers  int64
-	profileErr error
-	pages      [][]string
+	followers     int64
+	profileErr    error
+	profileFail   *commonpb.Error
+	followersFail *commonpb.Error
+	pages         [][]string
 }
 
 func (f *fakeUserClient) GetUserProfile(_ context.Context, _ *connect.Request[userv1.GetUserProfileRequest]) (*connect.Response[userv1.GetUserProfileResponse], error) {
 	if f.profileErr != nil {
 		return nil, f.profileErr
+	}
+	if f.profileFail != nil {
+		return connect.NewResponse(&userv1.GetUserProfileResponse{Fail: true, Err: f.profileFail}), nil
 	}
 	return connect.NewResponse(&userv1.GetUserProfileResponse{
 		Profile: &userv1.UserProfile{Stat: &userv1.UserStat{Followers: f.followers}},
@@ -40,6 +46,9 @@ func (f *fakeUserClient) GetUserProfile(_ context.Context, _ *connect.Request[us
 }
 
 func (f *fakeUserClient) GetFollowers(_ context.Context, _ *connect.Request[userv1.GetFollowersRequest]) (*connect.Response[userv1.GetFollowersResponse], error) {
+	if f.followersFail != nil {
+		return connect.NewResponse(&userv1.GetFollowersResponse{Fail: true, Err: f.followersFail}), nil
+	}
 	if len(f.pages) == 0 {
 		return connect.NewResponse(&userv1.GetFollowersResponse{}), nil // 翻页到底
 	}
@@ -239,6 +248,43 @@ func TestHandlePublishFanout_ProfileError(t *testing.T) {
 	ack, err := c.handlePublishFanout(context.Background(), fanoutMsg(), testMsgID)
 	require.ErrorContains(t, err, "GetUserProfile")
 	assert.False(t, ack, "可重试错误 RETRY 重投")
+}
+
+// TestHandlePublishFanout_ProfileFailNotFound 作者不存在（业务终态）→ 降级跳过扇出 ACK，不写任何供给线
+func TestHandlePublishFanout_ProfileFailNotFound(t *testing.T) {
+	u := &fakeUserClient{profileFail: errmsg.NotFound}
+	fo := &fakeFanout{}
+	tl := &fakeTimeline{}
+	c := newTestFanoutConsumer(nil, u, fo, tl, &fakeDedup{applied: true})
+
+	ack, err := c.handlePublishFanout(context.Background(), fanoutMsg(), testMsgID)
+	require.NoError(t, err)
+	assert.True(t, ack)
+	assert.Zero(t, fo.gotPostID, "作者不存在不扇出")
+	assert.Zero(t, tl.appends, "作者不存在不写发件箱缓存")
+}
+
+// TestHandlePublishFanout_ProfileFailUnknownCode 契约外未知业务码（终态）→ ACK 丢弃 + Error 上下文，不无谓重投
+func TestHandlePublishFanout_ProfileFailUnknownCode(t *testing.T) {
+	u := &fakeUserClient{profileFail: &commonpb.Error{Code: 9999, Msg: "unknown"}}
+	c := newTestFanoutConsumer(nil, u, &fakeFanout{}, &fakeTimeline{}, &fakeDedup{applied: true})
+
+	ack, err := c.handlePublishFanout(context.Background(), fanoutMsg(), testMsgID)
+	assert.True(t, ack, "业务终态不重投")
+	require.ErrorContains(t, err, "GetUserProfile fail")
+	assert.ErrorContains(t, err, "code=9999")
+}
+
+// TestHandlePublishFanout_FollowersFail 粉丝列表业务 fail（终态）→ errBizFail 哨兵穿透 → ACK 丢弃
+func TestHandlePublishFanout_FollowersFail(t *testing.T) {
+	u := &fakeUserClient{followers: 1, followersFail: errmsg.InvalidID}
+	fo := &fakeFanout{}
+	c := newTestFanoutConsumer(nil, u, fo, &fakeTimeline{}, &fakeDedup{applied: true})
+
+	ack, err := c.handlePublishFanout(context.Background(), fanoutMsg(), testMsgID)
+	assert.True(t, ack, "业务终态不重投")
+	require.ErrorContains(t, err, "GetFollowers fail")
+	assert.Zero(t, fo.gotPostID, "粉丝列表 fail 不产生扇出")
 }
 
 // TestHandlePublishFanout_CreatedAtDegraded created_at 非法降级 0 继续扇出（不阻塞链路）

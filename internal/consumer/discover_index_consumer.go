@@ -29,13 +29,21 @@ type DiscoverIndexConsumer struct {
 func NewDiscoverIndexConsumer(mqClient mq.MQClient, lf logger.LoggerFactory, cfg *config.Config,
 	meiliClient meili.MeiliRepo, postService postv1connect.PostServiceClient,
 	dedup commonv1.ProcessedMessageRepository) *DiscoverIndexConsumer {
+	// 启动即幂等应用 posts 索引 settings（searchable/sortable）：索引可能由 UpsertPost 隐式创建
+	// （无 settings），不应用的话「最新」排序（sort by created_at/post_id）会被 Meili 拒绝（internal error）。
+	// 失败仅告警不阻断启动：索引写入路径自带建索引兜底，下次重启会重试应用。
+	ensureCtx, cancel := context.WithTimeout(context.Background(), cfg.Consumer.HandleTimeout)
+	defer cancel()
+	if err := meiliClient.EnsurePostsIndex(ensureCtx); err != nil {
+		panic(fmt.Errorf("ensure posts index settings failed（「最新」排序可能不可用）: %w", err))
+	}
 	c := &DiscoverIndexConsumer{
 		Meili:       meiliClient,
 		PostService: postService,
 		Dedup:       dedup,
 	}
 	c.MessageLoop = NewMessageLoop(
-		newConsumer(cfg.Consumer.Discover.Index.Name, cfg.Consumer.Discover.Index.MaxRetry, "",
+		newConsumer(cfg.Consumer.Discover.Index.Name, cfg.Consumer.Discover.Index.MaxRetry, "", cfg.Consumer.HandleTimeout,
 			mqClient, lf, "discover_index_consumer"),
 		defaults.PostStream,
 		func() *postv1.PostMessage { return &postv1.PostMessage{} },
@@ -78,7 +86,7 @@ func (c *DiscoverIndexConsumer) handleUpsertPostIndex(ctx context.Context, msg *
 		PostIds: []string{postID},
 	}))
 	if err != nil {
-		return RETRY, fmt.Errorf("post.GetPostsByIDs failed: %w", err)
+		return classifyErr(err), fmt.Errorf("post.GetPostsByIDs failed: %w", err)
 	}
 
 	var post *postv1.Post

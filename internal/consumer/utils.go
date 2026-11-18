@@ -1,9 +1,11 @@
 package consumer
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 
+	"connectrpc.com/connect"
 	"github.com/bwmarrin/snowflake"
 )
 
@@ -29,4 +31,32 @@ func ParseSnowflakeID(s, field string) (snowflake.ID, error) {
 		return 0, fmt.Errorf("invalid %s %q: %w", field, s, err)
 	}
 	return v, nil
+}
+
+// errBizFail 下游业务 fail 终态哨兵：服务端已裁决（重投只会得到同样结果），
+// 携带本哨兵的错误链由 classifyErr 判为不可重试（ACK 丢弃）
+var errBizFail = errors.New("downstream business fail")
+
+// classifyErr 下游调用错误的 Ack/Nak 分类（决定 Nak 重投与否）：
+//   - RETRY（瞬时，重投有意义）：连接层 Unavailable/Unknown/DeadlineExceeded/ResourceExhausted，
+//     以及非 connect 的依赖错误（DB/Redis/Meili/S3 抖动、网络错误）；
+//   - ACK（永久，重投无用）：连接层其余码（InvalidArgument/Unimplemented/Internal 等）、
+//     业务 fail 终态（errBizFail）。
+//
+// 业务 fail（resp.Msg.GetFail()）是服务端已裁决的终态，调用方按码直接处置，不经本函数重投
+func classifyErr(err error) bool {
+	if errors.Is(err, errBizFail) {
+		return ACK
+	}
+	var ce *connect.Error
+	if errors.As(err, &ce) {
+		switch ce.Code() {
+		case connect.CodeUnavailable, connect.CodeUnknown,
+			connect.CodeDeadlineExceeded, connect.CodeResourceExhausted:
+			return RETRY
+		default:
+			return ACK
+		}
+	}
+	return RETRY
 }
