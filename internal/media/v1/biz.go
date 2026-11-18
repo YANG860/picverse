@@ -117,12 +117,11 @@ func (u *MediaUsecaseImpl) UploadMedia(ctx context.Context, req *mediav1.UploadM
 			},
 		}
 
-		// 创建发送延时消息
+		// 创建处理消息（立即发送：上传确认改由消费端退避重试，不延时等待直传完成）
 		mqMsg, err := mq.NewMQMessage(defaults.MediaMessageStream, nil, &uploadMsg)
 		if err != nil {
 			return err
 		}
-		mqMsg.WithDelay(defaults.UploadMsgDelay)
 
 		err = u.MQ.SendTX(ctx, mqMsg, tx)
 		if err != nil {

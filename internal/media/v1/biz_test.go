@@ -99,10 +99,10 @@ func TestMediaUsecase_UploadMedia(t *testing.T) {
 		// S3：预签名调用已发生
 		require.NotEmpty(t, s3.Ops())
 
-		// MQ：延时消息（UploadMedia）已入列
+		// MQ：处理消息（UploadMedia）已入列——需求变更：立即投递（原延时 15s 等待改为消费端退避重试）
 		msgs := mqc.SentBySubject(defaults.MediaMessageStream)
 		require.Len(t, msgs, 1)
-		assert.Greater(t, msgs[0].SendAt, time.Now().UnixMilli(), "应为延时消息")
+		assert.LessOrEqual(t, msgs[0].SendAt, time.Now().UnixMilli(), "应为立即消息")
 
 		var mediaMsg mediav1.MediaMessage
 		require.NoError(t, proto.Unmarshal(msgs[0].PayLoad, &mediaMsg))

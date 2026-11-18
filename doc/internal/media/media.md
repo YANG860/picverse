@@ -62,8 +62,17 @@ proto 枚举取值（注意取值非连续）：
 
 ### UploadMedia 流程
 1. 格式过滤：原图只接受 **PNG / JPG**。
-2. 事务内：创建 `MediaAsset(UPLOADING)` → 生成预签名 PUT URL → 写延时 `upload_media` 消息（默认延迟 15s）。
+2. 事务内：创建 `MediaAsset(UPLOADING)` → 生成预签名 PUT URL → **立即**写 `upload_media` 消息。
 3. 客户端用预签名 URL 直传 MinIO（不经服务端）。
+
+**上传确认（重试语义）**：消息在事务内立即投递，consumer 先在 handler 内短轮询等对象落地
+（`defaults.UploadObjectWait` = 2s，100ms 一查）——通常几百毫秒内就接住客户端刚 PUT 的对象，
+省掉一次 Nak 退避重投；仍未到则按 `NakWithDelay` 逐条退避（1s/2s/3s/5s）重投，
+窗口耗尽（`max_retry` 次投递）仍未到 → 判上传失败（`UPLOADING → FAILED`）。仅 `UPLOADING` 可推进（守卫防重复处理）。
+
+变体处理阶段（`PROCESSING`）失败同样有耗尽兜底：投递次数用尽后置 `FAILED` 并 ACK，
+而不是让消息被 JetStream 静默丢弃（那会让资产永久停在 `PROCESSING`）。
+前端提示“上传完成”：直传完成后轮询 `GetMediaAsset`（间隔 1~2s），状态离开 `UPLOADING`（进 `AUDITING`）即已确认。
 
 ### 引用计数
 `ModifyMediaAssetRefCount` 接收 `{id, delta}` 列表，在单事务内逐项 `ref_count += delta`，整体原子。帖子引用/释放媒体时调用。
@@ -73,14 +82,19 @@ proto 枚举取值（注意取值非连续）：
 
 ## 上传/处理流水线（异步）
 
-上传后的图片由 [consumer](../consumer/consumer.md) 异步处理，状态推进通过延时/流水线消息驱动：
+上传后的图片由 [consumer](../consumer/consumer.md) 异步处理，状态推进在**同一次消息投递内联完成**：
 
 ```
-UploadMedia ──▶ upload_media ──▶ 校验原图 ──▶ audit_media
-                                                  │
-                                                  ▼
-                       publish_media ◀── process_media ◀── (审核通过)
+UploadMedia ──▶ upload_media ──▶ 校验原图 + 落库
+                                    │
+                                    ▼
+         UPLOADING ─▶ AUDITING（真实审核接入点，当前占位）─▶ PROCESSING ─▶ 三档变体 ─▶ ACTIVE
 ```
+
+> 历史实现把链路拆成 `upload → audit → process → publish` 四次消息接力，每跳都要等事务 outbox 的
+> poller tick（秒级 × 3 跳），实测「PUT 完成 → ACTIVE」被拖到 11s+，而审核与发布两步都只有占位逻辑。
+> 现在只有 `upload_media` 一条消息，状态推进走直接的状态守卫转移（`ProcessAsset`）；
+> 流中残留的 `audit_media` / `process_media` / `publish_media` 消息由兼容入口幂等消费（不会重复转换）。
 
 另有旁路消息 `deref_media`（引用计数 -1）：BFF 在挂载点替换（换头像/换草稿媒体）时发出，
 由 consumer 直接递减计数（不涉及状态机），卸载路径异步化、最终一致。
@@ -88,7 +102,7 @@ UploadMedia ──▶ upload_media ──▶ 校验原图 ──▶ audit_media
 ### 图片预处理
 - 校验合法性（大小、SHA256、实际格式、尺寸，见 consumer 的 `ValidateImage`）。
 - 保存原图。
-- 生成定宽压缩变体：宽度 **216px / 540px / 1080px**。
+- 生成定宽压缩变体：宽度 **216px / 540px / 1080px**（原图只解码一次，三档复用同一份解码结果）。
   - 仅当原图宽度大于目标宽度时缩放（Lanczos），小图不放大。
   - 处理后统一编码为 **webp**（质量 85）。
 - 原图只接受 png / jpg，处理后变体统一 webp。

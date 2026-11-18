@@ -3,7 +3,10 @@ package defaults
 import "time"
 
 var (
-	UploadMsgDelay = 15 * time.Second
+	// ConsumerRetryBackOff 全消费组统一 Nak 退避重投节奏（防瞬时错误重投风暴挤占串行消费循环）。
+	// 超出长度沿用最后一个值；投递总次数仍由各消费组 max_retry（MaxDeliver）控制。
+	// 上传确认场景：UploadMedia 消息立即发送，对象未到按此节奏重试，耗尽判失败（原延时 15s 等待已废除）
+	ConsumerRetryBackOff = []time.Duration{time.Second, 2 * time.Second, 3 * time.Second, 5 * time.Second}
 )
 
 const (
@@ -12,6 +15,11 @@ const (
 
 	MaxImageHeight = 8192
 	MaxImageWidth  = 8192
+
+	// UploadObjectWait 上传确认消息在 handler 内等直传对象落地的时长。
+	// 消息在 UploadMedia 事务里即发出，常比客户端 PUT 早到几百毫秒；短等即可接住，
+	// 省掉一次 Nak 退避重投（最小档 1s，是上传链路时延的大头）。仍未见再交由重投窗口兜底
+	UploadObjectWait = 2 * time.Second
 )
 
 var (
