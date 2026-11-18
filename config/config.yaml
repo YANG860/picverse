@@ -23,6 +23,11 @@ server:
   # 调试开关：true 时 bff 挂 gRPC 服务端反射（grpcurl / buf curl 免 schema 直查）；
   # 反射暴露服务/消息元数据，生产面客端口应关闭
   reflection: true
+  rate_limit: # 入口限流（仅 bff 消费；0 = 关闭该项）：token bucket 两级，溢出 fail+InternalError
+    qps: 500     # 全局每秒请求数
+    burst: 1000  # 全局突发桶容量
+    ip_qps: 50   # 每 IP 每秒请求数（防单客户端刷量）
+    ip_burst: 100 # 每 IP 突发桶容量
 
 services:
   # 下游服务地址（packages/discovery 静态实现）。
@@ -33,13 +38,21 @@ services:
   post: "127.0.0.1:8082"
   discover: "127.0.0.1:8085"
 
+rpc:
+  timeout: 3s # 下游 RPC 单次调用超时（客户端拦截器统一注入，只收紧不放宽；超时=故障信号）
+  max_inflight: 256 # 每下游服务在途请求并发上限（舱壁限流，满舱快速失败；堆积上界 = max_inflight × timeout）
+
 s3:
-  endpoint: "106.53.172.186:9000"
+  endpoint: "106.53.172.186:9000"   # 服务端内部读写（Upload/Download/Delete）直连，不经公网
   access_key: "rednote-3e2533eb"   # 容器 rednote-minio（MINIO_ROOT_USER）
   secret_key: "LwFebgYHVFg2JRaO18iprgHPe5BQgpXv8okatw9"
   region: "us-east-1"
   use_ssl: false
   bucket: "rednote"
+  # 预签名 URL 的对外域名。SigV4 的 canonical host 参与签名，签名 URL 的 host 不能事后替换，
+  # 因此签名以该域名为 endpoint 重新签发（服务端读写仍走上面的 endpoint）。留空=回落 endpoint。
+  public_endpoint: "media.picverse.site"
+  public_use_ssl: true
 
 jetstream:
   url: "nats://106.53.172.186:4222"
@@ -62,6 +75,10 @@ cache:
   null_ttl: 60s    # 空哨兵 TTL（防穿透）
   timeline_ttl: 720h     # 作者发件箱缓存 TTL（30 天，与 fanout.retention 对齐：零漏前提，改须同步）
   timeline_capacity: 5000 # 发件箱缓存条数保险丝（防事故刷帖）；窗口 = fanout.retention 时间截尾（承诺内全量，短取即见底免回源），正常永不触发
+  flight_workers: 4      # 回源合并并发批上限 K（1 退回串行波；调大消队头阻塞、吞吐天花板 ×K，代价合并率下降）
+  flight_batch_size: 500 # 回源合并单批 key 上限（积压自动切分多批，防大包）
+  flight_timeout: 5s     # 回源合并单批 fetch 超时（防挂死毒化底线）
+  stat_ttl: 1m           # 统计列缓存 TTL（短 TTL 读缓存，写路径不失效，陈旧 ≤ TTL）；0=默认 1m，负值=禁用直通
 
 post:
   view_flush_interval: 30s # 浏览计数刷回周期（Redis 计数器 → posts.view_count）
@@ -104,19 +121,24 @@ jwt:
 
 poller:
   workers: 4
-  interval: 5s
+  # 轮询间隔：越低越能压低「事务 outbox → 消息投递」的时延（媒体上传链路要过 outbox 跳，
+  # 每跳平均等待 interval/2）。500ms 下 4 worker 空闲轮询仅 8 次/秒走分区索引，代价可忽略
+  interval: 500ms
   batch_size: 100
   max_retry: 5
   publish_timeout: 10s
 
 consumer:
+  handle_timeout: 30s # 单条消息处理超时（防挂死阻塞消息循环），超时 Nak 重投
   media:
     name: "media_consumer"
     max_retry: 5
     working_dir: "./tmp/media_work"
   post:
     name: "post_consumer"
-    max_retry: 5
+    # 投递上限须覆盖媒体就绪时延：NakWithDelay 逐条退避 1s/2s/3s/5s…，8 次投递≈ 26s 窗口 > 媒体 UPLOADING→ACTIVE
+    # 实测 ~16s（发布后审计碰媒体在途）。窗口耗尽会回退 DRAFT（不会丢消息），但不应因窗口偏短误伤正常发布
+    max_retry: 8
     working_dir: "./tmp/post_work"
   discover:
     index:                 # 索引同步（Meili posts 索引）

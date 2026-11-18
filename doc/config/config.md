@@ -61,11 +61,15 @@ recommend:   # 推荐流（seen 去重/打散/探索位）
 ### s3 — 对象存储
 | 键 | 类型 | 说明 |
 | --- | --- | --- |
-| `endpoint` | string | MinIO/S3 端点，如 `host:9000` |
+| `endpoint` | string | MinIO/S3 端点，如 `host:9000`；服务端 Upload/Download/Delete 直连它（内网） |
 | `access_key` / `secret_key` | string | 凭据 |
 | `region` | string | 区域 |
-| `use_ssl` | bool | 是否启用 TLS |
+| `use_ssl` | bool | 是否启用 TLS（内网 endpoint） |
 | `bucket` | string | 默认存储桶（不存在时自动创建） |
+| `public_endpoint` | string | **仅预签名 URL** 的对外域名（如 `media.picverse.site`）；留空=回落 `endpoint` |
+| `public_use_ssl` | bool | 对外域名协议（CDN/隧道通常 `true`）；仅在配了 `public_endpoint` 时生效 |
+
+> `public_endpoint` 必须由签名方参与计算：SigV4 的 canonical host 绑定域名，事后替换已签名 URL 的 host 会 `SignatureDoesNotMatch`。前置反代/CDN/隧道须保留原始 `Host` 头转发到 MinIO。详见 [oss.md](../packages/oss/oss.md#签名域名public_endpoint)。
 
 ### jwt — JWT 签发
 | 键 | 类型 | 说明 |
@@ -103,7 +107,7 @@ recommend:   # 推荐流（seen 去重/打散/探索位）
 | 键 | 类型 | 说明 |
 | --- | --- | --- |
 | `workers` | int | worker 数量 |
-| `interval` | duration | 轮询间隔 |
+| `interval` | duration | 轮询间隔（事务 outbox → 消息投递的时延上界 = 本值；媒体上传等短链路按跳数累计，默认 500ms） |
 | `batch_size` | int | 每批拉取条数 |
 | `max_retry` | int | 最大重试次数 |
 | `publish_timeout` | duration | 单批发布超时 |
@@ -114,7 +118,7 @@ recommend:   # 推荐流（seen 去重/打散/探索位）
 | `consumer.media.name` | string | JetStream durable consumer 名称 |
 | `consumer.media.max_retry` | int | 消息最大投递次数（MaxDeliver） |
 | `consumer.media.working_dir` | string | 图片处理工作目录（不存在时自动创建） |
-| `consumer.post.name` / `max_retry` / `working_dir` | — | post 消费者（同构） |
+| `consumer.post.name` / `max_retry` / `working_dir` | — | post 消费者（同构）。`max_retry` 默认 **8**：投递窗口（`BackOff` 1/2/3/5s 循环 × 8 ≈ 26s）须覆盖媒体 `UPLOADING→ACTIVE` 实测 ~16s 的就绪时延，否则正常发布会因窗口偏短被误判回退 |
 | `consumer.discover.name` / `max_retry` | — | 搜推消费者（索引同步/扇出，跑在 cmd/discover 进程内，无工作目录） |
 
 > `config.yaml` 中 `consumer.media.worker_pool_size` 与当前结构体无对应字段，属预留/失效项。
@@ -134,6 +138,10 @@ recommend:   # 推荐流（seen 去重/打散/探索位）
 | `null_ttl` | duration | 空哨兵 TTL（防穿透），`0` 使用默认（60s） |
 | `timeline_ttl` | duration | 作者发件箱缓存 key TTL（pull 现拉加速层，`AuthorTimelineCache`），`0` 使用默认（720h = 30 天，与 `fanout.retention` 对齐：零漏前提，改须同步） |
 | `timeline_capacity` | int | 发件箱缓存条数保险丝（防事故刷帖撑爆内存），`0` 使用默认（5000）；窗口语义 = `fanout.retention` 时间截尾（承诺窗口内全量，短取即见底免回源），正常流量永不触发 |
+| `flight_workers` | int | 回源合并并发批上限 K（BatchFlight：1 退回串行波，调大消队头阻塞、吞吐天花板 ×K，代价合并率下降），`0` 使用默认（4） |
+| `flight_batch_size` | int | 回源合并单批 key 上限（积压自动切分多批，防大包），`0` 使用默认（500） |
+| `flight_timeout` | duration | 回源合并单批 fetch 超时（防挂死毒化底线），`0` 使用默认（5s） |
+| `stat_ttl` | duration | 统计列缓存 TTL（短 TTL 读缓存，写路径不失效，陈旧 ≤ TTL），`0` 使用默认（1m）；**负值禁用统计列缓存（直通轻查，回退开关）** |
 
 ### bigv — 发帖侧分流判定
 

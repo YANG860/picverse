@@ -23,6 +23,15 @@ type Config struct {
 	Hot       HotConfig       `mapstructure:"hot"`
 	Recommend RecommendConfig `mapstructure:"recommend"`
 	Services  ServicesConfig  `mapstructure:"services"`
+	RPC       RPCConfig       `mapstructure:"rpc"`
+}
+
+// RPCConfig 下游 RPC 调用治理配置（packages/rpc）
+type RPCConfig struct {
+	// Timeout 单次调用超时（客户端拦截器统一注入，只收紧不放宽），0 使用默认 3s
+	Timeout time.Duration `mapstructure:"timeout"`
+	// MaxInflight 每下游服务在途请求并发上限（舱壁限流，满舱快速失败），0 使用默认 256
+	MaxInflight int64 `mapstructure:"max_inflight"`
 }
 
 // ServicesConfig 下游服务地址（packages/discovery 静态实现的地址源）。
@@ -51,6 +60,16 @@ type CacheConfig struct {
 	// TimelineCapacity 发件箱缓存条数保险丝（防事故刷帖撑爆内存）；
 	// 窗口语义 = fanout.retention 时间截尾（承诺窗口内全量，短取即见底免回源），正常永不触发，0 使用默认 5000
 	TimelineCapacity int `mapstructure:"timeline_capacity"`
+	// FlightWorkers 回源合并并发批上限 K（BatchFlight：1 退回串行波，调大消队头阻塞、
+	// 吞吐天花板 ×K，代价合并率下降），0 使用默认 4
+	FlightWorkers int `mapstructure:"flight_workers"`
+	// FlightBatchSize 回源合并单批 key 上限（积压自动切分多批，防大包），0 使用默认 500
+	FlightBatchSize int `mapstructure:"flight_batch_size"`
+	// FlightTimeout 回源合并单批 fetch 超时（防挂死毒化底线），0 使用默认 5s
+	FlightTimeout time.Duration `mapstructure:"flight_timeout"`
+	// StatTTL 统计列缓存 TTL（短 TTL 读缓存：写路径不失效，陈旧 ≤ TTL；写入附加 ±10% 抖动），
+	// 0 使用默认 1m；负值禁用统计列缓存（直通轻查，回退开关）
+	StatTTL time.Duration `mapstructure:"stat_ttl"`
 }
 
 // PostConfig 帖子服务运行参数
@@ -169,7 +188,19 @@ type ServerConfig struct {
 	Discover string `mapstructure:"discover"`
 	// Reflection 调试开关：true 时 bff 挂载 gRPC 服务端反射（grpcurl/buf curl 免 schema 直查）。
 	// 反射暴露服务/消息元数据，生产面客端口应关闭
-	Reflection bool `mapstructure:"reflection"`
+	Reflection bool            `mapstructure:"reflection"`
+	RateLimit  RateLimitConfig `mapstructure:"rate_limit"`
+}
+
+// RateLimitConfig 入口限流（token bucket 两级：全局 + per-IP）。
+// 仅 bff 消费（面客唯一入口，见 packages/ratelimit）；0 = 关闭该项（安全默认：不配不上限流）
+type RateLimitConfig struct {
+	// QPS 全局每秒请求数，Burst 全局突发桶容量
+	QPS   float64 `mapstructure:"qps"`
+	Burst int     `mapstructure:"burst"`
+	// IPQPS 每 IP 每秒请求数（防单客户端刷量），IPBurst 每 IP 突发桶容量
+	IPQPS   float64 `mapstructure:"ip_qps"`
+	IPBurst int     `mapstructure:"ip_burst"`
 }
 
 // S3Config S3/Minio 对象存储配置
@@ -180,6 +211,17 @@ type S3Config struct {
 	Region    string `mapstructure:"region"`
 	UseSSL    bool   `mapstructure:"use_ssl"`
 	Bucket    string `mapstructure:"bucket"`
+
+	// PublicEndpoint 对外访问域名（CDN / 反代 / Cloudflare Tunnel，如 media.picverse.site），
+	// **只用于生成预签名 URL**，服务端自身的 Upload/Download/Delete 仍走 Endpoint（内网直连）。
+	//
+	// 为什么必须单独一个 client：SigV4 的 canonical request 里含 Host，签名与域名强绑定，
+	// 事后替换 URL 的 host 会让签名失效；只能让签名方以对外域名作为 endpoint 重新签名。
+	// 留空则回落到 Endpoint（本地开发 / 测试无公网域名时行为不变）。
+	PublicEndpoint string `mapstructure:"public_endpoint"`
+	// PublicUseSSL 对外域名的协议（CDN/隧道基本都要求 https）；与 UseSSL 独立，
+	// 因为内网直连常是 http://ip:9000 而对外是 https://域名。
+	PublicUseSSL bool `mapstructure:"public_use_ssl"`
 }
 
 type LoggerConfig struct {
@@ -224,6 +266,8 @@ type ConsumerConfig struct {
 	Media    MediaConsumerConfig    `mapstructure:"media"`
 	Post     PostConsumerConfig     `mapstructure:"post"`
 	Discover DiscoverConsumerConfig `mapstructure:"discover"`
+	// HandleTimeout 单条消息处理超时（防挂死阻塞消息循环，超时 Nak 重投），0 使用默认 30s
+	HandleTimeout time.Duration `mapstructure:"handle_timeout"`
 }
 
 type MediaConsumerConfig struct {
