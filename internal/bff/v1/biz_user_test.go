@@ -566,6 +566,17 @@ func TestBFFGetFollowingList(t *testing.T) {
 	assert.Equal(t, "bob", resp.UserBriefs[0].GetName())
 	assert.Equal(t, "next", resp.Cursor.GetStr())
 
+	t.Run("查他人：显式 target uid 透传目标用户（支持查别人）", func(t *testing.T) {
+		other := &fakeUserClient{}
+		u := newBFFForTest(other, &fakeMediaClient{})
+
+		r, err := u.GetFollowingList(ctxWithUID("u1"), &bffv1.GetFollowingListRequest{Uid: "u9"})
+		require.NoError(t, err)
+		require.False(t, r.Fail)
+		require.NotNil(t, other.gotFollowings)
+		assert.Equal(t, "u9", other.gotFollowings.GetUid(), "需求变更：显式 target 优先于会话用户")
+	})
+
 	t.Run("空页：列表为空不报错（翻页到底以空列表表达）", func(t *testing.T) {
 		empty := &fakeUserClient{followingsResp: &userv1.GetFollowingsResponse{}}
 		u := newBFFForTest(empty, &fakeMediaClient{})
@@ -607,6 +618,17 @@ func TestBFFGetFollowerList(t *testing.T) {
 	require.Len(t, resp.UserBriefs, 1)
 	assert.Equal(t, "fan", resp.UserBriefs[0].GetName())
 	assert.Equal(t, "fnext", resp.Cursor.GetStr())
+
+	t.Run("查他人：显式 target uid 透传目标用户（支持查别人）", func(t *testing.T) {
+		other := &fakeUserClient{}
+		u := newBFFForTest(other, &fakeMediaClient{})
+
+		r, err := u.GetFollowerList(ctxWithUID("u1"), &bffv1.GetFollowerListRequest{Uid: "u9"})
+		require.NoError(t, err)
+		require.False(t, r.Fail)
+		require.NotNil(t, other.gotFollowers)
+		assert.Equal(t, "u9", other.gotFollowers.GetUid(), "需求变更：显式 target 优先于会话用户")
+	})
 }
 
 // TestBFFUpdateMyProfile 个人资料更新：uid/字段注入下游 + Profile 全字段回显（G9 补缺）

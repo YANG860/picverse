@@ -429,10 +429,6 @@ func (u *BFFUsecaseImpl) GetUserPosts(ctx context.Context, req *bffv1.GetUserPos
 	}
 	target := req.GetUid()
 
-	// TODO: 传自己时候返回他人看自己的主页（所有公开作品）
-	if target == uid {
-		return &bffv1.GetUserPostsResponse{}, nil
-	}
 
 	resp, err := u.Repo.Post.ViewPostByAuthor(ctx, connect.NewRequest(&postv1.ViewPostByAuthorRequest{ViewerId: uid, AuthorId: target, Cursor: req.GetCursor()}))
 	if err != nil {

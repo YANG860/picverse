@@ -77,9 +77,11 @@ message UnfollowResponse {
   common.v1.Error err = 2;
 }
 
-// GetFollowingListRequest 我的关注列表（游标分页）。
+// GetFollowingListRequest 关注列表（游标分页）：uid 缺省查会话用户自己，指定则查目标用户（查他人同路径）。
 message GetFollowingListRequest {
   common.v1.Cursor cursor = 1;
+  // 目标用户 uid（雪花字符串）：空 = 会话用户自己；非空 = 查目标用户（旧客户端不传即查自己，兼容）
+  string uid = 2;
 }
 
 message GetFollowingListResponse {
@@ -90,9 +92,11 @@ message GetFollowingListResponse {
   common.v1.Cursor cursor = 4;
 }
 
-// GetFollowerListRequest 我的粉丝列表（游标分页）。
+// GetFollowerListRequest 粉丝列表（游标分页，与 GetFollowingList 对称）：uid 缺省查会话用户自己，指定则查目标用户。
 message GetFollowerListRequest {
   common.v1.Cursor cursor = 1;
+  // 目标用户 uid（雪花字符串）：空 = 会话用户自己；非空 = 查目标用户（旧客户端不传即查自己，兼容）
+  string uid = 2;
 }
 
 message GetFollowerListResponse {

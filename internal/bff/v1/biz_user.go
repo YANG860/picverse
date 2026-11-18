@@ -279,16 +279,20 @@ func (u *BFFUsecaseImpl) Unfollow(ctx context.Context, req *bffv1.UnfollowReques
 	return &bffv1.UnfollowResponse{}, nil
 }
 
-// GetFollowingList 我的关注列表：游标透传下游。
+// GetFollowingList 关注列表：target uid 缺省为会话用户自己，指定则查他人（同路径），游标透传下游。
 func (u *BFFUsecaseImpl) GetFollowingList(ctx context.Context, req *bffv1.GetFollowingListRequest) (*bffv1.GetFollowingListResponse, error) {
 	uid, errCode := u.sessionUID(ctx)
 	if errCode != nil {
 		return &bffv1.GetFollowingListResponse{Fail: true, Err: errCode}, nil
 	}
+	target := req.GetUid()
+	if target == "" {
+		target = uid
+	}
 
-	resp, err := u.Repo.User.GetFollowings(ctx, connect.NewRequest(&userv1.GetFollowingsRequest{Uid: uid, Cursor: req.GetCursor()}))
+	resp, err := u.Repo.User.GetFollowings(ctx, connect.NewRequest(&userv1.GetFollowingsRequest{Uid: target, Cursor: req.GetCursor()}))
 	if err != nil {
-		u.log.Error("user.GetFollowings failed", "uid", uid, "error", err)
+		u.log.Error("user.GetFollowings failed", "uid", uid, "target", target, "error", err)
 		return &bffv1.GetFollowingListResponse{Fail: true, Err: errmsg.InternalError}, nil
 	}
 	if resp.Msg.Fail {
@@ -302,16 +306,20 @@ func (u *BFFUsecaseImpl) GetFollowingList(ctx context.Context, req *bffv1.GetFol
 	return &bffv1.GetFollowingListResponse{UserBriefs: briefs, Cursor: resp.Msg.GetCursor()}, nil
 }
 
-// GetFollowerList 我的粉丝列表：游标透传下游（与 GetFollowingList 同构）。
+// GetFollowerList 粉丝列表：target uid 缺省为会话用户自己，指定则查他人（与 GetFollowingList 同构）。
 func (u *BFFUsecaseImpl) GetFollowerList(ctx context.Context, req *bffv1.GetFollowerListRequest) (*bffv1.GetFollowerListResponse, error) {
 	uid, errCode := u.sessionUID(ctx)
 	if errCode != nil {
 		return &bffv1.GetFollowerListResponse{Fail: true, Err: errCode}, nil
 	}
+	target := req.GetUid()
+	if target == "" {
+		target = uid
+	}
 
-	resp, err := u.Repo.User.GetFollowers(ctx, connect.NewRequest(&userv1.GetFollowersRequest{Uid: uid, Cursor: req.GetCursor()}))
+	resp, err := u.Repo.User.GetFollowers(ctx, connect.NewRequest(&userv1.GetFollowersRequest{Uid: target, Cursor: req.GetCursor()}))
 	if err != nil {
-		u.log.Error("user.GetFollowers failed", "uid", uid, "error", err)
+		u.log.Error("user.GetFollowers failed", "uid", uid, "target", target, "error", err)
 		return &bffv1.GetFollowerListResponse{Fail: true, Err: errmsg.InternalError}, nil
 	}
 	if resp.Msg.Fail {

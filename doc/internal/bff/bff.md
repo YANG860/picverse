@@ -25,8 +25,8 @@
 | 用户 | UpdateMyProfile | user.UpdateUserProfile | 部分更新透传 |
 | 用户 | UpdateMyAvatar | user.UpdateUserAvatar + media.ModifyMediaAssetRefCount | 旧资产 ID 在 BFF 消化：新资产同步 +1、旧资产经 MQ 异步 -1 |
 | 用户 | Follow / Unfollow | user.SetFollow / SetUnFollow | uid 来自会话 |
-| 用户 | GetFollowingList | user.GetFollowings | 透传游标 |
-| 用户 | GetFollowerList | user.GetFollowers | 透传游标（与 GetFollowingList 同构）|
+| 用户 | GetFollowingList | user.GetFollowings | 透传游标；uid 缺省查自己，指定查他人 |
+| 用户 | GetFollowerList | user.GetFollowers | 透传游标（与 GetFollowingList 同构）；uid 缺省查自己，指定查他人 |
 | 用户 | GetFollowRelation | user.GetFollowingRelation | uid 来自会话 |
 | 媒体 | UploadMedia | media.UploadMedia | uploader 即会话用户（会话解析后注入）；客户端持签名 URL 直传对象存储 |
 | 媒体 | GetMediaAssetStatus | media.GetMediaAssets | 批量查资产状态（逐项 fail），供前端上传后轮询 UPLOADING→ACTIVE；纯读不改计数 |
@@ -59,6 +59,17 @@ BFF 由于面向前端，**不返回连接层 error**：下游连接层错误（
 - **下游业务错误**（`fail` + 可枚举 `err`）：原样透传，客户端按错误码分支处理；
 - **会话缺失**：`Unauthorized`；**参数/状态校验**：对应可枚举码（`InvalidID` / `InvalidMedia` / `Forbidden` 等）；
 - 单接口特例：`Logout` 也遵循本约定（早期版本上抛原始 gRPC 错误，已统一）。
+
+### 入口限流（token bucket 两级）
+
+面客唯一入口的请求速率治理（`packages/ratelimit`，config `server.rate_limit`，0 = 关闭）：
+
+- **两级 token bucket**：全局（`qps`/`burst`，护系统容量）+ per-IP（`ip_qps`/`ip_burst`，防单客户端刷量），
+  先全局后 per-IP，任一层拒绝即拒绝；per-IP 条目惰性创建与空闲回收（防 map 无界增长）；
+- **判定位置**：handler 薄壳统一前置（`service.go` `admit`，全部方法覆盖）——溢出**不进业务层**；
+- **溢出语义**：`fail + InternalError`（面客不区分内部状态，限流不引入独立面客码）——
+  不产生连接层 error（BFF 例外规则）；日志 Warn（防択性拒绝，非故障）；
+- 与调用端舱壁（`packages/rpc/bulkhead.go`，防被慢下游拖死）正交互补：本节防被快调用方打垮。
 
 ### 媒体视图渲染（MediaView，存储坐标不面客）
 

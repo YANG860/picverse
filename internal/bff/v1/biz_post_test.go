@@ -737,17 +737,6 @@ func TestBFFGetUserPosts(t *testing.T) {
 	assert.Equal(t, "c9", c.GetCover().GetAssetId())
 	require.NotEmpty(t, media.gotSignTTLs)
 	assert.Equal(t, int64(7*24*3600), media.gotSignTTLs[0], "已发布封面公开 TTL")
-
-	t.Run("target 为会话用户：暂返空列表（TODO 他人视角主页语义待定稿）", func(t *testing.T) {
-		p := &fakePostClient{}
-		u := newBFFForPostTest(&fakeUserClient{}, &fakeMediaClient{}, p)
-
-		resp, err := u.GetUserPosts(ctxWithUID("u1"), &bffv1.GetUserPostsRequest{Uid: "u1"})
-		require.NoError(t, err)
-		require.False(t, resp.Fail)
-		assert.Empty(t, resp.GetPosts())
-		assert.Empty(t, p.gotByAuthor, "不调下游")
-	})
 }
 
 // ==================== 互动（点赞/收藏） ====================
