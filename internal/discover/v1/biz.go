@@ -99,8 +99,8 @@ func (u *DiscoverUsecaseImpl) GetFollowingFeed(ctx context.Context, req *discove
 	// 路 A 收件箱（普通作者供给：写侧扇出的全量，DB 即源）
 	inbox, err := u.Fanout.ReadInbox(ctx, uid, cursorTS, cursorID, int(limit))
 	if err != nil {
-		u.log.Error("following feed: read inbox failed", "uid", uid, "error", err)
-		return &discoverv1.GetFollowingFeedResponse{Fail: true, Err: errmsg.InternalError}, nil
+		// 底层故障（DB）走连接层 error，不进业务 fail/err（契约见 doc/proto/proto.md）
+		return nil, fmt.Errorf("following feed: read inbox failed (uid %d): %w", uid, err)
 	}
 
 	// 路 B pull（大V供给：缓存存在性分流；短取 = 承诺窗口内见底，免回源）。
@@ -113,8 +113,8 @@ func (u *DiscoverUsecaseImpl) GetFollowingFeed(ctx context.Context, req *discove
 		}
 		entries, miss, err := u.Timeline.Window(ctx, aid, cursorTS, cursorID, int(limit))
 		if err != nil {
-			u.log.Error("following feed: timeline window failed", "uid", uid, "author_id", aid, "error", err)
-			return &discoverv1.GetFollowingFeedResponse{Fail: true, Err: errmsg.InternalError}, nil
+			// 底层故障（Redis）走连接层 error，不进业务 fail/err
+			return nil, fmt.Errorf("following feed: timeline window failed (uid %d, author %d): %w", uid, aid, err)
 		}
 		if miss {
 			// 普通作者/超窗不活跃作者：帖子由收件箱路供给（或不在承诺窗口），非 pull 对象
@@ -176,8 +176,8 @@ func (u *DiscoverUsecaseImpl) GetHotPosts(ctx context.Context, req *discoverv1.G
 	offset, limit := int(offset64), int(limit64)
 	ms, err := u.HotPool.TopN(ctx, offset, limit)
 	if err != nil {
-		u.log.Error("hot posts failed", "error", err)
-		return &discoverv1.GetHotPostsResponse{Fail: true, Err: errmsg.InternalError}, nil
+		// 底层故障（Redis）走连接层 error，不进业务 fail/err（契约见 doc/proto/proto.md）
+		return nil, fmt.Errorf("hot posts: hot pool topn failed: %w", err)
 	}
 
 	ids := make([]string, 0, len(ms))
@@ -211,8 +211,8 @@ func (u *DiscoverUsecaseImpl) GetRecommendFeed(ctx context.Context, req *discove
 	scanBatch := limit * u.recommendScanFactor
 	cands, err := u.HotPool.TopN(ctx, offset, scanBatch)
 	if err != nil {
-		u.log.Error("recommend candidates failed", "uid", uid, "error", err)
-		return &discoverv1.GetRecommendFeedResponse{Fail: true, Err: errmsg.InternalError}, nil
+		// 底层故障（Redis）走连接层 error，不进业务 fail/err（契约见 doc/proto/proto.md）
+		return nil, fmt.Errorf("recommend candidates failed (uid %d): %w", uid, err)
 	}
 	if len(cands) == 0 {
 		return &discoverv1.GetRecommendFeedResponse{}, nil // 到底（空页空游标）
@@ -225,8 +225,8 @@ func (u *DiscoverUsecaseImpl) GetRecommendFeed(ctx context.Context, req *discove
 	}
 	seen, err := u.Seen.Filter(ctx, uid, ids)
 	if err != nil {
-		u.log.Error("recommend seen filter failed", "uid", uid, "error", err)
-		return &discoverv1.GetRecommendFeedResponse{Fail: true, Err: errmsg.InternalError}, nil
+		// 底层故障（Redis）走连接层 error，不进业务 fail/err
+		return nil, fmt.Errorf("recommend seen filter failed (uid %d): %w", uid, err)
 	}
 
 	// 3. 探索位配额（页内混入，页大小稳定 = limit）；正文配额 = limit - exploreN
@@ -254,8 +254,8 @@ func (u *DiscoverUsecaseImpl) GetRecommendFeed(ctx context.Context, req *discove
 	scatterEntries(fresh, u.recommendScatterWindow)
 	explore, err := u.exploreEntries(ctx, uid, fresh, exploreN)
 	if err != nil {
-		u.log.Error("recommend explore failed", "uid", uid, "error", err)
-		return &discoverv1.GetRecommendFeedResponse{Fail: true, Err: errmsg.InternalError}, nil
+		// 底层故障（Redis）走连接层 error，不进业务 fail/err
+		return nil, fmt.Errorf("recommend explore failed (uid %d): %w", uid, err)
 	}
 
 	// 6. 产出 + 曝光记账（失败整体重试，不丢记账）
@@ -265,8 +265,8 @@ func (u *DiscoverUsecaseImpl) GetRecommendFeed(ctx context.Context, req *discove
 		outIDs[i] = e.PostID
 	}
 	if err := u.Seen.Mark(ctx, uid, outIDs); err != nil {
-		u.log.Error("recommend seen mark failed", "uid", uid, "error", err)
-		return &discoverv1.GetRecommendFeedResponse{Fail: true, Err: errmsg.InternalError}, nil
+		// 底层故障（Redis）走连接层 error，不进业务 fail/err
+		return nil, fmt.Errorf("recommend seen mark failed (uid %d): %w", uid, err)
 	}
 
 	resp := &discoverv1.GetRecommendFeedResponse{PostIds: make([]string, len(out))}
@@ -370,8 +370,8 @@ func (u *DiscoverUsecaseImpl) SearchPosts(ctx context.Context, req *discoverv1.S
 		result, err = u.Meili.SearchPosts(ctx, req.GetKeyword(), offset, limit)
 	}
 	if err != nil {
-		u.log.Error("meili search failed", "keyword", req.GetKeyword(), "offset", offset, "error", err)
-		return &discoverv1.SearchPostsResponse{Fail: true, Err: errmsg.InternalError}, nil
+		// 底层故障（Meili）走连接层 error，不进业务 fail/err（契约见 doc/proto/proto.md）
+		return nil, fmt.Errorf("meili search failed (keyword %q, offset %d): %w", req.GetKeyword(), offset, err)
 	}
 
 	hits := make([]*discoverv1.SearchHit, len(result.Hits))

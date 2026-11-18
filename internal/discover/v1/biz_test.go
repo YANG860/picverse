@@ -8,7 +8,6 @@ import (
 
 	commonv1 "rednote/gen/go/common/v1"
 	discoverv1 "rednote/gen/go/discover/v1"
-	"rednote/packages/errmsg"
 	"rednote/packages/meili"
 
 	"github.com/stretchr/testify/assert"
@@ -136,13 +135,15 @@ func TestSearchPosts_Cursor(t *testing.T) {
 	})
 }
 
-// TestSearchPosts_MeiliError 检索失败 → fail + InternalError（不外泄连接层错误）
+// TestSearchPosts_MeiliError 检索底层故障（Meili 不可用）→ 裸 error 上抛走连接层，
+// 不混入业务 fail/err 响应体（契约见 doc/proto/proto.md）
 func TestSearchPosts_MeiliError(t *testing.T) {
 	m := &fakeMeili{err: errors.New("meili down")}
 	u := newTestUsecase(m)
 
 	resp, err := u.SearchPosts(context.Background(), &discoverv1.SearchPostsRequest{Keyword: "kw"})
-	require.NoError(t, err)
-	assert.True(t, resp.Fail)
-	assert.Equal(t, errmsg.InternalError.Code, resp.GetErr().GetCode())
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	assert.ErrorContains(t, err, "meili search failed")
+	assert.ErrorContains(t, err, "meili down")
 }

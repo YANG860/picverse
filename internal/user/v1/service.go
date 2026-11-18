@@ -7,6 +7,7 @@ import (
 	userv1 "rednote/gen/go/user/v1"
 	"rednote/gen/go/user/v1/userv1connect"
 	"rednote/packages/logger"
+	"rednote/packages/rpc"
 
 	"connectrpc.com/connect"
 	"gorm.io/gorm"
@@ -34,69 +35,111 @@ func NewUserServiceHandler(db *gorm.DB, lf logger.LoggerFactory, useCase UserUse
 
 // --- ConnectRPC 方法实现 ---
 
+// mapErr biz 层错误映射为连接层错误（委托 rpc.MapServerError：连接层错误原样透传、
+// 底层依赖故障 → Unavailable，错误契约见 doc/proto/proto.md）
+func mapErr(err error) error {
+	return rpc.MapServerError(err)
+}
+
 // CreateUser 创建用户资料
 func (s *UserServiceHandler) CreateUser(ctx context.Context, req *connect.Request[userv1.CreateUserRequest]) (*connect.Response[userv1.CreateUserResponse], error) {
 	resp, err := s.Biz.CreateUser(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // UpdateUserProfile 更新用户资料
 func (s *UserServiceHandler) UpdateUserProfile(ctx context.Context, req *connect.Request[userv1.UpdateUserProfileRequest]) (*connect.Response[userv1.UpdateUserProfileResponse], error) {
 	resp, err := s.Biz.UpdateUserProfile(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // UpdateUserAvatar 更新用户头像
 func (s *UserServiceHandler) UpdateUserAvatar(ctx context.Context, req *connect.Request[userv1.UpdateUserAvatarRequest]) (*connect.Response[userv1.UpdateUserAvatarResponse], error) {
 	resp, err := s.Biz.UpdateUserAvatar(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // GetUserBrief 获取用户简要信息
 func (s *UserServiceHandler) GetUserBrief(ctx context.Context, req *connect.Request[userv1.GetUserBriefRequest]) (*connect.Response[userv1.GetUserBriefResponse], error) {
 	resp, err := s.Biz.GetUserBrief(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // GetUserProfile 获取用户资料
 func (s *UserServiceHandler) GetUserProfile(ctx context.Context, req *connect.Request[userv1.GetUserProfileRequest]) (*connect.Response[userv1.GetUserProfileResponse], error) {
 	resp, err := s.Biz.GetUserProfile(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // GetUserStatus 获取用户状态
 func (s *UserServiceHandler) GetUserStatus(ctx context.Context, req *connect.Request[userv1.GetUserStatusRequest]) (*connect.Response[userv1.GetUserStatusResponse], error) {
 	resp, err := s.Biz.GetUserStatus(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 func (s *UserServiceHandler) GetFollowings(ctx context.Context, req *connect.Request[userv1.GetFollowingsRequest]) (*connect.Response[userv1.GetFollowingsResponse], error) {
 	resp, err := s.Biz.GetFollowings(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // GetFollowers 获取粉丝列表
 func (s *UserServiceHandler) GetFollowers(ctx context.Context, req *connect.Request[userv1.GetFollowersRequest]) (*connect.Response[userv1.GetFollowersResponse], error) {
 	resp, err := s.Biz.GetFollowers(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 func (s *UserServiceHandler) GetFollowingRelation(ctx context.Context, req *connect.Request[userv1.GetFollowingRelationRequest]) (*connect.Response[userv1.GetFollowingRelationResponse], error) {
 	resp, err := s.Biz.GetFollowingRelation(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 func (s *UserServiceHandler) BanUser(ctx context.Context, req *connect.Request[userv1.BanUserRequest]) (*connect.Response[userv1.BanUserResponse], error) {
 	resp, err := s.Biz.BanUser(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 func (s *UserServiceHandler) SetFollow(ctx context.Context, req *connect.Request[userv1.SetFollowRequest]) (*connect.Response[userv1.SetFollowResponse], error) {
 	resp, err := s.Biz.SetFollow(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 func (s *UserServiceHandler) SetUnFollow(ctx context.Context, req *connect.Request[userv1.SetUnFollowRequest]) (*connect.Response[userv1.SetUnFollowResponse], error) {
 	resp, err := s.Biz.SetUnFollow(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }

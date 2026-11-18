@@ -4,6 +4,8 @@
 package gen
 
 import (
+	"time"
+
 	"rednote/config"
 	"rednote/gen/go/bff/v1/bffv1connect"
 	"rednote/gen/go/media/v1/mediav1connect"
@@ -29,6 +31,7 @@ import (
 	"rednote/packages/meili"
 	"rednote/packages/mq"
 	"rednote/packages/oss"
+	"rednote/packages/ratelimit"
 	"rednote/packages/rpc"
 
 	"github.com/google/wire"
@@ -114,11 +117,23 @@ var Utils = wire.NewSet(
 	jwt.NewServerInterceptor,
 )
 
+// rpcTimeout 提取下游 RPC 单次调用超时配置（0 由 client 层用默认值兜底）
+func rpcTimeout(cfg *config.Config) time.Duration {
+	return cfg.RPC.Timeout
+}
+
+// rpcMaxInflight 提取下游在途请求并发上限配置（0 由 client 层用默认值兜底）
+func rpcMaxInflight(cfg *config.Config) int64 {
+	return cfg.RPC.MaxInflight
+}
+
 // Clients 下游服务客户端：服务发现（静态实现）+ 统一拦截器的 connect 客户端
 var Clients = wire.NewSet(
 	rpc.NewStaticProvider,
 	wire.Bind(new(rpc.EndpointProvider), new(*rpc.StaticProvider)),
 
+	rpcTimeout,
+	rpcMaxInflight,
 	rpc.NewAuthClient,
 	rpc.NewUserClient,
 	rpc.NewMediaClient,
@@ -133,6 +148,7 @@ var BFF = wire.NewSet(
 	bffv1.NewBFFUsecase,
 	wire.Bind(new(bffv1.BFFUsecase), new(*bffv1.BFFUsecaseImpl)),
 
+	ratelimit.FromConfig,
 	bffv1.NewBFFServiceHandler,
 	wire.Bind(new(bffv1connect.BFFServiceHandler), new(*bffv1.BFFServiceHandler)),
 )

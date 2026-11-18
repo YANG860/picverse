@@ -2,11 +2,13 @@ package v1
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	postv1 "rednote/gen/go/post/v1"
 	"rednote/gen/go/post/v1/postv1connect"
 	"rednote/packages/logger"
+	"rednote/packages/rpc"
 
 	"connectrpc.com/connect"
 	"gorm.io/gorm"
@@ -34,131 +36,209 @@ func NewPostServiceHandler(db *gorm.DB, lf logger.LoggerFactory, useCase PostUse
 
 // --- ConnectRPC 方法实现 ---
 
+// mapErr 占位错误映射为连接层 Unimplemented，其余委托 rpc.MapServerError 统一映射
+// （连接层错误原样透传、底层依赖故障 → Unavailable，错误契约见 doc/proto/proto.md）
+func mapErr(err error) error {
+	if errors.Is(err, ErrNotImplemented) {
+		return connect.NewError(connect.CodeUnimplemented, err)
+	}
+	return rpc.MapServerError(err)
+}
+
 // CreateDraft 创建草稿
 func (s *PostServiceHandler) CreateDraft(ctx context.Context, req *connect.Request[postv1.CreateDraftRequest]) (*connect.Response[postv1.CreateDraftResponse], error) {
 	resp, err := s.Biz.CreateDraft(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // UpdateDraft 更新草稿（文本字段部分更新）
 func (s *PostServiceHandler) UpdateDraft(ctx context.Context, req *connect.Request[postv1.UpdateDraftRequest]) (*connect.Response[postv1.UpdateDraftResponse], error) {
 	resp, err := s.Biz.UpdateDraft(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // UpdateDraftMedias 更新草稿媒体（全量替换，至少 1 张，不支持清空）
 func (s *PostServiceHandler) UpdateDraftMedias(ctx context.Context, req *connect.Request[postv1.UpdateDraftMediasRequest]) (*connect.Response[postv1.UpdateDraftMediasResponse], error) {
 	resp, err := s.Biz.UpdateDraftMedias(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // PublishDraft 发布草稿
 func (s *PostServiceHandler) PublishDraft(ctx context.Context, req *connect.Request[postv1.PublishDraftRequest]) (*connect.Response[postv1.PublishDraftResponse], error) {
 	resp, err := s.Biz.PublishDraft(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // GetPostsByIDs 按ID批量获取帖子
 func (s *PostServiceHandler) GetPostsByIDs(ctx context.Context, req *connect.Request[postv1.GetPostsByIDsRequest]) (*connect.Response[postv1.GetPostsByIDsResponse], error) {
 	resp, err := s.Biz.GetPostsByIDs(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // ViewPostByAuthor 按作者获取帖子列表
 func (s *PostServiceHandler) ViewPostByAuthor(ctx context.Context, req *connect.Request[postv1.ViewPostByAuthorRequest]) (*connect.Response[postv1.ViewPostByAuthorResponse], error) {
 	resp, err := s.Biz.ViewPostByAuthor(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // BanPost 封禁帖子
 func (s *PostServiceHandler) BanPost(ctx context.Context, req *connect.Request[postv1.BanPostRequest]) (*connect.Response[postv1.BanPostResponse], error) {
 	resp, err := s.Biz.BanPost(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // ViewPost 查看帖子
 func (s *PostServiceHandler) ViewPost(ctx context.Context, req *connect.Request[postv1.ViewPostRequest]) (*connect.Response[postv1.ViewPostResponse], error) {
 	resp, err := s.Biz.ViewPost(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // ViewPostsByIDs 批量查看帖子（面客组装口径，仅 PUBLISHED）
 func (s *PostServiceHandler) ViewPostsByIDs(ctx context.Context, req *connect.Request[postv1.ViewPostsByIDsRequest]) (*connect.Response[postv1.ViewPostsByIDsResponse], error) {
 	resp, err := s.Biz.ViewPostsByIDs(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 func (s *PostServiceHandler) GetPostStatus(ctx context.Context, req *connect.Request[postv1.GetPostStatusRequest]) (*connect.Response[postv1.GetPostStatusResponse], error) {
 	resp, err := s.Biz.GetPostStatus(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 func (s *PostServiceHandler) DeletePost(ctx context.Context, req *connect.Request[postv1.DeletePostRequest]) (*connect.Response[postv1.DeletePostResponse], error) {
 	resp, err := s.Biz.DeletePost(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // SyncPostStat 同步帖子统计信息（内部管理，异步链路调用；逐字段部分更新，nil 不修改）
 func (s *PostServiceHandler) SyncPostStat(ctx context.Context, req *connect.Request[postv1.SyncPostStatRequest]) (*connect.Response[postv1.SyncPostStatResponse], error) {
 	resp, err := s.Biz.SyncPostStat(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // ==================== 互动（点赞/收藏） ====================
 
 func (s *PostServiceHandler) LikePost(ctx context.Context, req *connect.Request[postv1.LikePostRequest]) (*connect.Response[postv1.LikePostResponse], error) {
 	resp, err := s.Biz.LikePost(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 func (s *PostServiceHandler) UnlikePost(ctx context.Context, req *connect.Request[postv1.UnlikePostRequest]) (*connect.Response[postv1.UnlikePostResponse], error) {
 	resp, err := s.Biz.UnlikePost(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 func (s *PostServiceHandler) FavouritePost(ctx context.Context, req *connect.Request[postv1.FavouritePostRequest]) (*connect.Response[postv1.FavouritePostResponse], error) {
 	resp, err := s.Biz.FavouritePost(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 func (s *PostServiceHandler) UnfavouritePost(ctx context.Context, req *connect.Request[postv1.UnfavouritePostRequest]) (*connect.Response[postv1.UnfavouritePostResponse], error) {
 	resp, err := s.Biz.UnfavouritePost(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 func (s *PostServiceHandler) ListLikedPostIDs(ctx context.Context, req *connect.Request[postv1.ListLikedPostIDsRequest]) (*connect.Response[postv1.ListLikedPostIDsResponse], error) {
 	resp, err := s.Biz.ListLikedPostIDs(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 func (s *PostServiceHandler) ListFavouritePostIDs(ctx context.Context, req *connect.Request[postv1.ListFavouritePostIDsRequest]) (*connect.Response[postv1.ListFavouritePostIDsResponse], error) {
 	resp, err := s.Biz.ListFavouritePostIDs(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // ==================== 评论 ====================
 
 func (s *PostServiceHandler) CreateComment(ctx context.Context, req *connect.Request[postv1.CreateCommentRequest]) (*connect.Response[postv1.CreateCommentResponse], error) {
 	resp, err := s.Biz.CreateComment(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 func (s *PostServiceHandler) ReplyComment(ctx context.Context, req *connect.Request[postv1.ReplyCommentRequest]) (*connect.Response[postv1.ReplyCommentResponse], error) {
 	resp, err := s.Biz.ReplyComment(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 func (s *PostServiceHandler) DeleteComment(ctx context.Context, req *connect.Request[postv1.DeleteCommentRequest]) (*connect.Response[postv1.DeleteCommentResponse], error) {
 	resp, err := s.Biz.DeleteComment(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 func (s *PostServiceHandler) ListComments(ctx context.Context, req *connect.Request[postv1.ListCommentsRequest]) (*connect.Response[postv1.ListCommentsResponse], error) {
 	resp, err := s.Biz.ListComments(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 func (s *PostServiceHandler) ListReplies(ctx context.Context, req *connect.Request[postv1.ListRepliesRequest]) (*connect.Response[postv1.ListRepliesResponse], error) {
 	resp, err := s.Biz.ListReplies(ctx, req.Msg)
-	return connect.NewResponse(resp), err
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return connect.NewResponse(resp), nil
 }

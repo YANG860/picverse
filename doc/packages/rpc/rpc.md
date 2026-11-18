@@ -1,8 +1,8 @@
 # rpc — 下游 connectrpc 客户端与服务发现传输层
 
-代码：`packages/rpc/`（`provider.go`、`transport.go`、`balancer.go`、`client.go`）。
+代码：`packages/rpc/`（`provider.go`、`transport.go`、`balancer.go`、`client.go`、`servererr.go`）。
 
-为 BFF 等下游调用方构造 connectrpc 客户端：统一挂**服务发现传输层**（发现 / 负载均衡 / 故障转移）与 **trace / jwt 拦截器**，wire 装配后注入各服务的 `DownstreamRepo` / consumer 等下游调用方。
+为 BFF 等下游调用方构造 connectrpc 客户端：统一挂**服务发现传输层**（发现 / 负载均衡 / 故障转移）与 **trace / jwt 拦截器**，wire 装配后注入各服务的 `DownstreamRepo` / consumer 等下游调用方；另提供**服务端错误出口映射** `MapServerError`（见文末）。
 
 ## ServiceName — 服务逻辑名
 
@@ -83,19 +83,63 @@
 
 | 函数 | 构造目标 | 占位 base URL |
 | --- | --- | --- |
-| `NewAuthClient(provider)` | `authv1connect.AuthServiceClient` | `http://auth` |
-| `NewUserClient(provider)` | `userv1connect.UserServiceClient` | `http://user` |
-| `NewMediaClient(provider)` | `mediav1connect.MediaServiceClient` | `http://media` |
-| `NewPostClient(provider)` | `postv1connect.PostServiceClient` | `http://post` |
-| `NewDiscoverClient(provider)` | `discoverv1connect.DiscoverServiceClient` | `http://discover` |
+| `NewAuthClient(provider, timeout, maxInflight)` | `authv1connect.AuthServiceClient` | `http://auth` |
+| `NewUserClient(provider, timeout, maxInflight)` | `userv1connect.UserServiceClient` | `http://user` |
+| `NewMediaClient(provider, timeout, maxInflight)` | `mediav1connect.MediaServiceClient` | `http://media` |
+| `NewPostClient(provider, timeout, maxInflight)` | `postv1connect.PostServiceClient` | `http://post` |
+| `NewDiscoverClient(provider, timeout, maxInflight)` | `discoverv1connect.DiscoverServiceClient` | `http://discover` |
 
-`clientOptions()` 下游调用统一拦截器：
+`clientOptions(timeout, maxInflight)` 下游调用统一拦截器：
+- **bulkhead**（[舱壁限流](#舱壁限流调用端)）：per-service 在途并发上限（`<=0` 用默认 256，满舱快速失败）；
+- **timeout**（[调用超时](#调用超时)）：单次调用超时（`<=0` 用默认 3s，只收紧不放宽）；
 - **trace**（[trace](../trace/trace.md)）：透传 `trace_id`，串联跨服务调用链；
 - **jwt**（[jwt](../jwt/jwt.md)）：把会话原始 token 以 `Authorization` 头透传给下游（RefreshTokens / Logout 等接口依赖下游从请求头自行解析会话）。
+
+## 舱壁限流（调用端）
+
+`bulkhead.go` `NewBulkheadInterceptor(maxInflight)`：per-service 在途请求并发上限（调用端限流）。
+防单一慢/故障下游的在途请求无限堆积（雪崩的资源侧根因）——堆积资源上界 = `maxInflight × 调用超时`。
+
+- **每客户端实例独立信号量** = per-service 一个配额（隔离舱语义：故障服务耗尽自己的额度，不拖累其他下游）；
+- **快速失败不排队**：满舱 → `CodeResourceExhausted`（请求不发出）——排队会把过载变慢失败（与超时堆积同病）；
+- `defer Release` 全路径归还额度（成功/失败/超时/panic）；`maxInflight <= 0` 不限制（调用方经 defaults 兜底）；
+- 一次 Acquire 覆盖整条尝试链（transport 拨号失败转移在内层，不重复计数）；
+- 溢出**不重试**（P2 保守策略："只对确认未处理的重试"）；consumer 侧溢出 → `classifyErr` → RETRY（吃 MaxDeliver 预算）。
+
+配置：`rpc.max_inflight`（0 用默认 `defaults.RPCMaxInflight = 256`）。
+
+位置说明：舱壁在**调用端**（发请求前拦，保护调用方资源）；与**服务端**入口限流（token bucket 全局/per-IP，
+保护服务容量）是两个问题——后者搁置至公网/多实例需求明确（见 `tmp/rpc_resilience_plan.md` P3）。
+
+## 调用超时
+
+`timeout.go` `NewTimeoutInterceptor(timeout)`：unary 调用统一注入 `context.WithTimeout`：
+
+- **只收紧不放宽**：调用方 ctx 已有更紧 deadline 时不叠加，尊重上游预算；
+- per-attempt 计时（为 P2 失败转移预留：每次尝试独立计时、共享调用方总 deadline）；
+- `timeout <= 0` 不注入（调用方应先经 `defaults.RPCDefaultTimeout` 兜底）；流式调用不注入（项目 RPC 均为 unary）。
+
+超时语义：客户端超时 → `CodeDeadlineExceeded`——consumer 侧 `classifyErr` 判 RETRY 重投；
+BFF 侧维持 `fail+InternalError` 兜底（面客不区分超时与内部错误，2026-11-15 拍板；不返连接层 error）。
+
+配置：`rpc.timeout`（0 用默认 `defaults.RPCDefaultTimeout = 3s`）；
+传输层兜底 `ResponseHeaderTimeout = defaults.RPCResponseHeaderTimeout = 10s`（防对端接收后不响应的黑洞绕过拦截器）。
 
 ## wire 装配
 
 `cmd/gen/wire.go` 的 `Clients` set：
 
 - `NewStaticProvider` → `wire.Bind` 到 `rpc.EndpointProvider`；
+- `rpcTimeout(cfg)` 提取 `cfg.RPC.Timeout`、`rpcMaxInflight(cfg)` 提取 `cfg.RPC.MaxInflight`（0 由 client 层用默认值兜底）；
 - `NewAuthClient` / `NewUserClient` / `NewMediaClient` / `NewPostClient` / `NewDiscoverClient` 构造五个下游客户端，注入 `v1.NewDownstreamRepo` 等下游调用方。
+
+## MapServerError — 服务端错误出口映射
+
+`MapServerError(err) error` 是各服务 handler 错误出口的统一映射（错误契约见 [proto](../../proto/proto.md)）：
+
+| 入参 | 映射结果 |
+| --- | --- |
+| 已是 `connect.Error` | 原样透传（biz 可显式指定精确码：`CodeInternal` 表达不变量问题、`CodeUnimplemented` 表达占位） |
+| 其余裸 error（DB/Redis/S3 等依赖故障） | `connect.CodeUnavailable`（瞬时故障语义，调用方按连接层码分类处理） |
+
+用法：各服务本地 `mapErr` 先处理服务专属哨兵错误（如 `ErrNotImplemented` → `CodeUnimplemented`），再委托本函数兜底；handler 统一 `if err != nil { return nil, mapErr(err) }`。业务裁决错误不走本函数（直接 `fail + errmsg` 业务码，永不混入连接层）。

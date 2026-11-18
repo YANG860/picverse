@@ -8,6 +8,7 @@ import (
 	discoverv1 "rednote/gen/go/discover/v1"
 	"rednote/gen/go/discover/v1/discoverv1connect"
 	"rednote/packages/logger"
+	"rednote/packages/rpc"
 
 	"connectrpc.com/connect"
 )
@@ -28,13 +29,13 @@ func NewDiscoverServiceHandler(lf logger.LoggerFactory, useCase DiscoverUsecase)
 	}
 }
 
-// mapErr 占位错误映射为连接层 Unimplemented（不可枚举走连接层 gRPC error，见 doc/proto/proto.md）；
-// 其余错误原样透传
+// mapErr 占位错误映射为连接层 Unimplemented，其余委托 rpc.MapServerError 统一映射
+// （连接层错误原样透传、底层依赖故障 → Unavailable，错误契约见 doc/proto/proto.md）
 func mapErr(err error) error {
 	if errors.Is(err, ErrNotImplemented) {
 		return connect.NewError(connect.CodeUnimplemented, err)
 	}
-	return err
+	return rpc.MapServerError(err)
 }
 
 // --- ConnectRPC 方法实现 ---

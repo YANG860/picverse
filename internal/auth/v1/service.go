@@ -7,6 +7,7 @@ import (
 	v1 "rednote/gen/go/auth/v1"
 	"rednote/gen/go/auth/v1/authv1connect"
 	"rednote/packages/logger"
+	"rednote/packages/rpc"
 
 	connect "connectrpc.com/connect"
 )
@@ -25,6 +26,12 @@ func NewAuthServiceHandler(biz AuthUsecase, lf logger.LoggerFactory) *AuthServic
 	}
 }
 
+// mapErr biz 层错误映射为连接层错误（委托 rpc.MapServerError：连接层错误原样透传、
+// 底层依赖故障 → Unavailable，错误契约见 doc/proto/proto.md）
+func mapErr(err error) error {
+	return rpc.MapServerError(err)
+}
+
 // Register 注册
 func (s *AuthServiceHandler) Register(
 	ctx context.Context,
@@ -32,7 +39,7 @@ func (s *AuthServiceHandler) Register(
 ) (*connect.Response[v1.RegisterResponse], error) {
 	resp, err := s.Biz.Register(ctx, req.Msg)
 	if err != nil {
-		return nil, err
+		return nil, mapErr(err)
 	}
 	return connect.NewResponse(resp), nil
 }
@@ -44,7 +51,7 @@ func (s *AuthServiceHandler) Login(
 ) (*connect.Response[v1.LoginResponse], error) {
 	resp, err := s.Biz.Login(ctx, req.Msg)
 	if err != nil {
-		return nil, err
+		return nil, mapErr(err)
 	}
 	return connect.NewResponse(resp), nil
 }
@@ -56,7 +63,7 @@ func (s *AuthServiceHandler) GetRefreshToken(
 ) (*connect.Response[v1.GetRefreshTokenResponse], error) {
 	resp, err := s.Biz.GetRefreshToken(ctx, req.Msg)
 	if err != nil {
-		return nil, err
+		return nil, mapErr(err)
 	}
 	return connect.NewResponse(resp), nil
 }
@@ -68,7 +75,7 @@ func (s *AuthServiceHandler) GetAccessToken(
 ) (*connect.Response[v1.GetAccessTokenResponse], error) {
 	resp, err := s.Biz.GetAccessToken(ctx, req.Msg)
 	if err != nil {
-		return nil, err
+		return nil, mapErr(err)
 	}
 	return connect.NewResponse(resp), nil
 }
@@ -79,7 +86,7 @@ func (s *AuthServiceHandler) Logout(
 ) (*connect.Response[v1.LogoutResponse], error) {
 	resp, err := s.Biz.Logout(ctx, req.Msg)
 	if err != nil {
-		return nil, err
+		return nil, mapErr(err)
 	}
 	return connect.NewResponse(resp), nil
 }
@@ -91,7 +98,7 @@ func (s *AuthServiceHandler) ChangePassword(
 ) (*connect.Response[v1.ChangePasswordResponse], error) {
 	resp, err := s.Biz.ChangePassword(ctx, req.Msg)
 	if err != nil {
-		return nil, err
+		return nil, mapErr(err)
 	}
 	return connect.NewResponse(resp), nil
 }
@@ -103,7 +110,7 @@ func (s *AuthServiceHandler) DeleteAccount(
 ) (*connect.Response[v1.DeleteAccountResponse], error) {
 	resp, err := s.Biz.DeleteAccount(ctx, req.Msg)
 	if err != nil {
-		return nil, err
+		return nil, mapErr(err)
 	}
 	return connect.NewResponse(resp), nil
 }

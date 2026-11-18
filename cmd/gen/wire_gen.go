@@ -31,7 +31,9 @@ import (
 	"rednote/packages/meili"
 	"rednote/packages/mq"
 	"rednote/packages/oss"
+	"rednote/packages/ratelimit"
 	"rednote/packages/rpc"
+	"time"
 )
 
 // Injectors from wire.go:
@@ -55,12 +57,14 @@ func InitializePostConsumer(cfg *config.Config) (*consumer.PostConsumer, func())
 	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
 	jetStreamClient, cleanup2 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
 	staticProvider := rpc.NewStaticProvider(cfg)
-	mediaServiceClient := rpc.NewMediaClient(staticProvider)
+	duration := rpcTimeout(cfg)
+	int64_2 := rpcMaxInflight(cfg)
+	mediaServiceClient := rpc.NewMediaClient(staticProvider, duration, int64_2)
 	gormDB, cleanup3 := db.NewPG(cfg, loggerFactoryImpl)
 	postRepoImpl := v1_3.NewPostRepo(gormDB)
 	cacheCache, cleanup4 := cache.NewCache(cfg, loggerFactoryImpl)
 	postEntityCacheImpl := cache.NewPostEntityCache(cacheCache, cfg, loggerFactoryImpl)
-	cachedPostRepo := v1_3.NewCachedPostRepo(postRepoImpl, postEntityCacheImpl, loggerFactoryImpl)
+	cachedPostRepo := v1_3.NewCachedPostRepo(postRepoImpl, postEntityCacheImpl, cfg, loggerFactoryImpl)
 	postConsumer := consumer.NewPostConsumer(jetStreamClient, loggerFactoryImpl, cfg, mediaServiceClient, cachedPostRepo)
 	return postConsumer, func() {
 		cleanup4()
@@ -107,7 +111,9 @@ func InitializeDiscoverIndexConsumer(cfg *config.Config) (*consumer.DiscoverInde
 	jetStreamClient, cleanup2 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
 	meiliClient, cleanup3 := meili.NewClient(cfg, loggerFactoryImpl)
 	staticProvider := rpc.NewStaticProvider(cfg)
-	postServiceClient := rpc.NewPostClient(staticProvider)
+	duration := rpcTimeout(cfg)
+	int64_2 := rpcMaxInflight(cfg)
+	postServiceClient := rpc.NewPostClient(staticProvider, duration, int64_2)
 	gormDB, cleanup4 := db.NewPG(cfg, loggerFactoryImpl)
 	processedMessageRepoImpl := v1_2.NewProcessedMessageRepo(gormDB)
 	discoverIndexConsumer := consumer.NewDiscoverIndexConsumer(jetStreamClient, loggerFactoryImpl, cfg, meiliClient, postServiceClient, processedMessageRepoImpl)
@@ -123,8 +129,10 @@ func InitializeFanoutConsumer(cfg *config.Config) (*consumer.FanoutConsumer, fun
 	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
 	jetStreamClient, cleanup2 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
 	staticProvider := rpc.NewStaticProvider(cfg)
-	postServiceClient := rpc.NewPostClient(staticProvider)
-	userServiceClient := rpc.NewUserClient(staticProvider)
+	duration := rpcTimeout(cfg)
+	int64_2 := rpcMaxInflight(cfg)
+	postServiceClient := rpc.NewPostClient(staticProvider, duration, int64_2)
+	userServiceClient := rpc.NewUserClient(staticProvider, duration, int64_2)
 	gormDB, cleanup3 := db.NewPG(cfg, loggerFactoryImpl)
 	fanoutRepo := v1_4.NewFanoutRepo(gormDB)
 	cacheCache, cleanup4 := cache.NewCache(cfg, loggerFactoryImpl)
@@ -175,7 +183,7 @@ func InitializeRedisPoller(cfg *config.Config) (*poller.RedisPoller, func()) {
 	postRepoImpl := v1_3.NewPostRepo(gormDB)
 	cacheCache, cleanup3 := cache.NewCache(cfg, loggerFactoryImpl)
 	postEntityCacheImpl := cache.NewPostEntityCache(cacheCache, cfg, loggerFactoryImpl)
-	cachedPostRepo := v1_3.NewCachedPostRepo(postRepoImpl, postEntityCacheImpl, loggerFactoryImpl)
+	cachedPostRepo := v1_3.NewCachedPostRepo(postRepoImpl, postEntityCacheImpl, cfg, loggerFactoryImpl)
 	redisPoller := poller.NewRedisPoller(cachedPostRepo, postEntityCacheImpl, cfg, loggerFactoryImpl)
 	return redisPoller, func() {
 		cleanup3()
@@ -218,7 +226,7 @@ func InitializePostServiceHandler(cfg *config.Config) (postv1connect.PostService
 	postRepoImpl := v1_3.NewPostRepo(gormDB)
 	cacheCache, cleanup3 := cache.NewCache(cfg, loggerFactoryImpl)
 	postEntityCacheImpl := cache.NewPostEntityCache(cacheCache, cfg, loggerFactoryImpl)
-	cachedPostRepo := v1_3.NewCachedPostRepo(postRepoImpl, postEntityCacheImpl, loggerFactoryImpl)
+	cachedPostRepo := v1_3.NewCachedPostRepo(postRepoImpl, postEntityCacheImpl, cfg, loggerFactoryImpl)
 	jetStreamClient, cleanup4 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
 	postUsecaseImpl := v1_3.NewPostUsecase(cachedPostRepo, jetStreamClient)
 	postServiceHandler := v1_3.NewPostServiceHandler(gormDB, loggerFactoryImpl, postUsecaseImpl, cachedPostRepo)
@@ -233,17 +241,20 @@ func InitializePostServiceHandler(cfg *config.Config) (postv1connect.PostService
 func InitializeBFFServiceHandler(cfg *config.Config) (bffv1connect.BFFServiceHandler, func()) {
 	loggerFactoryImpl, cleanup := logger.NewLoggerFactory(cfg)
 	staticProvider := rpc.NewStaticProvider(cfg)
-	authServiceClient := rpc.NewAuthClient(staticProvider)
-	userServiceClient := rpc.NewUserClient(staticProvider)
-	mediaServiceClient := rpc.NewMediaClient(staticProvider)
-	postServiceClient := rpc.NewPostClient(staticProvider)
-	discoverServiceClient := rpc.NewDiscoverClient(staticProvider)
+	duration := rpcTimeout(cfg)
+	int64_2 := rpcMaxInflight(cfg)
+	authServiceClient := rpc.NewAuthClient(staticProvider, duration, int64_2)
+	userServiceClient := rpc.NewUserClient(staticProvider, duration, int64_2)
+	mediaServiceClient := rpc.NewMediaClient(staticProvider, duration, int64_2)
+	postServiceClient := rpc.NewPostClient(staticProvider, duration, int64_2)
+	discoverServiceClient := rpc.NewDiscoverClient(staticProvider, duration, int64_2)
 	downstreamRepo := v1_6.NewDownstreamRepo(authServiceClient, userServiceClient, mediaServiceClient, postServiceClient, discoverServiceClient)
 	jetStreamClient, cleanup2 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
 	cacheCache, cleanup3 := cache.NewCache(cfg, loggerFactoryImpl)
 	postEntityCacheImpl := cache.NewPostEntityCache(cacheCache, cfg, loggerFactoryImpl)
 	bffUsecaseImpl := v1_6.NewBFFUsecase(downstreamRepo, jetStreamClient, postEntityCacheImpl, loggerFactoryImpl)
-	bffServiceHandler := v1_6.NewBFFServiceHandler(loggerFactoryImpl, bffUsecaseImpl)
+	limiter := ratelimit.FromConfig(cfg)
+	bffServiceHandler := v1_6.NewBFFServiceHandler(loggerFactoryImpl, bffUsecaseImpl, limiter)
 	return bffServiceHandler, func() {
 		cleanup3()
 		cleanup2()
@@ -257,7 +268,7 @@ func InitializeUserServiceHandler(cfg *config.Config) (userv1connect.UserService
 	userRepoImpl := v1_7.NewUserRepo(gormDB)
 	cacheCache, cleanup3 := cache.NewCache(cfg, loggerFactoryImpl)
 	userEntityCacheImpl := cache.NewUserEntityCache(cacheCache, cfg)
-	cachedUserRepo := v1_7.NewCachedUserRepo(userRepoImpl, userEntityCacheImpl, loggerFactoryImpl)
+	cachedUserRepo := v1_7.NewCachedUserRepo(userRepoImpl, userEntityCacheImpl, cfg, loggerFactoryImpl)
 	jetStreamClient, cleanup4 := mq.NewJetStreamClient(cfg, loggerFactoryImpl)
 	userUsecaseImpl := v1_7.NewUserUsecase(cachedUserRepo, gormDB, jetStreamClient)
 	userServiceHandler := v1_7.NewUserServiceHandler(gormDB, loggerFactoryImpl, userUsecaseImpl, cachedUserRepo)
@@ -287,11 +298,23 @@ var Middlewares = wire.NewSet(cache.NewCache, cache.NewUserEntityCache, wire.Bin
 
 var Utils = wire.NewSet(jwt.NewManager, wire.Bind(new(jwt.Manager), new(*jwt.ManagerImpl)), jwt.NewServerInterceptor)
 
+// rpcTimeout 提取下游 RPC 单次调用超时配置（0 由 client 层用默认值兜底）
+func rpcTimeout(cfg *config.Config) time.Duration {
+	return cfg.RPC.Timeout
+}
+
+// rpcMaxInflight 提取下游在途请求并发上限配置（0 由 client 层用默认值兜底）
+func rpcMaxInflight(cfg *config.Config) int64 {
+	return cfg.RPC.MaxInflight
+}
+
 // Clients 下游服务客户端：服务发现（静态实现）+ 统一拦截器的 connect 客户端
-var Clients = wire.NewSet(rpc.NewStaticProvider, wire.Bind(new(rpc.EndpointProvider), new(*rpc.StaticProvider)), rpc.NewAuthClient, rpc.NewUserClient, rpc.NewMediaClient, rpc.NewPostClient, rpc.NewDiscoverClient, v1_6.NewDownstreamRepo)
+var Clients = wire.NewSet(rpc.NewStaticProvider, wire.Bind(new(rpc.EndpointProvider), new(*rpc.StaticProvider)), rpcTimeout,
+	rpcMaxInflight, rpc.NewAuthClient, rpc.NewUserClient, rpc.NewMediaClient, rpc.NewPostClient, rpc.NewDiscoverClient, v1_6.NewDownstreamRepo,
+)
 
 // BFF bff 服务装配
-var BFF = wire.NewSet(v1_6.NewBFFUsecase, wire.Bind(new(v1_6.BFFUsecase), new(*v1_6.BFFUsecaseImpl)), v1_6.NewBFFServiceHandler, wire.Bind(new(bffv1connect.BFFServiceHandler), new(*v1_6.BFFServiceHandler)))
+var BFF = wire.NewSet(v1_6.NewBFFUsecase, wire.Bind(new(v1_6.BFFUsecase), new(*v1_6.BFFUsecaseImpl)), ratelimit.FromConfig, v1_6.NewBFFServiceHandler, wire.Bind(new(bffv1connect.BFFServiceHandler), new(*v1_6.BFFServiceHandler)))
 
 // Discover 搜推服务装配
 var Discover = wire.NewSet(v1_4.NewFanoutRepo, v1_4.NewHotRepo, v1_4.NewDiscoverUsecase, wire.Bind(new(v1_4.DiscoverUsecase), new(*v1_4.DiscoverUsecaseImpl)), v1_4.NewDiscoverServiceHandler, wire.Bind(new(discoverv1connect.DiscoverServiceHandler), new(*v1_4.DiscoverServiceHandler)))
