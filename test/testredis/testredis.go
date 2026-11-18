@@ -32,10 +32,11 @@ type Client struct {
 	z  map[string]zsetEntry
 
 	// 操作计数（断言用）
-	Gets int
-	Hits int
-	Sets int
-	Dels int
+	Gets  int
+	Hits  int
+	Sets  int
+	MSets int // MSet 调用次数（RTT 数，区别于 Sets 的 key 数）
+	Dels  int
 }
 
 var _ cache.Cache = (*Client)(nil)
@@ -94,6 +95,26 @@ func (c *Client) Set(ctx context.Context, key string, val []byte, ttl time.Durat
 		e.expiresAt = time.Now().Add(ttl)
 	}
 	c.m[key] = e
+	return nil
+}
+
+// MSet 批量写入并统一 TTL（计数器按 key 计：Sets += len(pairs)，与逐条 Set 口径一致；
+// MSets 计调用次数，供断言"批量回填只占一轮 RTT"）
+func (c *Client) MSet(ctx context.Context, pairs []cache.KVPair, ttl time.Duration) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(pairs) == 0 {
+		return nil
+	}
+	c.MSets++
+	for _, p := range pairs {
+		c.Sets++
+		e := entry{val: append([]byte(nil), p.Val...)}
+		if ttl > 0 {
+			e.expiresAt = time.Now().Add(ttl)
+		}
+		c.m[p.Key] = e
+	}
 	return nil
 }
 

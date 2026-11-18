@@ -16,6 +16,10 @@ type Cache interface {
 	MGet(ctx context.Context, keys []string) ([][]byte, error)
 	// Set 写入并设置 TTL；ttl <= 0 表示不过期
 	Set(ctx context.Context, key string, val []byte, ttl time.Duration) error
+	// MSet 批量写入并统一设置 TTL（ttl <= 0 表示不过期）。
+	// 语义等价于逐条 Set（不做原子性承诺），实现上单次 pipeline 提交以省 RTT。
+	// 空 pairs 零网络往返；任一条失败整批报错（错误带首个失败的 key）。
+	MSet(ctx context.Context, pairs []KVPair, ttl time.Duration) error
 	// Del 删除 keys；不存在的 key 静默跳过（幂等）
 	Del(ctx context.Context, keys ...string) error
 
@@ -65,6 +69,12 @@ type ZMember struct {
 	Member string
 }
 
+// KVPair 批量写入对（MSet 用）。用切片而非 map：写入顺序确定，错误里的 key 可复现。
+type KVPair struct {
+	Key string
+	Val []byte
+}
+
 // KeyPrefix 缓存 key 前缀。v1 为序列化 schema 版本：
 // 发版修改缓存值结构且不兼容时升版本号，整体切换 key 空间，不做兼容读。
 const KeyPrefix = "rn:v1"
@@ -103,7 +113,14 @@ func IsNullSentinel(val []byte) bool {
 	return bytes.Equal(val, NullSentinel)
 }
 
-// JitterTTL 返回 base ± pct 的随机抖动 TTL，防缓存雪崩（同批 key 同时过期、同时回源）。
+// JitterTTL 返回 base ± pct 的随机抖动 TTL，防缓存雪崩。
+//
+// 抖动粒度 = 一次批量写（调用方一次 StoreXxxDetails / StoreXxxStats）：同批 key 共享一个 TTL，
+// 即“一起写入 → 一起过期 → 一次批查询 + 一次批量回填”。这是刻意选择：页面级 key 同时过期
+// 比逐 key 错峰更省（后者把一次 `IN(20)` 查询碎成 ~20 次 `IN(1)` 查询 + 20 次部分回填）。
+// 跨批由不同写入时刻 + 各自独立抖动自然分散，全局不会出现同一秒 cliff；需要写入侧错峰的场景
+// （冷启动/预热大量 key）由预热侧限速，而不是把抖动下沉到 per-key。
+//
 // pct 为抖动比例（如 0.1 表示 ±10%）；base <= 0 或 pct <= 0 时原样返回。
 func JitterTTL(base time.Duration, pct float64) time.Duration {
 	if base <= 0 || pct <= 0 {

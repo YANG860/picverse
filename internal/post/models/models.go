@@ -36,7 +36,10 @@ type PostDetail struct {
 	// 元数据
 	MetaData datatypes.JSONMap `gorm:"type:jsonb;not null;default:'{}';comment:元数据" json:"meta_data"`
 
-	// Medias 帖子关联的媒体，foreign key 为 PostMedia.PostID，供 Preload/Joins 加载
+	// Medias 帖子关联的媒体，foreign key 为 PostMedia.PostID，供 Preload/Joins 加载。
+	// 顺序即展示顺序（按 PostMedia.SortOrder 升序加载），**只读字段**：禁止重排序、
+	// 禁止改写元素字段或 MetaData。读取结果可能来自缓存或并发合并回源（跨请求共享），
+	// 就地修改会污染其它并发请求（且顺序错乱不可复现）。
 	Medias []*PostMedia `gorm:"foreignKey:PostID;references:ID"`
 }
 

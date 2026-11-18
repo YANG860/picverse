@@ -17,4 +17,12 @@ var (
 	CacheTimelineCapacity = 5000
 	// CacheTTLJitter TTL 抖动比例（±10%，防雪崩）
 	CacheTTLJitter = 0.1
+	// CacheFlightWorkers 回源合并并发批上限默认值（BatchFlight K-worker）
+	CacheFlightWorkers = 4
+	// CacheFlightBatchSize 回源合并单批 key 上限默认值（积压自动切分多批）
+	CacheFlightBatchSize = 500
+	// CacheFlightTimeout 回源合并单批 fetch 超时默认值（防挂死毒化底线）
+	CacheFlightTimeout = 5 * time.Second
+	// CacheStatTTL 统计列缓存 TTL 默认值（短 TTL 读缓存：计数高频变更，有界陈旧）
+	CacheStatTTL = time.Minute
 )

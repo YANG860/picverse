@@ -48,10 +48,11 @@ func newCachedPostRepoEnv(t *testing.T) *cachedPostRepoEnv {
 		Cache: config.CacheConfig{
 			PostTTL: time.Hour,
 			NullTTL: time.Minute,
+			StatTTL: time.Hour, // 测试内不过期：陈旧语义用 DelPostStats 显式模拟过期
 		},
 	}, lf)
 	return &cachedPostRepoEnv{
-		repo:  NewCachedPostRepo(inner, ec, lf),
+		repo:  NewCachedPostRepo(inner, ec, nil, lf),
 		inner: inner,
 		db:    db,
 		tc:    tc,
@@ -64,9 +65,33 @@ func newCachedPostRepoEnv(t *testing.T) *cachedPostRepoEnv {
 // 各 err 非 nil 时对应操作返回该错误，否则委托真实实现。仅限单 goroutine 使用。
 type postErrEntityCache struct {
 	cache.PostEntityCache
-	loadErr  error
-	storeErr error
-	delErr   error
+	loadErr      error
+	storeErr     error
+	delErr       error
+	statLoadErr  error
+	statStoreErr error
+}
+
+func (e *postErrEntityCache) LoadPostStats(ctx context.Context, ids []int64) (map[int64]*models.PostStat, error) {
+	if e.statLoadErr != nil {
+		return nil, e.statLoadErr
+	}
+	return e.PostEntityCache.LoadPostStats(ctx, ids)
+}
+
+func (e *postErrEntityCache) StorePostStat(ctx context.Context, id int64, stat *models.PostStat) error {
+	if e.statStoreErr != nil {
+		return e.statStoreErr
+	}
+	return e.PostEntityCache.StorePostStat(ctx, id, stat)
+}
+
+// StorePostStats 统计列回填错误注入：装饰器走批量口，故须同时覆写批量口
+func (e *postErrEntityCache) StorePostStats(ctx context.Context, stats map[int64]*models.PostStat) error {
+	if e.statStoreErr != nil {
+		return e.statStoreErr
+	}
+	return e.PostEntityCache.StorePostStats(ctx, stats)
 }
 
 func (e *postErrEntityCache) LoadPostDetails(ctx context.Context, ids []int64) (map[int64]*models.PostDetail, error) {
@@ -81,6 +106,14 @@ func (e *postErrEntityCache) StorePostDetail(ctx context.Context, id int64, deta
 		return e.storeErr
 	}
 	return e.PostEntityCache.StorePostDetail(ctx, id, detail)
+}
+
+// StorePostDetails 回填错误注入：装饰器走批量回填，故须同时覆写批量口
+func (e *postErrEntityCache) StorePostDetails(ctx context.Context, hits map[int64]*models.PostDetail, missing []int64) error {
+	if e.storeErr != nil {
+		return e.storeErr
+	}
+	return e.PostEntityCache.StorePostDetails(ctx, hits, missing)
 }
 
 func (e *postErrEntityCache) DelPostDetails(ctx context.Context, ids []int64) error {
@@ -162,15 +195,51 @@ func TestCachedGetPosts(t *testing.T) {
 
 	t.Run("部分命中只回填缺失项", func(t *testing.T) {
 		seedPost(t, env.db, postID3, authorID1, postv1.PostStatus_POST_STATUS_PUBLISHED, 3000)
-		// postID1 已缓存，postID3 未缓存
+		// postID1 已缓存（detail + stat），postID3 未缓存
 		sets := env.tc.Sets
 		posts, err := env.repo.GetPosts(ctx, []int64{postID3, postID1})
 		require.NoError(t, err)
 		require.Len(t, posts, 2)
-		assert.Equal(t, 1, env.tc.Sets-sets, "只应回填缺失项 postID3")
+		assert.Equal(t, 1, env.tc.Sets-sets, "只应回填缺失项 postID3 的 detail（回源者不写 stat）")
 
 		_, err = env.ec.LoadPostDetails(ctx, []int64{postID3})
 		require.NoError(t, err)
+		// 回源者不写 stat 缓存：其计数已由回源行提供
+		sc, err := env.ec.LoadPostStats(ctx, []int64{postID3})
+		require.NoError(t, err)
+		assert.NotContains(t, sc, postID3, "回源者不回填 stat 缓存")
+	})
+
+	t.Run("回源即权威：计数采信回源行、不读也不写 stat 缓存", func(t *testing.T) {
+		const id int64 = 2201
+		seedPost(t, env.db, id, authorID1, postv1.PostStatus_POST_STATUS_PUBLISHED, 9000)
+
+		gets, sets, msets := env.tc.Gets, env.tc.Sets, env.tc.MSets
+		posts, err := env.repo.GetPosts(ctx, []int64{id})
+		require.NoError(t, err)
+		require.Len(t, posts, 1)
+		// 契约回归：回源行必须带统计列（若 GetPosts 改列裁剪，这里会静默变 0）
+		assert.Equal(t, int64(1), posts[0].LikeCount)
+		assert.Equal(t, int64(2), posts[0].FavouriteCount)
+		assert.Equal(t, int64(3), posts[0].CommentCount)
+		assert.Equal(t, int64(4), posts[0].ViewCount)
+		assert.Equal(t, gets+1, env.tc.Gets, "只读 detail 一个 key（回源者不查 stat 缓存）")
+		assert.Equal(t, sets+1, env.tc.Sets, "只写 detail 一次（回源者不回填 stat 缓存）")
+
+		sc, err := env.ec.LoadPostStats(ctx, []int64{id})
+		require.NoError(t, err)
+		assert.NotContains(t, sc, id, "stat 缓存只由详情命中路径回填")
+
+		// 二次读：详情命中 → 计数改走 stat 缓存（miss 轻查 + 回填）
+		gets, sets, msets = env.tc.Gets, env.tc.Sets, env.tc.MSets
+		posts, err = env.repo.GetPosts(ctx, []int64{id})
+		require.NoError(t, err)
+		require.Len(t, posts, 1)
+		assert.Equal(t, int64(1), posts[0].LikeCount, "命中者经 stat 轻查得到同一计数")
+		assert.Equal(t, int64(4), posts[0].ViewCount)
+		assert.Equal(t, gets+2, env.tc.Gets, "detail + stat 各一次批量读")
+		assert.Equal(t, sets+1, env.tc.Sets, "stat 缓存回填一次")
+		assert.Equal(t, msets+1, env.tc.MSets, "stat 回填同样走批量 MSet（一轮 RTT）")
 	})
 
 	t.Run("重复 id 去重返回", func(t *testing.T) {
@@ -197,10 +266,25 @@ func TestCachedGetPosts(t *testing.T) {
 		assert.Equal(t, sets, env.tc.Sets, "空入参不应写缓存")
 	})
 
+	t.Run("批量回源回填合并为一次 MSet（一轮 RTT）", func(t *testing.T) {
+		ids := []int64{2301, 2302, 2303}
+		for _, id := range ids {
+			seedPost(t, env.db, id, authorID1, postv1.PostStatus_POST_STATUS_PUBLISHED, 10000)
+		}
+		sets, msets := env.tc.Sets, env.tc.MSets
+		posts, err := env.repo.GetPosts(ctx, ids)
+		require.NoError(t, err)
+		require.Len(t, posts, 3)
+		assert.Equal(t, sets+3, env.tc.Sets, "每个 key 各一次写入")
+		assert.Equal(t, msets+1, env.tc.MSets, "回填共一批：只占一轮 RTT")
+	})
+
 	t.Run("不存在 id 回填空哨兵，二次读不回源", func(t *testing.T) {
+		msets := env.tc.MSets
 		posts, err := env.repo.GetPosts(ctx, []int64{999999})
 		require.NoError(t, err)
 		assert.Empty(t, posts)
+		assert.Equal(t, msets+1, env.tc.MSets, "空哨兵单独一批")
 
 		// 空哨兵已立：map 中存在该 id 且值为 nil（确认不存在）
 		cached, err := env.ec.LoadPostDetails(ctx, []int64{999999})
@@ -208,7 +292,7 @@ func TestCachedGetPosts(t *testing.T) {
 		require.Contains(t, cached, int64(999999))
 		assert.Nil(t, cached[999999], "空哨兵应映射为 nil")
 
-		// 二次读命中哨兵：不回源不回填（fillCache 不再写）
+		// 二次读命中哨兵：不回源不回填（fillDetailCache 不再写）
 		sets := env.tc.Sets
 		posts, err = env.repo.GetPosts(ctx, []int64{999999})
 		require.NoError(t, err)
@@ -216,17 +300,23 @@ func TestCachedGetPosts(t *testing.T) {
 		assert.Equal(t, sets, env.tc.Sets, "哨兵命中不应再次回填")
 	})
 
-	t.Run("统计列不入缓存且每次实时覆盖", func(t *testing.T) {
-		// postID2 已缓存；缓存实体统计列应为零值
+	t.Run("统计列短 TTL 缓存：陈旧有界、过期即刷新", func(t *testing.T) {
+		// postID2 已缓存：主体来自 detail 缓存，计数在上面的二次读（命中路径）回填了 stat
 		cached, err := env.ec.LoadPostDetails(ctx, []int64{postID2})
 		require.NoError(t, err)
 		require.NotNil(t, cached[postID2])
-		assert.Zero(t, cached[postID2].LikeCount, "统计列不应入缓存")
-		assert.Zero(t, cached[postID2].FavouriteCount, "统计列不应入缓存")
-		assert.Zero(t, cached[postID2].CommentCount, "统计列不应入缓存")
-		assert.Zero(t, cached[postID2].ViewCount, "统计列不应入缓存")
+		assert.Zero(t, cached[postID2].LikeCount, "统计列不入 detail 缓存")
+		assert.Zero(t, cached[postID2].FavouriteCount, "统计列不入 detail 缓存")
+		assert.Zero(t, cached[postID2].CommentCount, "统计列不入 detail 缓存")
+		assert.Zero(t, cached[postID2].ViewCount, "统计列不入 detail 缓存")
 
-		// 绕过装饰器改 DB：正文仍走缓存旧值，计数必须实时可见
+		// 首读已回填 stat 缓存（typed API 可读回）
+		sc, err := env.ec.LoadPostStats(ctx, []int64{postID2})
+		require.NoError(t, err)
+		require.NotNil(t, sc[postID2])
+		assert.Equal(t, int64(1), sc[postID2].LikeCount)
+
+		// 绕过装饰器改 DB：详情主体走缓存旧值，计数同样陈旧（写路径不失效，陈旧 ≤ stat_ttl）
 		require.NoError(t, env.db.Model(&models.PostDetail{}).Where("id = ?", postID2).
 			Update("title", "db-raw").
 			Update("like_count", 100).
@@ -237,7 +327,16 @@ func TestCachedGetPosts(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, posts, 1)
 		assert.Equal(t, "标题", posts[0].Title, "详情主体命中缓存")
-		assert.Equal(t, int64(100), posts[0].LikeCount, "统计列应实时来自轻查")
+		assert.Equal(t, int64(1), posts[0].LikeCount, "TTL 内计数陈旧（stat 缓存命中，不打轻查）")
+		assert.Equal(t, int64(2), posts[0].FavouriteCount)
+
+		// 模拟 TTL 过期（DelPostStats）：下读 miss 轻查回填，新计数可见
+		require.NoError(t, env.ec.DelPostStats(ctx, []int64{postID2}))
+		posts, err = env.repo.GetPosts(ctx, []int64{postID2})
+		require.NoError(t, err)
+		require.Len(t, posts, 1)
+		assert.Equal(t, "标题", posts[0].Title, "详情主体仍命中缓存")
+		assert.Equal(t, int64(100), posts[0].LikeCount, "过期后 miss 轻查刷新")
 		assert.Equal(t, int64(200), posts[0].FavouriteCount)
 		assert.Equal(t, int64(300), posts[0].CommentCount)
 		assert.Equal(t, int64(400), posts[0].ViewCount)
@@ -246,7 +345,7 @@ func TestCachedGetPosts(t *testing.T) {
 	t.Run("缓存读失败降级全量回源", func(t *testing.T) {
 		seedPost(t, env.db, postID4, authorID1, postv1.PostStatus_POST_STATUS_PUBLISHED, 4000)
 		cacheErr := errors.New("cache down")
-		failRepo := NewCachedPostRepo(env.inner, &postErrEntityCache{PostEntityCache: env.ec, loadErr: cacheErr}, env.lf)
+		failRepo := NewCachedPostRepo(env.inner, &postErrEntityCache{PostEntityCache: env.ec, loadErr: cacheErr}, nil, env.lf)
 
 		posts, err := failRepo.GetPosts(ctx, []int64{postID4})
 		require.NoError(t, err, "缓存故障不应失败业务请求")
@@ -257,12 +356,88 @@ func TestCachedGetPosts(t *testing.T) {
 	t.Run("回填失败不影响结果", func(t *testing.T) {
 		seedPost(t, env.db, 2101, authorID1, postv1.PostStatus_POST_STATUS_PUBLISHED, 5000)
 		cacheErr := errors.New("cache down")
-		failRepo := NewCachedPostRepo(env.inner, &postErrEntityCache{PostEntityCache: env.ec, storeErr: cacheErr}, env.lf)
+		failRepo := NewCachedPostRepo(env.inner, &postErrEntityCache{PostEntityCache: env.ec, storeErr: cacheErr}, nil, env.lf)
 
 		posts, err := failRepo.GetPosts(ctx, []int64{2101})
 		require.NoError(t, err, "回填失败只应降级，不影响结果")
 		require.Len(t, posts, 1)
 		assert.Equal(t, "标题", posts[0].Title)
+	})
+
+	t.Run("统计列禁用（stat_ttl < 0）：命中者直通轻查", func(t *testing.T) {
+		seedPost(t, env.db, 2102, authorID1, postv1.PostStatus_POST_STATUS_PUBLISHED, 6000)
+		plain := NewCachedPostRepo(env.inner, env.ec, &config.Config{Cache: config.CacheConfig{StatTTL: -1}}, env.lf)
+		assert.Nil(t, plain.bfStat, "stat 缓存禁用时不建 flight（避免常驻空转 worker）")
+
+		posts, err := plain.GetPosts(ctx, []int64{2102}) // 首读回源：计数即回源行
+		require.NoError(t, err)
+		require.Len(t, posts, 1)
+		assert.Equal(t, int64(1), posts[0].LikeCount)
+
+		require.NoError(t, env.db.Model(&models.PostDetail{}).Where("id = ?", 2102).Update("like_count", 77).Error)
+		posts, err = plain.GetPosts(ctx, []int64{2102}) // 命中者：禁用后直通轻查
+		require.NoError(t, err)
+		assert.Equal(t, int64(77), posts[0].LikeCount, "禁用后计数实时（历史行为）")
+	})
+
+	t.Run("统计列缓存读失败降级轻查", func(t *testing.T) {
+		seedPost(t, env.db, 2103, authorID1, postv1.PostStatus_POST_STATUS_PUBLISHED, 7000)
+		// 首读回源（填 detail，不触 stat）；再构造 stat 读失败，验证命中路径 fail-open
+		_, err := env.repo.GetPosts(ctx, []int64{2103})
+		require.NoError(t, err)
+		cacheErr := errors.New("cache down")
+		failRepo := NewCachedPostRepo(env.inner, &postErrEntityCache{PostEntityCache: env.ec, statLoadErr: cacheErr}, nil, env.lf)
+
+		posts, err := failRepo.GetPosts(ctx, []int64{2103})
+		require.NoError(t, err, "统计缓存故障不应失败业务请求")
+		require.Len(t, posts, 1)
+		assert.Equal(t, int64(1), posts[0].LikeCount, "fail-open 轻查仍返回计数")
+	})
+
+	t.Run("统计列缓存回填失败不影响结果", func(t *testing.T) {
+		seedPost(t, env.db, 2104, authorID1, postv1.PostStatus_POST_STATUS_PUBLISHED, 8000)
+		_, err := env.repo.GetPosts(ctx, []int64{2104}) // 首读回源（填 detail，不触 stat）
+		require.NoError(t, err)
+		cacheErr := errors.New("cache down")
+		failRepo := NewCachedPostRepo(env.inner, &postErrEntityCache{PostEntityCache: env.ec, statStoreErr: cacheErr}, nil, env.lf)
+
+		posts, err := failRepo.GetPosts(ctx, []int64{2104})
+		require.NoError(t, err, "统计回填失败只应降级，不影响结果")
+		require.Len(t, posts, 1)
+		assert.Equal(t, int64(1), posts[0].LikeCount)
+	})
+
+	t.Run("并发命中统计列经 flight 合并回源", func(t *testing.T) {
+		const n = 8
+		seedPost(t, env.db, 2205, authorID1, postv1.PostStatus_POST_STATUS_PUBLISHED, 9500)
+		_, err := env.repo.GetPosts(ctx, []int64{2205}) // 首读回源：填 detail
+		require.NoError(t, err)
+		_, err = env.repo.GetPosts(ctx, []int64{2205}) // 二次命中：回填 stat
+		require.NoError(t, err)
+		require.NoError(t, env.db.Model(&models.PostDetail{}).Where("id = ?", 2205).Update("like_count", 42).Error)
+		require.NoError(t, env.ec.DelPostStats(ctx, []int64{2205})) // 模拟 stat 过期：并发命中全 miss
+
+		var wg sync.WaitGroup
+		results := make([][]*models.PostDetail, n)
+		errs := make([]error, n)
+		for i := range n {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				results[i], errs[i] = env.repo.GetPosts(ctx, []int64{2205})
+			}(i)
+		}
+		wg.Wait()
+
+		for i := range n {
+			require.NoError(t, errs[i])
+			require.Len(t, results[i], 1)
+			assert.Equal(t, int64(42), results[i][0].LikeCount)
+			assert.Equal(t, results[0][0], results[i][0], "并发合并回源应得到一致结果")
+		}
+		st := env.repo.bfStat.Stats()
+		assert.GreaterOrEqual(t, st.Batches, int64(1), "统计列 miss 必经由 bfStat 回源（非直连 DB）")
+		assert.LessOrEqual(t, st.Batches, int64(n))
 	})
 
 	t.Run("并发相同回源结果一致", func(t *testing.T) {
@@ -456,10 +631,12 @@ func TestCachedPostRepo_写后失效(t *testing.T) {
 		assert.Empty(t, posts, "物理删除后不应读到缓存旧值")
 	})
 
-	t.Run("UpdatePost*Count 不触碰缓存且计数实时", func(t *testing.T) {
+	t.Run("UpdatePost*Count 不触碰缓存且计数有界陈旧", func(t *testing.T) {
 		const statPostID int64 = 2202
 		seedPost(t, env.db, statPostID, authorID1, postv1.PostStatus_POST_STATUS_PUBLISHED, 2000)
-		_, err := env.repo.GetPosts(ctx, []int64{statPostID}) // 预填缓存
+		_, err := env.repo.GetPosts(ctx, []int64{statPostID}) // 首读回源：填 detail
+		require.NoError(t, err)
+		_, err = env.repo.GetPosts(ctx, []int64{statPostID}) // 二次命中：回填 stat（陈旧窗口成立的前提）
 		require.NoError(t, err)
 
 		gets, sets, dels := env.tc.Gets, env.tc.Sets, env.tc.Dels
@@ -473,13 +650,22 @@ func TestCachedPostRepo_写后失效(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, gets, env.tc.Gets)
 		assert.Equal(t, sets, env.tc.Sets)
-		assert.Equal(t, dels, env.tc.Dels, "统计不入缓存，计数更新不应触碰缓存")
+		assert.Equal(t, dels, env.tc.Dels, "计数更新不应触碰缓存（写路径零失效）")
 
 		posts, err := env.repo.GetPosts(ctx, []int64{statPostID})
 		require.NoError(t, err)
 		require.Len(t, posts, 1)
 		assert.Equal(t, "标题", posts[0].Title, "主体仍命中缓存")
-		assert.Equal(t, int64(100), posts[0].LikeCount, "计数应实时来自轻查")
+		assert.Equal(t, int64(1), posts[0].LikeCount, "TTL 内计数陈旧（写路径不失效，陈旧 ≤ stat_ttl）")
+		assert.Equal(t, int64(2), posts[0].FavouriteCount)
+		assert.Equal(t, int64(3), posts[0].CommentCount)
+		assert.Equal(t, int64(4), posts[0].ViewCount)
+
+		require.NoError(t, env.ec.DelPostStats(ctx, []int64{statPostID})) // 模拟 TTL 过期
+		posts, err = env.repo.GetPosts(ctx, []int64{statPostID})
+		require.NoError(t, err)
+		require.Len(t, posts, 1)
+		assert.Equal(t, int64(100), posts[0].LikeCount, "过期后 miss 轻查刷新为新计数")
 		assert.Equal(t, int64(200), posts[0].FavouriteCount)
 		assert.Equal(t, int64(300), posts[0].CommentCount)
 		assert.Equal(t, int64(400), posts[0].ViewCount)
@@ -487,7 +673,7 @@ func TestCachedPostRepo_写后失效(t *testing.T) {
 
 	t.Run("失效失败不阻断业务（降级靠 TTL 兜底）", func(t *testing.T) {
 		cacheErr := errors.New("cache down")
-		failRepo := NewCachedPostRepo(env.inner, &postErrEntityCache{PostEntityCache: env.ec, delErr: cacheErr}, env.lf)
+		failRepo := NewCachedPostRepo(env.inner, &postErrEntityCache{PostEntityCache: env.ec, delErr: cacheErr}, nil, env.lf)
 
 		info, err := failRepo.UpdateDraftTitle(ctx, postID1, "降级标题")
 		require.NoError(t, err, "失效失败不应失败业务写入")
@@ -576,6 +762,6 @@ func TestCachedWithTX_事务直穿不缓存(t *testing.T) {
 // ---------- 构造校验 ----------
 
 func TestNewCachedPostRepo_依赖校验(t *testing.T) {
-	require.Panics(t, func() { NewCachedPostRepo(nil, nil, nil) }, "inner 缺失应 fail-fast")
-	require.Panics(t, func() { NewCachedPostRepo(&PostRepoImpl{}, nil, nil) }, "cache 缺失应 fail-fast")
+	require.Panics(t, func() { NewCachedPostRepo(nil, nil, nil, nil) }, "inner 缺失应 fail-fast")
+	require.Panics(t, func() { NewCachedPostRepo(&PostRepoImpl{}, nil, nil, nil) }, "cache 缺失应 fail-fast")
 }

@@ -32,6 +32,11 @@ func (Noop) Set(ctx context.Context, key string, val []byte, ttl time.Duration) 
 	return nil
 }
 
+// MSet 空转
+func (Noop) MSet(ctx context.Context, pairs []KVPair, ttl time.Duration) error {
+	return nil
+}
+
 // Del 空转
 func (Noop) Del(ctx context.Context, keys ...string) error {
 	return nil

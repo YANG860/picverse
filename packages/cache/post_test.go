@@ -112,6 +112,54 @@ func TestStoreLoadPostDetail_全字段往返_统计列清零(t *testing.T) {
 	assert.Equal(t, int64(4), detail.ViewCount)
 }
 
+func TestStorePostDetails_批量回填_两批TTL与计数清零(t *testing.T) {
+	tc := testredis.New()
+	ec := cache.NewPostEntityCache(tc, &config.Config{
+		Cache: config.CacheConfig{PostTTL: time.Hour, NullTTL: time.Minute},
+	}, testLF{})
+	ctx := context.Background()
+
+	hits := map[int64]*post.PostDetail{2001: newPostDetail(2001), 2002: newPostDetail(2002)}
+	require.NoError(t, ec.StorePostDetails(ctx, hits, []int64{2003}))
+
+	// 实体一批 + 空哨兵一批 = 两次 MSet；key 数：2 实体 + 1 哨兵
+	assert.Equal(t, 2, tc.MSets, "实体与空哨兵 TTL 不同，分两批提交")
+	assert.Equal(t, 3, tc.Sets)
+
+	got, err := ec.LoadPostDetails(ctx, []int64{2001, 2002, 2003})
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	for _, id := range []int64{2001, 2002} {
+		require.NotNil(t, got[id])
+		assert.Zero(t, got[id].LikeCount, "入缓存统计列应清零")
+		assert.Zero(t, got[id].ViewCount)
+		assert.Equal(t, "标题", got[id].Title)
+		assert.Len(t, got[id].Medias, 2, "媒体关联随实体一并回填")
+	}
+	assert.Nil(t, got[2003], "missing 写空哨兵")
+
+	// 调用方实体不被修改
+	assert.Equal(t, int64(1), hits[2001].LikeCount)
+
+	t.Run("hits 中 nil 值按空哨兵处理", func(t *testing.T) {
+		tc := testredis.New()
+		ec := cache.NewPostEntityCache(tc, nil, testLF{})
+		require.NoError(t, ec.StorePostDetails(ctx, map[int64]*post.PostDetail{77: nil}, nil))
+		got, err := ec.LoadPostDetails(ctx, []int64{77})
+		require.NoError(t, err)
+		require.Contains(t, got, int64(77))
+		assert.Nil(t, got[77])
+	})
+
+	t.Run("空入参零网络往返", func(t *testing.T) {
+		tc := testredis.New()
+		ec := cache.NewPostEntityCache(tc, nil, testLF{})
+		require.NoError(t, ec.StorePostDetails(ctx, nil, nil))
+		assert.Zero(t, tc.MSets)
+		assert.Zero(t, tc.Sets)
+	})
+}
+
 func TestStorePostDetail_Nil写空哨兵_与实体互相覆盖(t *testing.T) {
 	tc := testredis.New()
 	ec := cache.NewPostEntityCache(tc, nil, testLF{})
@@ -194,6 +242,36 @@ func TestStoreLoadPostStat_全字段往返与哨兵(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, got, int64(2002))
 	assert.Nil(t, got[2002], "空哨兵应映射为 nil")
+}
+
+func TestStorePostStats_批量写入_一轮MSet(t *testing.T) {
+	tc := testredis.New()
+	ec := cache.NewPostEntityCache(tc, nil, testLF{})
+	ctx := context.Background()
+
+	stats := map[int64]*post.PostStat{
+		2001: {ID: 2001, LikeCount: 1, FavouriteCount: 2, CommentCount: 3, ViewCount: 4},
+		2002: {ID: 2002, LikeCount: 5, FavouriteCount: 6, CommentCount: 7, ViewCount: 8},
+		2003: nil, // 按空哨兵处理
+	}
+	require.NoError(t, ec.StorePostStats(ctx, stats))
+	assert.Equal(t, 2, tc.MSets, "实体一批 + 空哨兵一批")
+	assert.Equal(t, 3, tc.Sets)
+
+	got, err := ec.LoadPostStats(ctx, []int64{2001, 2002, 2003})
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	assert.Equal(t, stats[2001], got[2001])
+	assert.Equal(t, stats[2002], got[2002])
+	assert.Nil(t, got[2003], "nil 值应写为空哨兵")
+
+	t.Run("空入参零网络往返", func(t *testing.T) {
+		tc := testredis.New()
+		ec := cache.NewPostEntityCache(tc, nil, testLF{})
+		require.NoError(t, ec.StorePostStats(ctx, nil))
+		assert.Zero(t, tc.MSets)
+		assert.Zero(t, tc.Sets)
+	})
 }
 
 // ---------- 失效（Del） ----------

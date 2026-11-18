@@ -87,6 +87,22 @@ func (r *RedisCache) Set(ctx context.Context, key string, val []byte, ttl time.D
 	return nil
 }
 
+// MSet 批量写入并统一设置 TTL（pipeline 单轮 RTT；MSET 本体不支持 TTL，故逐条 SET 打包）。
+// 非原子：pipeline 中部分命令可能已生效，由调用方按缓存不值信任处理（fail-open）。
+func (r *RedisCache) MSet(ctx context.Context, pairs []KVPair, ttl time.Duration) error {
+	if len(pairs) == 0 {
+		return nil
+	}
+	pipe := r.rc.Pipeline()
+	for _, p := range pairs {
+		pipe.Set(ctx, p.Key, p.Val, ttl)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("cache mset %d keys (first %s): %w", len(pairs), pairs[0].Key, err)
+	}
+	return nil
+}
+
 // Del 删除 keys；不存在的 key 静默跳过（redis DEL 语义天然幂等）
 func (r *RedisCache) Del(ctx context.Context, keys ...string) error {
 	if len(keys) == 0 {

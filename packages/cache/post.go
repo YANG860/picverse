@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"strconv"
 	"time"
 
@@ -27,19 +29,26 @@ import (
 // 错误一律上抛由调用方降级（fail-open），不在本层吞错。
 type PostEntityCache interface {
 	// LoadPostDetails 批量读帖子详情（非计数列：含状态与媒体关联；计数列为零值，
-	// 调用方以 GetPostStat 轻查覆盖）
+	// 调用方经统计列缓存/轻查覆盖）
 	LoadPostDetails(ctx context.Context, ids []int64) (map[int64]*post.PostDetail, error)
 	// StorePostDetail 写帖子详情（只存非计数列）；detail == nil 时写空哨兵
 	StorePostDetail(ctx context.Context, id int64, detail *post.PostDetail) error
+	// StorePostDetails 批量回填详情（MSet，一轮 RTT）：hits 写实体（只存非计数列）、
+	// missing 写空哨兵；hits 中值为 nil 的按空哨兵处理（与 StorePostDetail 同口径）。
+	// 空入参零网络往返。
+	StorePostDetails(ctx context.Context, hits map[int64]*post.PostDetail, missing []int64) error
 	// DelPostDetails 批量删除帖子详情缓存（写后失效）
 	DelPostDetails(ctx context.Context, ids []int64) error
 
-	// ---- 统计列（就绪待启用：统计轻查成为热点后升级写回式缓存，对称 user 的 stat API）----
+	// ---- 统计列（短 TTL 读缓存：读缓存 + 写路径不失效，陈旧 ≤ stat_ttl）----
 
 	// LoadPostStats 批量读帖子统计列
 	LoadPostStats(ctx context.Context, ids []int64) (map[int64]*post.PostStat, error)
 	// StorePostStat 写帖子统计列；stat == nil 时写空哨兵
 	StorePostStat(ctx context.Context, id int64, stat *post.PostStat) error
+	// StorePostStats 批量写统计列（MSet，一轮 RTT）；值为 nil 的按空哨兵处理。
+	// 空入参零网络往返。
+	StorePostStats(ctx context.Context, stats map[int64]*post.PostStat) error
 	// DelPostStats 批量删除帖子统计列缓存
 	DelPostStats(ctx context.Context, ids []int64) error
 
@@ -113,9 +122,12 @@ func (u *PostEntityCacheImpl) detailTTL() time.Duration {
 	return defaults.CachePostTTL
 }
 
-// statTTL 统计列缓存 TTL：config 暂无 StatTTL 字段，用短 TTL 常量兜底（就绪待启用）
+// statTTL 统计列缓存 TTL：config 其次 defaults（启用/禁用裁决在 repo 装配处，cache 层纯语义）
 func (u *PostEntityCacheImpl) statTTL() time.Duration {
-	return defaultStatTTL
+	if u.cfg.StatTTL > 0 {
+		return u.cfg.StatTTL
+	}
+	return defaults.CacheStatTTL
 }
 
 // nullTTL 空哨兵 TTL：config 其次 defaults
@@ -155,6 +167,17 @@ func (u *PostEntityCacheImpl) LoadPostDetails(ctx context.Context, ids []int64) 
 	return details, nil
 }
 
+// cacheDetailVal 序列化待缓存实体：4 个计数列清零后入缓存（统计列由 stat 缓存/轻查提供），
+// 拷贝后清零，不改动调用方实体。
+func cacheDetailVal(detail *post.PostDetail) ([]byte, error) {
+	cached := *detail
+	cached.LikeCount = 0
+	cached.FavouriteCount = 0
+	cached.CommentCount = 0
+	cached.ViewCount = 0
+	return json.Marshal(&cached)
+}
+
 // StorePostDetail 写帖子详情缓存：只存非计数列（4 个计数清零后入缓存，统计列由
 // GetPostStat 独立提供——互动事件高频写因此完全不触碰缓存，旧缓存残留计数也无害）。
 // 状态（Status）与媒体关联（Medias）随实体入缓存：状态供可见性裁决、媒体供组装一次拿全。
@@ -167,17 +190,53 @@ func (u *PostEntityCacheImpl) StorePostDetail(ctx context.Context, id int64, det
 		}
 		return nil
 	}
-	cached := *detail // 拷贝：不改动调用方实体
-	cached.LikeCount = 0
-	cached.FavouriteCount = 0
-	cached.CommentCount = 0
-	cached.ViewCount = 0
-	val, err := json.Marshal(&cached)
+	val, err := cacheDetailVal(detail)
 	if err != nil {
 		return fmt.Errorf("cache post detail marshal %d: %w", id, err)
 	}
 	if err := u.c.Set(ctx, key, val, JitterTTL(u.detailTTL(), defaults.CacheTTLJitter)); err != nil {
 		return fmt.Errorf("cache post detail set %d: %w", id, err)
+	}
+	return nil
+}
+
+// StorePostDetails 批量回填详情（MSet，一轮 RTT）：hits 写实体（计数清零后入缓存）、
+// missing 写空哨兵（nullTTL）；hits 中值为 nil 的按空哨兵处理（与 StorePostDetail 同口径）。
+// 两组 TTL 不同 → 分两批提交；抖动粒度 = 本批（同批 shared TTL 让“同页 key 一起过期”成为
+// 一次批查询 + 一次批量回填的廉价形状，口径见 JitterTTL）。
+// 非原子：部分 key 写失败则整批报错，调用方 fail-open（下次回源自愈，不影响正确性）。
+func (u *PostEntityCacheImpl) StorePostDetails(ctx context.Context, hits map[int64]*post.PostDetail, missing []int64) error {
+	entityPairs := make([]KVPair, 0, len(hits))
+	sentinelIDs := make([]int64, 0, len(missing)+len(hits))
+	sentinelIDs = append(sentinelIDs, missing...)
+
+	for _, id := range slices.Sorted(maps.Keys(hits)) { // 批内顺序确定（错误里的 key 可复现）
+		detail := hits[id]
+		if detail == nil {
+			sentinelIDs = append(sentinelIDs, id)
+			continue
+		}
+		val, err := cacheDetailVal(detail)
+		if err != nil {
+			return fmt.Errorf("cache post detail marshal %d: %w", id, err)
+		}
+		entityPairs = append(entityPairs, KVPair{Key: postDetailKey(id), Val: val})
+	}
+
+	if len(entityPairs) > 0 {
+		ttl := JitterTTL(u.detailTTL(), defaults.CacheTTLJitter)
+		if err := u.c.MSet(ctx, entityPairs, ttl); err != nil {
+			return fmt.Errorf("cache post detail set %d entities: %w", len(entityPairs), err)
+		}
+	}
+	if len(sentinelIDs) > 0 {
+		pairs := make([]KVPair, 0, len(sentinelIDs))
+		for _, id := range sentinelIDs {
+			pairs = append(pairs, KVPair{Key: postDetailKey(id), Val: NullSentinel})
+		}
+		if err := u.c.MSet(ctx, pairs, u.nullTTL()); err != nil {
+			return fmt.Errorf("cache post detail set %d null sentinels: %w", len(pairs), err)
+		}
 	}
 	return nil
 }
@@ -191,7 +250,7 @@ func (u *PostEntityCacheImpl) DelPostDetails(ctx context.Context, ids []int64) e
 	return nil
 }
 
-// ==================== 统计列（就绪待启用） ====================
+// ==================== 统计列（短 TTL 读缓存） ====================
 
 // LoadPostStats 批量读帖子统计列缓存，map 语义同 LoadPostDetails（nil 与 空双标记）。
 func (u *PostEntityCacheImpl) LoadPostStats(ctx context.Context, ids []int64) (map[int64]*post.PostStat, error) {
@@ -219,21 +278,45 @@ func (u *PostEntityCacheImpl) LoadPostStats(ctx context.Context, ids []int64) (m
 }
 
 // StorePostStat 写帖子统计列缓存（短 TTL + 抖动，计数高频变更保证有界陈旧）；
-// stat == nil 写空哨兵。id 为 key 依据。
+// stat == nil 写空哨兵。id 为 key 依据（单条写：内部转批量口）。
 func (u *PostEntityCacheImpl) StorePostStat(ctx context.Context, id int64, stat *post.PostStat) error {
-	key := postStatKey(id)
-	if stat == nil {
-		if err := u.c.Set(ctx, key, NullSentinel, u.nullTTL()); err != nil {
-			return fmt.Errorf("cache post stat set null sentinel %d: %w", id, err)
+	return u.StorePostStats(ctx, map[int64]*post.PostStat{id: stat})
+}
+
+// StorePostStats 批量写统计列缓存（MSet，一轮 RTT）：短 TTL + 抖动（粒度 = 本批，
+// 见 JitterTTL）；值为 nil 的按空哨兵处理（与 StorePostStat 同口径）。
+// 非原子：部分 key 写失败则整批报错，调用方 fail-open（下次回源自愈）。
+func (u *PostEntityCacheImpl) StorePostStats(ctx context.Context, stats map[int64]*post.PostStat) error {
+	pairs := make([]KVPair, 0, len(stats))
+	sentinelIDs := make([]int64, 0)
+
+	for _, id := range slices.Sorted(maps.Keys(stats)) { // 批内顺序确定（错误里的 key 可复现）
+		stat := stats[id]
+		if stat == nil {
+			sentinelIDs = append(sentinelIDs, id)
+			continue
 		}
-		return nil
+		val, err := json.Marshal(stat)
+		if err != nil {
+			return fmt.Errorf("cache post stat marshal %d: %w", id, err)
+		}
+		pairs = append(pairs, KVPair{Key: postStatKey(id), Val: val})
 	}
-	val, err := json.Marshal(stat)
-	if err != nil {
-		return fmt.Errorf("cache post stat marshal %d: %w", id, err)
+
+	if len(pairs) > 0 {
+		ttl := JitterTTL(u.statTTL(), defaults.CacheTTLJitter)
+		if err := u.c.MSet(ctx, pairs, ttl); err != nil {
+			return fmt.Errorf("cache post stat set %d stats: %w", len(pairs), err)
+		}
 	}
-	if err := u.c.Set(ctx, key, val, JitterTTL(u.statTTL(), defaults.CacheTTLJitter)); err != nil {
-		return fmt.Errorf("cache post stat set %d: %w", id, err)
+	if len(sentinelIDs) > 0 {
+		nulls := make([]KVPair, 0, len(sentinelIDs))
+		for _, id := range sentinelIDs {
+			nulls = append(nulls, KVPair{Key: postStatKey(id), Val: NullSentinel})
+		}
+		if err := u.c.MSet(ctx, nulls, u.nullTTL()); err != nil {
+			return fmt.Errorf("cache post stat set %d null sentinels: %w", len(nulls), err)
+		}
 	}
 	return nil
 }

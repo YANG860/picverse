@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"rednote/config"
@@ -27,6 +29,10 @@ type UserEntityCache interface {
 	LoadUserProfiles(ctx context.Context, ids []int64) (map[int64]*user.UserProfile, error)
 	// StoreUserProfile 写用户资料（只存非统计列）；profile == nil 时写空哨兵
 	StoreUserProfile(ctx context.Context, id int64, profile *user.UserProfile) error
+	// StoreUserProfiles 批量回填资料（MSet，一轮 RTT）：hits 写实体（只存非统计列）、
+	// missing 写空哨兵；hits 中值为 nil 的按空哨兵处理（与 StoreUserProfile 同口径）。
+	// 空入参零网络往返。
+	StoreUserProfiles(ctx context.Context, hits map[int64]*user.UserProfile, missing []int64) error
 	// DelUserProfiles 批量删除用户资料缓存（写后失效）
 	DelUserProfiles(ctx context.Context, ids []int64) error
 
@@ -34,15 +40,14 @@ type UserEntityCache interface {
 	LoadUserStats(ctx context.Context, ids []int64) (map[int64]*user.UserStat, error)
 	// StoreUserStat 写用户统计列；stat == nil 时写空哨兵
 	StoreUserStat(ctx context.Context, id int64, stat *user.UserStat) error
+	// StoreUserStats 批量写统计列（MSet，一轮 RTT）；值为 nil 的按空哨兵处理。
+	// 空入参零网络往返。
+	StoreUserStats(ctx context.Context, stats map[int64]*user.UserStat) error
 	// DelUserStats 批量删除用户统计列缓存（写后失效）
 	DelUserStats(ctx context.Context, ids []int64) error
 
 	// 简视图（UserBrief）不设独立缓存方法：与资料共用缓存与查询，由 UserProfile.ToBrief() 派生
 }
-
-// defaultStatTTL 统计列缓存 TTL 默认值：计数随 follow 事件高频变更，用短 TTL 保证有界陈旧。
-// config.CacheConfig 暂无 StatTTL 字段，待配置化后并入 profileTTL 同款 "config 其次 defaults" 链。
-const defaultStatTTL = time.Minute
 
 // UserEntityCacheImpl UserEntityCache 的 Cache 实现：key 构造 + JSON 序列化 +
 // 空哨兵（NullSentinel）+ TTL 抖动（JitterTTL），底层原语经 Cache 注入（Redis/Noop/测试替身）。
@@ -86,9 +91,12 @@ func (u *UserEntityCacheImpl) profileTTL() time.Duration {
 	return defaults.CacheProfileTTL
 }
 
-// statTTL 统计列缓存 TTL：config 暂无 StatTTL 字段，用短 TTL 常量兜底
+// statTTL 统计列缓存 TTL：config 其次 defaults（启用/禁用裁决在 repo 装配处，cache 层纯语义）
 func (u *UserEntityCacheImpl) statTTL() time.Duration {
-	return defaultStatTTL
+	if u.cfg.StatTTL > 0 {
+		return u.cfg.StatTTL
+	}
+	return defaults.CacheStatTTL
 }
 
 // nullTTL 空哨兵 TTL：config 其次 defaults
@@ -139,15 +147,62 @@ func (u *UserEntityCacheImpl) StoreUserProfile(ctx context.Context, id int64, pr
 		}
 		return nil
 	}
-	cached := *profile // 拷贝：不改动调用方实体
-	cached.Followers = 0
-	cached.Followings = 0
-	val, err := json.Marshal(&cached)
+	val, err := cacheProfileVal(profile)
 	if err != nil {
 		return fmt.Errorf("cache user profile marshal %d: %w", id, err)
 	}
 	if err := u.c.Set(ctx, key, val, JitterTTL(u.profileTTL(), defaults.CacheTTLJitter)); err != nil {
 		return fmt.Errorf("cache user profile set %d: %w", id, err)
+	}
+	return nil
+}
+
+// cacheProfileVal 序列化待缓存资料：计数列清零后入缓存（统计列由 stat 缓存/轻查提供），
+// 拷贝后清零，不改动调用方实体。
+func cacheProfileVal(profile *user.UserProfile) ([]byte, error) {
+	cached := *profile
+	cached.Followers = 0
+	cached.Followings = 0
+	return json.Marshal(&cached)
+}
+
+// StoreUserProfiles 批量回填资料（MSet，一轮 RTT）：hits 写实体（计数清零后入缓存）、
+// missing 写空哨兵（nullTTL）；hits 中值为 nil 按空哨兵处理（与 StoreUserProfile 同口径）。
+// 两组 TTL 不同 → 分两批提交；抖动粒度 = 本批（同批 shared TTL 让“同页 key 一起过期”成为
+// 一次批查询 + 一次批量回填的廉价形状，口径见 JitterTTL）。
+// 非原子：部分 key 写失败则整批报错，调用方 fail-open（下次回源自愈，不影响正确性）。
+func (u *UserEntityCacheImpl) StoreUserProfiles(ctx context.Context, hits map[int64]*user.UserProfile, missing []int64) error {
+	entityPairs := make([]KVPair, 0, len(hits))
+	sentinelIDs := make([]int64, 0, len(missing)+len(hits))
+	sentinelIDs = append(sentinelIDs, missing...)
+
+	for _, id := range slices.Sorted(maps.Keys(hits)) { // 批内顺序确定（错误里的 key 可复现）
+		profile := hits[id]
+		if profile == nil {
+			sentinelIDs = append(sentinelIDs, id)
+			continue
+		}
+		val, err := cacheProfileVal(profile)
+		if err != nil {
+			return fmt.Errorf("cache user profile marshal %d: %w", id, err)
+		}
+		entityPairs = append(entityPairs, KVPair{Key: userProfileKey(id), Val: val})
+	}
+
+	if len(entityPairs) > 0 {
+		ttl := JitterTTL(u.profileTTL(), defaults.CacheTTLJitter)
+		if err := u.c.MSet(ctx, entityPairs, ttl); err != nil {
+			return fmt.Errorf("cache user profile set %d profiles: %w", len(entityPairs), err)
+		}
+	}
+	if len(sentinelIDs) > 0 {
+		pairs := make([]KVPair, 0, len(sentinelIDs))
+		for _, id := range sentinelIDs {
+			pairs = append(pairs, KVPair{Key: userProfileKey(id), Val: NullSentinel})
+		}
+		if err := u.c.MSet(ctx, pairs, u.nullTTL()); err != nil {
+			return fmt.Errorf("cache user profile set %d null sentinels: %w", len(pairs), err)
+		}
 	}
 	return nil
 }
@@ -189,21 +244,45 @@ func (u *UserEntityCacheImpl) LoadUserStats(ctx context.Context, ids []int64) (m
 }
 
 // StoreUserStat 写用户统计列缓存（短 TTL + 抖动，计数高频变更保证有界陈旧）；
-// stat == nil 写空哨兵。id 为 key 依据。
+// stat == nil 写空哨兵。uid 为 key 依据（单条写：内部转批量口）。
 func (u *UserEntityCacheImpl) StoreUserStat(ctx context.Context, id int64, stat *user.UserStat) error {
-	key := userStatKey(id)
-	if stat == nil {
-		if err := u.c.Set(ctx, key, NullSentinel, u.nullTTL()); err != nil {
-			return fmt.Errorf("cache user stat set null sentinel %d: %w", id, err)
+	return u.StoreUserStats(ctx, map[int64]*user.UserStat{id: stat})
+}
+
+// StoreUserStats 批量写统计列缓存（MSet，一轮 RTT）：短 TTL + 抖动（粒度 = 本批，
+// 见 JitterTTL）；值为 nil 的按空哨兵处理（与 StoreUserStat 同口径）。
+// 非原子：部分 key 写失败则整批报错，调用方 fail-open（下次回源自愈）。
+func (u *UserEntityCacheImpl) StoreUserStats(ctx context.Context, stats map[int64]*user.UserStat) error {
+	pairs := make([]KVPair, 0, len(stats))
+	sentinelIDs := make([]int64, 0)
+
+	for _, id := range slices.Sorted(maps.Keys(stats)) { // 批内顺序确定（错误里的 key 可复现）
+		stat := stats[id]
+		if stat == nil {
+			sentinelIDs = append(sentinelIDs, id)
+			continue
 		}
-		return nil
+		val, err := json.Marshal(stat)
+		if err != nil {
+			return fmt.Errorf("cache user stat marshal %d: %w", id, err)
+		}
+		pairs = append(pairs, KVPair{Key: userStatKey(id), Val: val})
 	}
-	val, err := json.Marshal(stat)
-	if err != nil {
-		return fmt.Errorf("cache user stat marshal %d: %w", id, err)
+
+	if len(pairs) > 0 {
+		ttl := JitterTTL(u.statTTL(), defaults.CacheTTLJitter)
+		if err := u.c.MSet(ctx, pairs, ttl); err != nil {
+			return fmt.Errorf("cache user stat set %d stats: %w", len(pairs), err)
+		}
 	}
-	if err := u.c.Set(ctx, key, val, JitterTTL(u.statTTL(), defaults.CacheTTLJitter)); err != nil {
-		return fmt.Errorf("cache user stat set %d: %w", id, err)
+	if len(sentinelIDs) > 0 {
+		nulls := make([]KVPair, 0, len(sentinelIDs))
+		for _, id := range sentinelIDs {
+			nulls = append(nulls, KVPair{Key: userStatKey(id), Val: NullSentinel})
+		}
+		if err := u.c.MSet(ctx, nulls, u.nullTTL()); err != nil {
+			return fmt.Errorf("cache user stat set %d null sentinels: %w", len(nulls), err)
+		}
 	}
 	return nil
 }

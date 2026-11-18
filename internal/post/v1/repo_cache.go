@@ -5,56 +5,40 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"slices"
-	"strconv"
-	"strings"
 
+	"rednote/config"
 	postv1 "rednote/gen/go/post/v1"
 	media "rednote/internal/media/models"
 	models "rednote/internal/post/models"
 	"rednote/packages/cache"
 	"rednote/packages/logger"
 
-	"golang.org/x/sync/singleflight"
 	"gorm.io/datatypes"
 	"gorm.io/gen"
 	"gorm.io/gorm"
 )
 
-// dedupeIDs 按首次出现顺序去重
-func dedupeIDs(ids []int64) []int64 {
-	order := make([]int64, 0, len(ids))
-	seen := make(map[int64]struct{}, len(ids))
-	for _, id := range ids {
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		order = append(order, id)
-	}
-	return order
-}
-
-// CachedPostRepo PostRepository 的缓存装饰器（cache-aside），基于 cache.PostEntityCache
-// typed API 存取（key 构造/序列化/空哨兵/TTL 抖动均收口在 cache 层），与 CachedUserRepo 同一定式。
+// CachedPostRepo PostRepository 的缓存装饰器（cache-aside）。key 构造/序列化/空哨兵/TTL 抖动
+// 全部收口在 cache 层 typed API，本文件只管“读哪几层、写后失效谁”。
 //
-// 缓存范围：GetPosts 的非计数列（post:detail:{id}，单 key 粒度）——含正文、状态、
-// 媒体关联（Medias 随实体整体序列化，顺序按 sort_order 往返不丢）。
-//   - 统计列（like/favourite/comment/view）暂不缓存：GetPostStat 直通轻查，GetPosts
-//     组装时每回轻查覆盖计数——保证精确，互动事件（SyncPostStat/IncrPostViewCount）
-//     因此完全不触碰缓存。若后续统计轻查成为热点，再启用 PostEntityCache.Load/StorePostStat。
-//   - 状态（Status）入缓存：GetPosts 返回任意状态、BFF 按 PostCard 口径过滤，
-//     缓存不得只存可见帖。
-//   - 游标分页（GetPostBriefsByAuthor 等）与 GetPostMedias/GetPostCover 一期直通不缓存
-//     （key 组合爆炸/可从详情缓存派生）。
+// 缓存范围：GetPosts 的非计数列（post:detail:{id}，单 post 粒度），含正文/状态/媒体关联
+// （Medias 随实体整体往返，顺序不丢）。状态入缓存：BFF 按 PostCard 口径过滤，
+// 缓存不得只存可见帖。游标分页与 GetPostMedias/GetPostCover 一期直通。
 //
-// 一致性模型（与 CachedUserRepo 同口径）——接受有界陈旧：
-//   - 读：批量 cache-aside，部分命中只回源缺失；miss 回填空哨兵防穿透；
-//     并发相同回源经 singleflight 合并防击穿；TTL ±10% 抖动防雪崩（cache 层内建）
-//   - 写：方法返回后 DEL 对应 key（事务内写为 commit 前 DEL）；写后读通常即刻可见
-//   - 事务模式（WithTX/Transaction）：读直穿不缓存——事务内必须读到自身未提交的写入；
-//     写照常登记失效（Transaction 包装 fn 注入事务绑定装饰器，防失效旁路）
-//   - 降级：任何缓存错误只记 warn 并回源 DB，绝不因缓存故障失败业务请求。
+// 只读契约：返回实体是缓存/回源对象的浅拷贝，Medias（顺序即图片展示顺序）与 MetaData
+// 与共享对象同底——调用方禁止重排序/原地修改（见 assemblePosts 与 models.PostDetail）。
+//
+// 统计列（like/favourite/comment/view）分块缓存（post:stat:{id}，短 TTL；stat_ttl < 0 禁用）：
+// 计数读写频率与陈旧容忍度都和正文不同，且实体入库前计数已清零，故只有详情命中者需要统计列。
+//   - 回源即权威：回源行是全列查询、自带计数 → 回源者直接采信，不读也不写 stat 缓存
+//     （拿更旧的 stat 副本覆盖手上的精确值没有意义）；
+//   - 详情命中者：计数为零值 → stat 短 TTL 读缓存（miss 合并回源 + 回填），写路径零失效，
+//     陈旧 ≤ stat_ttl；空哨兵不用于 stat（stat 存在 ⟺ 行存在，“不存在”由 detail 层裁决）；
+//   - 契约：PostRepoImpl.GetPosts 必须返回统计列——改成列裁剪会让回源者计数静默变零。
+//
+// 一致性（有界陈旧）：并发同 key 回源经 cache.BatchFlight 合并（detail/stat 各一条 flight）；
+// 同一响应内回源者计数精确、命中者陈旧 ≤ stat_ttl；写后 DEL 对应 key（事务内为 commit 前）；
+// 事务模式（WithTX/Transaction）读直穿不缓存；任何缓存错误只 warn 并回源 DB，不失败业务。
 type CachedPostRepo struct {
 	inner PostRepository
 	c     cache.PostEntityCache
@@ -63,32 +47,51 @@ type CachedPostRepo struct {
 	// txMode 事务绑定模式：读直穿不缓存
 	txMode bool
 
-	// sf 合并并发相同回源（防击穿）
-	sf *singleflight.Group
+	// bfDetail 合并并发相同详情回源（防击穿：per-key 合并 + 并集批查），fetch 构造时绑定
+	bfDetail *cache.BatchFlight[int64, *models.PostDetail]
+
+	// bfStat 合并并发相同统计列回源（同 bfDetail；statCache 禁用时为 nil，读取前须过开关）
+	bfStat *cache.BatchFlight[int64, *models.PostStat]
+
+	// statCache 统计列缓存开关（cache.stat_ttl < 0 禁用 → 命中者直通轻查）
+	statCache bool
 }
 
 var _ PostRepository = (*CachedPostRepo)(nil)
 
 // NewCachedPostRepo 创建帖子存储库缓存装饰器。
 // TTL/序列化策略由 PostEntityCache 持有（config 其次 defaults），本装饰器不再关心。
-func NewCachedPostRepo(inner *PostRepoImpl, c cache.PostEntityCache, lf logger.LoggerFactory) *CachedPostRepo {
+// cfg 为 nil 时回源合并器用默认参数（config > defaults 分层在 cache.NewBatchFlight 内建）。
+func NewCachedPostRepo(inner *PostRepoImpl, c cache.PostEntityCache, cfg *config.Config, lf logger.LoggerFactory) *CachedPostRepo {
 	if inner == nil {
 		panic(fmt.Errorf("cache: inner post repo is required"))
 	}
 	if c == nil {
 		panic(fmt.Errorf("cache: cache client is required"))
 	}
-	return &CachedPostRepo{
+	r := &CachedPostRepo{
 		inner: inner,
 		c:     c,
 		log:   lf.GetLoggerOf("post.repo.cache"),
-		sf:    &singleflight.Group{},
+		// 统计列短 TTL 读缓存默认启用；stat_ttl < 0 禁用（回退直通轻查）
+		statCache: cfg == nil || cfg.Cache.StatTTL >= 0,
 	}
+	// 回源合并器：fetch 构造时绑定（方法值调用时读 r.inner，TX 克隆不触碰）
+	var cc config.CacheConfig
+	if cfg != nil {
+		cc = cfg.Cache
+	}
+	r.bfDetail = cache.NewBatchFlight(cc.FlightWorkers, cc.FlightBatchSize, cc.FlightTimeout, r.fetchDetailAndFill)
+	// 禁用 stat 缓存时不建 flight：否则常驻空转 worker 且无人收敛
+	if r.statCache {
+		r.bfStat = cache.NewBatchFlight(cc.FlightWorkers, cc.FlightBatchSize, cc.FlightTimeout, r.fetchStatAndFill)
+	}
+	return r
 }
 
 // bindInner 返回共享配置、替换 inner 并置 txMode 的副本（事务绑定用）
 func (r *CachedPostRepo) bindInner(inner PostRepository) *CachedPostRepo {
-	clone := *r // 结构体浅拷贝：sf 指针与 outer 共享，配置字段只读
+	clone := *r // 结构体浅拷贝：flight 指针与 outer 共享，配置字段只读
 	clone.inner = inner
 	clone.txMode = true
 	return &clone
@@ -116,8 +119,8 @@ func (r *CachedPostRepo) DB() *gorm.DB {
 // ==================== 读路径 ====================
 
 // GetPosts 批量获取帖子（cache-aside，按 post_id 粒度缓存非计数列）。
-// 统计列每次经 GetPostStat 轻查覆盖（暂不缓存，精确）。
-// 返回顺序按 postIDs 首次出现顺序去重排列（与 GetPosts 的部分命中语义一致）。
+// 统计列分层：回源者采信回源行计数（精确），详情命中者走 stat 短 TTL 读缓存（陈旧 ≤ stat_ttl）。
+// 返回顺序按 postIDs 首次出现顺序去重排列（支持部分命中：不存在/未命中的 id 不出现在结果里）。
 func (r *CachedPostRepo) GetPosts(ctx context.Context, postIDs []int64) ([]*models.PostDetail, error) {
 	// 空入参直通（空集不进缓存）；事务模式直通（须见事务内自身写入）
 	if len(postIDs) == 0 || r.txMode {
@@ -125,58 +128,150 @@ func (r *CachedPostRepo) GetPosts(ctx context.Context, postIDs []int64) ([]*mode
 	}
 
 	// 按首次出现顺序去重：MGET 不重复取同 key，返回集每 id 至多一条
-	order := dedupeIDs(postIDs)
+	order := cache.DedupeIDs(postIDs)
 
-	// 1) 批量读缓存；缓存错误降级为全量回源（fail-open）
-	byID := make(map[int64]*models.PostDetail, len(order))
-	missing := make([]int64, 0, len(order))
-	if cached, err := r.c.LoadPostDetails(ctx, order); err != nil {
-		r.log.Warn("cache load post details failed，降级全量回源", "error", err)
-		missing = append(missing, order...)
-	} else {
-		for _, id := range order {
-			p, ok := cached[id]
-			if !ok {
-				missing = append(missing, id) // miss 回源
-				continue
-			}
-			if p == nil {
-				continue // 空哨兵：确认不存在，不回源不回填
-			}
-			byID[id] = p
-		}
-	}
+	// 1) 读详情缓存（fail-open：缓存故障整批当未命中）
+	byID, hitIDs, missIDs := r.readDetailCache(ctx, order)
 
-	// 2) 缺失项回源并回填
-	if len(missing) > 0 {
-		fetched, err := r.fetchMissing(ctx, missing)
+	// 2) 未命中回源（BatchFlight 合并防击穿）+ 回填。回源行自带统计列 → 计数即权威，
+	//    这批 id 不再进步骤 3（见文件头「回源即权威」）
+	if len(missIDs) > 0 {
+		fetched, err := r.bfDetail.Do(ctx, missIDs)
 		if err != nil {
 			return nil, err
 		}
 		maps.Copy(byID, fetched)
 	}
 
-	// 3) 统计列暂不缓存：每次轻查 GetPostStat（精确，互动事件无需失效缓存）
-	statByID := make(map[int64]*models.PostStat, len(byID))
-	if len(byID) > 0 {
-		foundIDs := make([]int64, 0, len(order))
-		for _, id := range order {
-			if _, ok := byID[id]; ok {
-				foundIDs = append(foundIDs, id)
-			}
-		}
-		stats, err := r.inner.GetPostStat(ctx, foundIDs)
-		if err != nil {
-			return nil, err
-		}
-		for _, s := range stats {
-			statByID[s.ID] = s
-		}
+	// 3) 统计列只服务详情命中者（其缓存实体计数为零值）；缓存错误 fail-open、DB 错误上抛
+	statByID, err := r.loadStats(ctx, hitIDs)
+	if err != nil {
+		return nil, err
 	}
 
-	// 4) 按入参首次出现顺序组装。
-	// 拷贝后覆盖统计列：singleflight 合并窗口内共享的回源结果对象只读，
-	// 直接改写会与其它并发调用方构成数据竞态。
+	// 4) 保序组装（拷贝实体后覆盖统计列）
+	return assemblePosts(order, byID, statByID), nil
+}
+
+// readDetailCache 批量读详情缓存（fail-open）：返回命中实体、命中 id（保持输入序，供统计列取样）
+// 与未命中 id（miss → 回源）。空哨兵命中 = 确认不存在：不进任何集合，也不回填。
+func (r *CachedPostRepo) readDetailCache(ctx context.Context, ids []int64) (byID map[int64]*models.PostDetail, hitIDs, missIDs []int64) {
+	cached, err := r.c.LoadPostDetails(ctx, ids)
+	if err != nil {
+		// 降级全量回源：缓存不可用不得失败业务请求
+		r.log.Warn("cache load post details failed, fallback to full fetch", "count", len(ids), "error", err)
+		return cache.SplitHits[models.PostDetail](ids, nil)
+	}
+	return cache.SplitHits(ids, cached)
+}
+
+// fetchDetailAndFill 详情回源 + 回填（bfDetail fetch，构造时绑定）：fetchIDs 为并集，
+// 命中写实体、缺失写空哨兵；只有批执行者回填（合并掉的等待者不重复写）。
+func (r *CachedPostRepo) fetchDetailAndFill(ctx context.Context, fetchIDs []int64) (map[int64]*models.PostDetail, error) {
+	posts, err := r.inner.GetPosts(ctx, fetchIDs)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[int64]*models.PostDetail, len(posts))
+	for _, p := range posts {
+		byID[p.ID] = p
+	}
+	r.fillDetailCache(ctx, fetchIDs, byID)
+	return byID, nil
+}
+
+// fillDetailCache 回填详情缓存（批量 MSet，一轮 RTT）：命中写实体（cache 层只存非计数列、
+// TTL 自带抖动）、缺失写空哨兵（StorePostDetails 内部按 TTL 分两批）。
+// 回填失败只记 warn：缓存缺失即下次回源，不影响正确性。
+func (r *CachedPostRepo) fillDetailCache(ctx context.Context, ids []int64, byID map[int64]*models.PostDetail) {
+	hits := make(map[int64]*models.PostDetail, len(byID))
+	missing := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		p, ok := byID[id]
+		if !ok {
+			missing = append(missing, id)
+			continue
+		}
+		hits[id] = p
+	}
+	if err := r.c.StorePostDetails(ctx, hits, missing); err != nil {
+		r.log.Warn("cache store post details failed, fallback to next fetch",
+			"hits", len(hits), "missing", len(missing), "error", err)
+	}
+}
+
+// loadStats 统计列读取：只服务详情命中者（回源者计数由回源行提供，不走这里）。
+//   - statCache 启用：短 TTL 读缓存 → miss 经 bfStat 合并回源 + 回填（写路径不失效，陈旧 ≤ stat_ttl）；
+//   - 禁用（stat_ttl < 0）：DB 轻查直通（历史行为）。
+//
+// 缓存错误一律 fail-open 降级轻查（warn）；轻查错误是真错误，上抛。
+func (r *CachedPostRepo) loadStats(ctx context.Context, ids []int64) (map[int64]*models.PostStat, error) {
+	if len(ids) == 0 {
+		// 整页回源：统计列已随回源行到位 → 零缓存访问、零轻查
+		return nil, nil
+	}
+	if !r.statCache {
+		return r.queryStats(ctx, ids)
+	}
+	byID, missIDs := r.readStatCache(ctx, ids)
+	if len(missIDs) == 0 {
+		return byID, nil
+	}
+	fetched, err := r.bfStat.Do(ctx, missIDs)
+	if err != nil {
+		return nil, err
+	}
+	maps.Copy(byID, fetched)
+	return byID, nil
+}
+
+// readStatCache 批量读统计列缓存（fail-open）：返回命中值与未命中 id。
+// 空哨兵（正常不出现）按无值处理，不回源。
+func (r *CachedPostRepo) readStatCache(ctx context.Context, ids []int64) (byID map[int64]*models.PostStat, missIDs []int64) {
+	cached, err := r.c.LoadPostStats(ctx, ids)
+	if err != nil {
+		r.log.Warn("cache load post stats failed, fallback to full query", "count", len(ids), "error", err)
+		cached = nil // 降级全量轻查
+	}
+	byID, _, missIDs = cache.SplitHits(ids, cached)
+	return byID, missIDs
+}
+
+// queryStats 统计列 DB 轻查（列裁剪：id + 4 个计数列）为 id→stat。
+func (r *CachedPostRepo) queryStats(ctx context.Context, ids []int64) (map[int64]*models.PostStat, error) {
+	stats, err := r.inner.GetPostStat(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[int64]*models.PostStat, len(stats))
+	for _, s := range stats {
+		byID[s.ID] = s
+	}
+	return byID, nil
+}
+
+// fetchStatAndFill 统计列回源 + 回填（bfStat fetch，构造时绑定）。
+// 只写命中值、不写空哨兵（stat 存在 ⟺ 行存在，“不存在”由 detail 层裁决）；
+// 回填走批量口（MSet 一轮 RTT），失败只记 warn（下次回源 refresh）。
+func (r *CachedPostRepo) fetchStatAndFill(ctx context.Context, fetchIDs []int64) (map[int64]*models.PostStat, error) {
+	byID, err := r.queryStats(ctx, fetchIDs)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.c.StorePostStats(ctx, byID); err != nil {
+		r.log.Warn("cache store post stats failed", "count", len(byID), "error", err)
+	}
+	return byID, nil
+}
+
+// assemblePosts 按 order 保序组装：跳过未命中/空哨兵；统计列以 stat 覆盖。
+// 回源者本就带着权威计数（statByID 无此 id，保持原值）；命中者的实体计数是零值，
+// 只有 stat 也缺失（极端降级）才会退化成 0，属可接受的降级而非错误。
+//
+// 只读契约：返回的实体是 byID 对象的浅拷贝（飞行合并窗口内该对象对并发调用方共享），
+// 因此 Medias/MetaData 与共享对象同底。Medias 顺序即图片展示顺序（按 sort_order 加载
+// 且缓存往返保序）——**禁止调用方重排序/原地修改元素**，否则会与其他并发请求互相污染。
+func assemblePosts(order []int64, byID map[int64]*models.PostDetail, statByID map[int64]*models.PostStat) []*models.PostDetail {
 	posts := make([]*models.PostDetail, 0, len(order))
 	for _, id := range order {
 		p, ok := byID[id]
@@ -192,54 +287,7 @@ func (r *CachedPostRepo) GetPosts(ctx context.Context, postIDs []int64) ([]*mode
 		}
 		posts = append(posts, &out)
 	}
-	return posts, nil
-}
-
-// fetchMissing 回源查询缺失 id 并回填缓存。
-// singleflight 按有序 id 集合合并并发相同回源（同一热 key 过期后的击穿流量只落库一次）；
-// 合并窗口内共享结果对象，调用方按只读使用（组装时拷贝，见 GetPosts 步骤 4）。
-func (r *CachedPostRepo) fetchMissing(ctx context.Context, ids []int64) (map[int64]*models.PostDetail, error) {
-	sorted := append([]int64(nil), ids...)
-	slices.Sort(sorted)
-	strs := make([]string, len(sorted))
-	for i, id := range sorted {
-		strs[i] = strconv.FormatInt(id, 10)
-	}
-
-	v, err, _ := r.sf.Do("d:"+strings.Join(strs, ","), func() (any, error) {
-		posts, err := r.inner.GetPosts(ctx, ids)
-		if err != nil {
-			return nil, err
-		}
-		byID := make(map[int64]*models.PostDetail, len(posts))
-		for _, p := range posts {
-			byID[p.ID] = p
-		}
-		r.fillCache(ctx, ids, byID)
-		return byID, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return v.(map[int64]*models.PostDetail), nil
-}
-
-// fillCache 回填缓存：命中的写实体（cache 层只存非计数列、TTL 自带抖动），
-// 缺失的写空哨兵（StorePostDetail(ctx, id, nil)）。
-// 回填失败只记 warn：缓存缺失即下次回源，不影响正确性。
-func (r *CachedPostRepo) fillCache(ctx context.Context, ids []int64, byID map[int64]*models.PostDetail) {
-	for _, id := range ids {
-		p, ok := byID[id]
-		if !ok {
-			if err := r.c.StorePostDetail(ctx, id, nil); err != nil {
-				r.log.Warn("cache store null sentinel failed", "post_id", id, "error", err)
-			}
-			continue
-		}
-		if err := r.c.StorePostDetail(ctx, id, p); err != nil {
-			r.log.Warn("cache store post detail failed", "post_id", id, "error", err)
-		}
-	}
+	return posts
 }
 
 // ==================== 写路径（失效登记） ====================
@@ -249,7 +297,7 @@ func (r *CachedPostRepo) fillCache(ctx context.Context, ids []int64, byID map[in
 // 失效失败同样靠 TTL 兜底，不阻断业务。
 func (r *CachedPostRepo) invalidate(ctx context.Context, ids ...int64) {
 	if err := r.c.DelPostDetails(ctx, ids); err != nil {
-		r.log.Warn("cache invalidate failed，降级靠 TTL 兜底", "post_ids", ids, "error", err)
+		r.log.Warn("cache invalidate failed, fallback to ttl", "post_ids", ids, "error", err)
 	}
 }
 
@@ -343,30 +391,31 @@ func (r *CachedPostRepo) SetPostDeleted(ctx context.Context, postID int64) (gen.
 	return info, err
 }
 
-// UpdatePostLikeCount 更新点赞数（不触碰缓存：统计列不在缓存实体内，计数经 GetPostStat 实时覆盖）
+// UpdatePostLikeCount 更新点赞数（不触碰缓存：统计列不入详情缓存块，写路径不失效，
+// 读侧陈旧 ≤ cache.stat_ttl）
 func (r *CachedPostRepo) UpdatePostLikeCount(ctx context.Context, postID int64, count int64) (gen.ResultInfo, error) {
 	return r.inner.UpdatePostLikeCount(ctx, postID, count)
 }
 
-// UpdatePostFavouriteCount 更新收藏数（不触碰缓存：同 UpdatePostLikeCount）
+// UpdatePostFavouriteCount 更新收藏数（不触碰缓存：同 UpdatePostLikeCount，陈旧 ≤ stat_ttl）
 func (r *CachedPostRepo) UpdatePostFavouriteCount(ctx context.Context, postID int64, count int64) (gen.ResultInfo, error) {
 	return r.inner.UpdatePostFavouriteCount(ctx, postID, count)
 }
 
-// UpdatePostCommentCount 更新评论数（不触碰缓存：同 UpdatePostLikeCount）
+// UpdatePostCommentCount 更新评论数（不触碰缓存：同 UpdatePostLikeCount，陈旧 ≤ stat_ttl）
 func (r *CachedPostRepo) UpdatePostCommentCount(ctx context.Context, postID int64, count int64) (gen.ResultInfo, error) {
 	return r.inner.UpdatePostCommentCount(ctx, postID, count)
 }
 
-// UpdatePostViewCount 更新浏览数（不触碰缓存：同 UpdatePostLikeCount）
+// UpdatePostViewCount 更新浏览数（不触碰缓存：同 UpdatePostLikeCount，陈旧 ≤ stat_ttl）
 func (r *CachedPostRepo) UpdatePostViewCount(ctx context.Context, postID int64, count int64) (gen.ResultInfo, error) {
 	return r.inner.UpdatePostViewCount(ctx, postID, count)
 }
 
 // ==================== 直通路径（不缓存） ====================
 
-// GetPostStat 直通（统计列暂不缓存：每次 DB 轻查保证精确；
-// 若轻查成为热点，再启用 PostEntityCache.Load/StorePostStat 升级写回式缓存）
+// GetPostStat 直通（恒走 DB 轻查、绕过 stat 缓存）：需要精确计数或不适用 GetPosts
+// 统计口径（回源者采信回源行 / 命中者读 stat 缓存）时用本方法
 func (r *CachedPostRepo) GetPostStat(ctx context.Context, postIDs []int64) ([]*models.PostStat, error) {
 	return r.inner.GetPostStat(ctx, postIDs)
 }
@@ -412,7 +461,8 @@ func (r *CachedPostRepo) GetPostCover(ctx context.Context, postIDs []int64) ([]*
 }
 
 // ==================== 互动（点赞/收藏明细） ====================
-// 全部直通转发：明细行不入缓存，计数列不缓存（同 UpdatePostLikeCount 口径），无失效需求
+// 全部直通转发：明细行不入缓存；计数列走 stat 短 TTL 读缓存、写路径不失效
+// （同 UpdatePostLikeCount 口径），故无失效登记需求
 
 // CreateLike 直通（幂等插入）
 func (r *CachedPostRepo) CreateLike(ctx context.Context, postID int64, userID int64) (bool, error) {
@@ -439,7 +489,7 @@ func (r *CachedPostRepo) CountFavouritesByUser(ctx context.Context, userID int64
 	return r.inner.CountFavouritesByUser(ctx, userID)
 }
 
-// IncPostLikeCount 直通（同 UpdatePostLikeCount：计数不触碰缓存）
+// IncPostLikeCount 直通（同 UpdatePostLikeCount：计数不入详情缓存、写路径不失效）
 func (r *CachedPostRepo) IncPostLikeCount(ctx context.Context, postID int64) (gen.ResultInfo, error) {
 	return r.inner.IncPostLikeCount(ctx, postID)
 }
@@ -535,4 +585,14 @@ func (r *CachedPostRepo) ListReplies(ctx context.Context, rootID int64, before i
 // DeletePostComments 直通（物理回收不触碰缓存）
 func (r *CachedPostRepo) DeletePostComments(ctx context.Context, postID int64) (gen.ResultInfo, error) {
 	return r.inner.DeletePostComments(ctx, postID)
+}
+
+// DeletePostLikes 直通（点赞明细不入缓存，回收无需登记失效）
+func (r *CachedPostRepo) DeletePostLikes(ctx context.Context, postID int64) (gen.ResultInfo, error) {
+	return r.inner.DeletePostLikes(ctx, postID)
+}
+
+// DeletePostFavourites 直通（收藏明细不入缓存，同 DeletePostLikes）
+func (r *CachedPostRepo) DeletePostFavourites(ctx context.Context, postID int64) (gen.ResultInfo, error) {
+	return r.inner.DeletePostFavourites(ctx, postID)
 }

@@ -124,6 +124,8 @@ func (r *UserRepoImpl) UpdateUserAvatar(ctx context.Context, id int64, avatar *m
 }
 
 // GetUserProfiles 根据用户ID获取用户资料
+// 契约：必须返回统计列（模板全列 Find）。缓存装饰器对回源行的计数直接采信
+// （回源即权威），改成列裁剪会使缓存路径的计数静默变零值。
 func (r *UserRepoImpl) GetUserProfiles(ctx context.Context, uids []int64) ([]*models.UserProfile, error) {
 	profiles, err := r.q.UserProfile.WithContext(ctx).
 		Where(r.q.UserProfile.ID.In(uids...)).Find()

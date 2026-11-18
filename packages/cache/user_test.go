@@ -56,6 +56,14 @@ func (f *flakyCache) Set(ctx context.Context, key string, val []byte, ttl time.D
 	return f.Client.Set(ctx, key, val, ttl)
 }
 
+// MSet 写错误注入：实体缓存回填走批量口，故须同时覆写批量口
+func (f *flakyCache) MSet(ctx context.Context, pairs []cache.KVPair, ttl time.Duration) error {
+	if f.setErr != nil {
+		return f.setErr
+	}
+	return f.Client.MSet(ctx, pairs, ttl)
+}
+
 func (f *flakyCache) Del(ctx context.Context, keys ...string) error {
 	if f.delErr != nil {
 		return f.delErr
@@ -119,6 +127,54 @@ func TestStoreLoadUserProfile_全字段往返_统计列清零(t *testing.T) {
 	// 入缓存的清零动作不得改动调用方实体
 	assert.Equal(t, int64(5), profile.Followers)
 	assert.Equal(t, int64(7), profile.Followings)
+}
+
+func TestStoreUserProfiles_批量回填_两批TTL与计数清零(t *testing.T) {
+	tc := testredis.New()
+	ec := cache.NewUserEntityCache(tc, &config.Config{
+		Cache: config.CacheConfig{ProfileTTL: time.Hour, NullTTL: time.Minute},
+	})
+	ctx := context.Background()
+
+	hits := map[int64]*user.UserProfile{3001: newProfile(3001), 3002: newProfile(3002)}
+	require.NoError(t, ec.StoreUserProfiles(ctx, hits, []int64{3003}))
+
+	// 实体一批 + 空哨兵一批 = 两次 MSet；key 数：2 实体 + 1 哨兵
+	assert.Equal(t, 2, tc.MSets, "实体与空哨兵 TTL 不同，分两批提交")
+	assert.Equal(t, 3, tc.Sets)
+
+	got, err := ec.LoadUserProfiles(ctx, []int64{3001, 3002, 3003})
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	for _, id := range []int64{3001, 3002} {
+		require.NotNil(t, got[id])
+		assert.Zero(t, got[id].Followers, "入缓存统计列应清零")
+		assert.Zero(t, got[id].Followings)
+		assert.Equal(t, "小红薯", got[id].Name)
+		require.NotNil(t, got[id].Avatar, "嵌入头像随实体一并回填")
+	}
+	assert.Nil(t, got[3003], "missing 写空哨兵")
+
+	// 调用方实体不被修改
+	assert.Equal(t, int64(5), hits[3001].Followers)
+
+	t.Run("hits 中 nil 值按空哨兵处理", func(t *testing.T) {
+		tc := testredis.New()
+		ec := cache.NewUserEntityCache(tc, nil)
+		require.NoError(t, ec.StoreUserProfiles(ctx, map[int64]*user.UserProfile{77: nil}, nil))
+		got, err := ec.LoadUserProfiles(ctx, []int64{77})
+		require.NoError(t, err)
+		require.Contains(t, got, int64(77))
+		assert.Nil(t, got[77])
+	})
+
+	t.Run("空入参零网络往返", func(t *testing.T) {
+		tc := testredis.New()
+		ec := cache.NewUserEntityCache(tc, nil)
+		require.NoError(t, ec.StoreUserProfiles(ctx, nil, nil))
+		assert.Zero(t, tc.MSets)
+		assert.Zero(t, tc.Sets)
+	})
 }
 
 func TestStoreUserProfile_Nil写空哨兵_与实体互相覆盖(t *testing.T) {
@@ -203,6 +259,36 @@ func TestStoreLoadUserStat_全字段往返与哨兵(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, got, int64(3002))
 	assert.Nil(t, got[3002], "空哨兵应映射为 nil")
+}
+
+func TestStoreUserStats_批量写入_一轮MSet(t *testing.T) {
+	tc := testredis.New()
+	ec := cache.NewUserEntityCache(tc, nil)
+	ctx := context.Background()
+
+	stats := map[int64]*user.UserStat{
+		3001: {ID: 3001, Followers: 5, Followings: 7},
+		3002: {ID: 3002, Followers: 8, Followings: 9},
+		3003: nil, // 按空哨兵处理
+	}
+	require.NoError(t, ec.StoreUserStats(ctx, stats))
+	assert.Equal(t, 2, tc.MSets, "实体一批 + 空哨兵一批")
+	assert.Equal(t, 3, tc.Sets)
+
+	got, err := ec.LoadUserStats(ctx, []int64{3001, 3002, 3003})
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	assert.Equal(t, stats[3001], got[3001])
+	assert.Equal(t, stats[3002], got[3002])
+	assert.Nil(t, got[3003], "nil 值应写为空哨兵")
+
+	t.Run("空入参零网络往返", func(t *testing.T) {
+		tc := testredis.New()
+		ec := cache.NewUserEntityCache(tc, nil)
+		require.NoError(t, ec.StoreUserStats(ctx, nil))
+		assert.Zero(t, tc.MSets)
+		assert.Zero(t, tc.Sets)
+	})
 }
 
 // ---------- 失效（Del） ----------
