@@ -18,7 +18,6 @@ import (
 const taskWaitInterval = 50 * time.Millisecond
 
 // PostsIndex 帖子搜索索引名（posts 索引，discover 服务维护）
-// TODO(索引重建)：与 defaults.MeiliIndexPosts 存在重复，重建索引任务一并收敛
 const PostsIndex = "posts"
 
 // MeiliRepo Meilisearch 工具仓库

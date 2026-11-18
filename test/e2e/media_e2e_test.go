@@ -47,7 +47,7 @@ const (
 	defaultS3Bucket   = "rednote"
 
 	pollInterval      = 5 * time.Second
-	processTimeout    = 2 * time.Minute // UploadMsgDelay 15s + 变体处理时间
+	processTimeout    = 2 * time.Minute // 上传确认（退避重投）+ 变体处理余量
 	presignPutTimeout = 30 * time.Second
 )
 

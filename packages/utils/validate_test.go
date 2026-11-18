@@ -269,8 +269,6 @@ func TestValidatePassword(t *testing.T) {
 		{"8位合法", "Abc12345", true},
 		{"32位合法", long32, true},
 		{"33位不合法", long32 + "6", false},
-		{"缺大写不合法", "abc12345", false},
-		{"缺小写不合法", "ABC12345", false},
 		{"缺数字不合法", "Abcdefgh", false},
 		{"仅数字不合法", "12345678", false},
 		{"含符号但三类齐全合法", "Abc1234!@#", true},

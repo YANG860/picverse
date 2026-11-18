@@ -21,15 +21,29 @@
 
 | 维度 | 说明 |
 | --- | --- |
-| 类型 | 黑盒端到端：仅通过 ConnectRPC 调用已部署服务，不依赖内部实现；现有用例 `TestMediaServiceE2E`（上传→处理→分页→封禁）、`TestAuthServiceE2E`（注册→登录→换发→登出）、`TestPostServiceE2E`（建草稿→改文本/媒体→发布→可见性→统计→删除/封禁） |
+| 类型 | 黑盒端到端：仅通过 ConnectRPC 调用已部署服务，不依赖内部实现；现有用例 `TestMediaServiceE2E`（上传→处理→分页→封禁）、`TestAuthServiceE2E`（注册→登录→换发→登出）、`TestPostServiceE2E`（建草稿→改文本/媒体→发布→可见性→统计→删除/封禁）、`TestUserServiceE2E`、`TestDiscoverFeedE2E`（发帖→扇出→关注流/热榜/推荐见）、`TestBFFFeedE2E`（面客 PostCard + 会话注入 + seen 去重） |
 | 目的 | 验证部署后的真实链路：服务装配、鉴权拦截器、DB / MinIO / NATS 全链路协作 |
-| 依赖 | 已部署的服务进程、真实 PostgreSQL / MinIO / NATS；地址用 `AUTH_E2E_ADDR`、`MEDIA_E2E_ADDR`、`MEDIA_E2E_S3_*`、`POST_E2E_ADDR` 配置，服务不可达时自动跳过 |
+| 依赖 | 已部署的服务进程、真实 PostgreSQL / MinIO / NATS；地址用 `AUTH_E2E_ADDR`、`MEDIA_E2E_ADDR`、`MEDIA_E2E_S3_*`、`POST_E2E_ADDR`、`USER_E2E_ADDR`、`DISCOVER_E2E_ADDR`、`BFF_E2E_ADDR` 配置，服务不可达时自动跳过 |
 
 代码：`test/e2e/`。对已部署的服务做黑盒测试，不依赖内部实现，仅通过 ConnectRPC 访问；
 服务不可达时自动跳过，便于本地/CI 按需运行。
 共享工具集中在 `test/e2e/common_test.go`：地址解析（`e2eAddr`，各服务 `*_E2E_ADDR` 环境变量覆盖）、
-可达性探测（`mustReachable`）、业务错误断言（`assertBizErr`）与测试数据构造（`e2eID` / `e2eMediaFile`）；
-各服务用例文件只保留自身链路步骤与专属 helper。
+可达性探测（`mustReachable`）、业务错误断言（`assertBizErr`）与测试数据构造（`e2eID` / `e2eMediaFile` /
+`activeMediaFiles`）；各服务用例文件只保留自身链路步骤与专属 helper。
+
+**媒体前置（发布用例的硬约束）**：`audit_post` 会校验帖内媒体资产全部 `ACTIVE` 才允许发布，
+不可用即回退 `DRAFT`。因此凡是会走到"发布"的用例（post / discover / bff）必须用 `activeMediaFiles`
+经 media 服务**真上传**并等到 `ACTIVE`（`e2eMediaFile` 伪造 asset_id 只适用于不经过审核的路径，
+如用户头像、只建草稿/删帖回收）；这些用例要求 media + consumer + poller 一并部署，单个用例约 20~70s。
+
+**共享环境的断言口径**（测试库会累积历史数据，断言必须只依赖确定性语义）：
+
+| 断言对象 | 口径 |
+| --- | --- |
+| 热榜 | 断言"入池"（按 offset 翻页扫池可见），不断言"前十名"——池含 7d 窗口历史帖，新帖热度≈0 排不进前列 |
+| 推荐流 | 只断言 seen 去重与页间不重复；探索位是随机采样，"首轮必见本轮新帖"在数百条池内不成立（仅日志记录） |
+| 统计列（`SyncPostStat`） | 计数列走短 TTL 读缓存且写路径不失效：面客读取按"≤ `stat_ttl`（默认 1m）内收敛"轮询验证，不断言写后立即读到新值 |
+| 列表游标 | 只有满页才返回游标，半页/空页游标为空（用 `Cursor{Limit:1}` 验证满页分支） |
 
 
 前置：对应服务已部署；auth e2e 需 PostgreSQL 中

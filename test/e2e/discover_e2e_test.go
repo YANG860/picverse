@@ -123,14 +123,15 @@ func TestDiscoverFeedE2E(t *testing.T) {
 	}
 
 	// ---- 1. Arrange：author 发 3 帖（真实走 outbox → consumer 扇出/入池）----
+	// 媒体必须真上传到 ACTIVE：audit_post 会校验帖内媒体资产，伪造 asset_id 会被回退 DRAFT、扇出永不发生
+	feedMedias := activeMediaFiles(t, 3, now+20)
 	newPostIDs := make([]string, 0, 3)
 	for i := 0; i < 3; i++ {
-		asset := e2eID(now + 10 + int64(i))
 		draft, err := postClient.CreateDraft(ctx, connect.NewRequest(&postv1.CreateDraftRequest{
 			Uid:      authorUID,
 			Title:    "e2e discover feed post " + e2eID(int64(i)),
 			FullText: "e2e discover feed full text",
-			Medias:   []*mediav1.MediaFile{e2eMediaFile(e2eID(now+20+int64(i)), asset, "e2e/feed.jpg")},
+			Medias:   []*mediav1.MediaFile{feedMedias[i]},
 		}))
 		require.NoError(t, err, "CreateDraft RPC")
 		require.False(t, draft.Msg.GetFail(), "创建草稿业务失败: %v", draft.Msg.GetErr())

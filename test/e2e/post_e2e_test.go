@@ -1,6 +1,7 @@
 // post 服务黑盒端到端测试：CreateDraft → UpdateDraft → UpdateDraftMedias → PublishDraft → 可见性 → 删除/封禁。
 //
-// 前置条件：post 服务已部署（依赖 PostgreSQL / NATS JetStream）。
+// 前置条件：post / media 服务 + consumer + poller 已部署（依赖 PostgreSQL / NATS JetStream / MinIO）。
+// 发布用例必须用真上传的 ACTIVE 媒体：audit_post 会校验帖内媒体资产 ACTIVE，否则回退 DRAFT。
 // 运行：
 //
 //	go test ./test/e2e/... -run TestPostServiceE2E -count=1          # 默认 http://localhost:8082
@@ -57,10 +58,11 @@ func TestPostServiceE2E(t *testing.T) {
 	now := time.Now().UnixNano()
 	authorUID := e2eID(now)
 	otherUID := e2eID(now + 1)
-	assetA := e2eID(now + 2)
-	assetB := e2eID(now + 3)
-	mediaA := e2eMediaFile(e2eID(now+4), assetA, "e2e/obj-a.jpg")
-	mediaB := e2eMediaFile(e2eID(now+5), assetB, "e2e/obj-b.jpg")
+
+	// 媒体必须真实上传并处理到 ACTIVE（~15s，并发）：伪造 asset_id 会在发布审核被判不可用而回退 DRAFT
+	uploads := activeMediaFiles(t, 2, now+4)
+	mediaA, mediaB := uploads[0], uploads[1]
+	assetA, assetB := mediaA.GetAssetId(), mediaB.GetAssetId()
 
 	// ---- 1. 创建草稿 ----
 	create, err := client.CreateDraft(ctx, connect.NewRequest(&postv1.CreateDraftRequest{
@@ -95,13 +97,13 @@ func TestPostServiceE2E(t *testing.T) {
 	// 全字段检测：首张即封面，媒体关联字段完整落库
 	require.Len(t, draft.GetMedias(), 1)
 	gotMedia := draft.GetMedias()[0]
-	assert.Equal(t, "e2e/obj-a.jpg", gotMedia.GetObjKey(), "首张即封面，媒体应落库")
+	assert.Equal(t, mediaA.GetObjKey(), gotMedia.GetObjKey(), "首张即封面，媒体应落库")
 	assert.Equal(t, assetA, gotMedia.GetAssetId())
 	assert.Equal(t, mediaA.GetBase().GetId(), gotMedia.GetBase().GetId())
 	assert.Equal(t, mediav1.MediaFileType_MEDIA_FILE_TYPE_ORIGIN, gotMedia.GetType())
-	assert.Equal(t, "rednote", gotMedia.GetBucket())
+	assert.Equal(t, mediaA.GetBucket(), gotMedia.GetBucket())
 	assert.Equal(t, mediav1.MediaFormat_MEDIA_FORMAT_JPG, gotMedia.GetMeta().GetFormat())
-	assert.Equal(t, int64(1024), gotMedia.GetMeta().GetSizeBytes())
+	assert.Equal(t, mediaA.GetMeta().GetSizeBytes(), gotMedia.GetMeta().GetSizeBytes())
 	t.Logf("创建草稿 post_id=%s author=%s", postID, authorUID)
 
 	// ---- 2. 部分更新：只改 title，未传的 full_text 不变 ----
@@ -127,7 +129,7 @@ func TestPostServiceE2E(t *testing.T) {
 	require.NoError(t, err, "UpdateDraftMedias RPC")
 	require.False(t, medias.Msg.GetFail(), "更新媒体业务失败: %v", medias.Msg.GetErr())
 	require.Len(t, medias.Msg.GetPost().GetMedias(), 1)
-	assert.Equal(t, "e2e/obj-b.jpg", medias.Msg.GetPost().GetMedias()[0].GetObjKey(), "媒体应被全量替换")
+	assert.Equal(t, mediaB.GetObjKey(), medias.Msg.GetPost().GetMedias()[0].GetObjKey(), "媒体应被全量替换")
 	assert.Equal(t, []string{assetA}, medias.Msg.GetOldAssetIds(), "应返回被替换的旧资产 ID")
 
 	// ---- 4/5. 可见性：DRAFT 仅作者可见 ----
@@ -147,7 +149,7 @@ func TestPostServiceE2E(t *testing.T) {
 	assert.Equal(t, authorUID, viewed.GetAuthorId())
 	assert.Equal(t, postv1.PostStatus_POST_STATUS_DRAFT, viewed.GetStatus())
 	require.Len(t, viewed.GetMedias(), 1)
-	assert.Equal(t, "e2e/obj-b.jpg", viewed.GetMedias()[0].GetObjKey(), "应展示替换后的媒体")
+	assert.Equal(t, mediaB.GetObjKey(), viewed.GetMedias()[0].GetObjKey(), "应展示替换后的媒体")
 	assert.Equal(t, assetB, viewed.GetMedias()[0].GetAssetId())
 
 	otherView, err := client.ViewPost(ctx, connect.NewRequest(&postv1.ViewPostRequest{
@@ -168,14 +170,27 @@ func TestPostServiceE2E(t *testing.T) {
 	assert.Equal(t, postID, brief.GetPostId())
 	assert.Equal(t, "e2e draft title v2", brief.GetTitle())
 	assert.Equal(t, authorUID, brief.GetAuthorId())
-	assert.Equal(t, "e2e/obj-b.jpg", brief.GetCover().GetObjKey(), "cover 应为首张媒体")
+	assert.Equal(t, mediaB.GetObjKey(), brief.GetCover().GetObjKey(), "cover 应为首张媒体")
 	assert.NotEmpty(t, brief.GetCreatedAt())
 	require.NotNil(t, brief.GetStat(), "统计字段应存在")
 	assert.Zero(t, brief.GetStat().GetLikeCount())
 	assert.Zero(t, brief.GetStat().GetFavouriteCount())
 	assert.Zero(t, brief.GetStat().GetCommentCount())
 	assert.Zero(t, brief.GetStat().GetViewCount())
-	assert.NotNil(t, mine.Msg.GetCursor(), "有数据时应返回游标")
+	// 分页口径：只有满页才返回游标（半页/空页返回空游标，调用方按空列表终止翻页）
+	assert.Nil(t, mine.Msg.GetCursor(), "默认页大小 20、仅 1 条 → 半页不返回游标")
+	fullPage, err := client.ViewPostByAuthor(ctx, connect.NewRequest(&postv1.ViewPostByAuthorRequest{
+		ViewerId: authorUID, AuthorId: authorUID, Cursor: &commonv1.Cursor{Limit: 1},
+	}))
+	require.NoError(t, err, "ViewPostByAuthor(满页) RPC")
+	require.Len(t, fullPage.Msg.GetPosts(), 1)
+	require.NotNil(t, fullPage.Msg.GetCursor(), "满页应返回游标")
+	nextPage, err := client.ViewPostByAuthor(ctx, connect.NewRequest(&postv1.ViewPostByAuthorRequest{
+		ViewerId: authorUID, AuthorId: authorUID, Cursor: fullPage.Msg.GetCursor(),
+	}))
+	require.NoError(t, err, "ViewPostByAuthor(续翻) RPC")
+	assert.Empty(t, nextPage.Msg.GetPosts(), "续翻到底应返回空页")
+	assert.Nil(t, nextPage.Msg.GetCursor(), "空页返回空游标")
 
 	theirs, err := client.ViewPostByAuthor(ctx, connect.NewRequest(&postv1.ViewPostByAuthorRequest{
 		ViewerId: otherUID, AuthorId: authorUID,
@@ -198,17 +213,21 @@ func TestPostServiceE2E(t *testing.T) {
 	require.False(t, pub.Msg.GetFail(), "发布业务失败: %v", pub.Msg.GetErr())
 	assert.Nil(t, pub.Msg.GetErr(), "成功响应不应携带错误码")
 
-	// 状态流转经异步链路（AuditPost 消息 → post consumer 审核 → PUBLISHED），
-	// 中间态 AUDITING 不可稳定观测，以轮询等待终态代替即时断言
-	var finalStatus postv1.PostStatus
+	// 状态流转经异步链路（poller 投递 AuditPost → post consumer 校验媒体 ACTIVE → PUBLISHED）；
+	// 中间态 AUDITING 不可稳定观测，以轮询等终态代替即时断言。
+	// 观测状态只记变化：testify 的 msgAndArgs 在调用时求值，把变量塞进失败信息永远只会打印零值。
+	var lastStatus postv1.PostStatus
 	require.Eventually(t, func() bool {
 		got, err := client.GetPostStatus(ctx, connect.NewRequest(&postv1.GetPostStatusRequest{PostId: postID}))
 		if err != nil || got.Msg.GetFail() {
 			return false
 		}
-		finalStatus = got.Msg.GetStatus()
-		return finalStatus == postv1.PostStatus_POST_STATUS_PUBLISHED
-	}, 30*time.Second, time.Second, "发布后应经审核链路到达 PUBLISHED，最终状态: %s", finalStatus)
+		if st := got.Msg.GetStatus(); st != lastStatus {
+			lastStatus = st
+			t.Logf("发布后状态 → %s", st)
+		}
+		return got.Msg.GetStatus() == postv1.PostStatus_POST_STATUS_PUBLISHED
+	}, 60*time.Second, time.Second, "发布后应经审核链路到达 PUBLISHED（最近一次观测状态见上方日志）")
 
 	// ---- 10. 状态守卫：非 DRAFT 不可再发布/编辑 ----
 	pubAgain, err := client.PublishDraft(ctx, connect.NewRequest(&postv1.PublishDraftRequest{
@@ -277,6 +296,24 @@ func TestPostServiceE2E(t *testing.T) {
 	require.NoError(t, err, "SyncPostStat RPC")
 	require.False(t, sync.Msg.GetFail(), "统计同步业务失败: %v", sync.Msg.GetErr())
 
+	// 计数列走短 TTL 读缓存、写路径不失效（陈旧 ≤ cache.stat_ttl，默认 1m ±10%）：
+	// 面客读取需等缓存过期收敛，这里验证“最终一致”而不是假设写后立即读到新值。
+	var lastView int64 = -1
+	require.Eventually(t, func() bool {
+		got, err := client.ViewPost(ctx, connect.NewRequest(&postv1.ViewPostRequest{
+			ViewerId: authorUID, PostId: postID,
+		}))
+		if err != nil || got.Msg.GetFail() {
+			return false
+		}
+		view := got.Msg.GetPost().GetPostStat().GetViewCount()
+		if view != lastView {
+			lastView = view
+			t.Logf("view_count → %d（等待统计缓存收敛，上界 stat_ttl）", view)
+		}
+		return view == 5
+	}, 90*time.Second, 2*time.Second, "统计缓存应在 ≤ stat_ttl 内收敛到同步后的新值（最近一次观测见上方日志）")
+
 	authorView3, err := client.ViewPost(ctx, connect.NewRequest(&postv1.ViewPostRequest{
 		ViewerId: authorUID, PostId: postID,
 	}))
@@ -293,7 +330,8 @@ func TestPostServiceE2E(t *testing.T) {
 		Uid:      authorUID,
 		Title:    "e2e draft to delete",
 		FullText: "e2e draft to delete content",
-		Medias:   []*mediav1.MediaFile{e2eMediaFile(e2eID(now+6), e2eID(now+7), "e2e/obj-c.jpg")},
+		// 该帖只走删除回收（不发布），无需真上传 ACTIVE 媒体
+		Medias: []*mediav1.MediaFile{e2eMediaFile(e2eID(now+6), e2eID(now+7), "e2e/obj-c.jpg")},
 	}))
 	require.NoError(t, err, "CreateDraft(待删) RPC")
 	require.False(t, create2.Msg.GetFail())
