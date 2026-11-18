@@ -938,6 +938,61 @@ func TestListLikedFavouritePostIDs(t *testing.T) {
 	assert.Empty(t, empty)
 }
 
+// TestDeletePostLikes 删帖级联回收：物理删除该帖全部点赞明细（不串帖），重复 0 行幂等
+func TestDeletePostLikes(t *testing.T) {
+	repo, db := newRepo(t)
+	ctx := context.Background()
+	seedPost(t, db, postID1, authorID1, postv1.PostStatus_POST_STATUS_DELETED, 1000)
+	seedPost(t, db, postID2, authorID1, postv1.PostStatus_POST_STATUS_PUBLISHED, 1000)
+
+	require.NoError(t, db.Create([]*models.PostLike{
+		{BaseModel: common.BaseModel{ID: 9601}, PostID: postID1, UserID: 6001},
+		{BaseModel: common.BaseModel{ID: 9602}, PostID: postID1, UserID: 6002},
+		{BaseModel: common.BaseModel{ID: 9603}, PostID: postID2, UserID: 6001},
+	}).Error)
+
+	info, err := repo.DeletePostLikes(ctx, postID1)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), info.RowsAffected, "该帖点赞明细全部物理回收")
+
+	info, err = repo.DeletePostLikes(ctx, postID1)
+	require.NoError(t, err)
+	assert.Zero(t, info.RowsAffected, "重复投递 0 行命中即幂等")
+
+	var cnt int64
+	require.NoError(t, db.Model(&models.PostLike{}).Where("post_id = ?", postID1).Count(&cnt).Error)
+	assert.Zero(t, cnt, "该帖点赞明细清空（否则残留行会污染「我点赞的帖子」列表）")
+	require.NoError(t, db.Model(&models.PostLike{}).Where("post_id = ?", postID2).Count(&cnt).Error)
+	assert.Equal(t, int64(1), cnt, "他帖点赞明细不受影响")
+}
+
+// TestDeletePostFavourites 删帖级联回收：物理删除该帖全部收藏明细（不串帖），重复 0 行幂等
+func TestDeletePostFavourites(t *testing.T) {
+	repo, db := newRepo(t)
+	ctx := context.Background()
+	seedPost(t, db, postID1, authorID1, postv1.PostStatus_POST_STATUS_DELETED, 1000)
+	seedPost(t, db, postID2, authorID1, postv1.PostStatus_POST_STATUS_PUBLISHED, 1000)
+
+	require.NoError(t, db.Create([]*models.PostFavourite{
+		{BaseModel: common.BaseModel{ID: 9701}, PostID: postID1, UserID: 6001},
+		{BaseModel: common.BaseModel{ID: 9702}, PostID: postID2, UserID: 6001},
+	}).Error)
+
+	info, err := repo.DeletePostFavourites(ctx, postID1)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), info.RowsAffected)
+
+	info, err = repo.DeletePostFavourites(ctx, postID1)
+	require.NoError(t, err)
+	assert.Zero(t, info.RowsAffected, "重复投递 0 行命中即幂等")
+
+	var cnt int64
+	require.NoError(t, db.Model(&models.PostFavourite{}).Where("post_id = ?", postID1).Count(&cnt).Error)
+	assert.Zero(t, cnt, "该帖收藏明细清空")
+	require.NoError(t, db.Model(&models.PostFavourite{}).Where("post_id = ?", postID2).Count(&cnt).Error)
+	assert.Equal(t, int64(1), cnt, "他帖收藏明细不受影响")
+}
+
 // ---------- 评论（软删明细 + 条件计数 + 游标分页） ----------
 
 // seedComment 造一条评论明细（一级评论 rootID/parentID 传 0）

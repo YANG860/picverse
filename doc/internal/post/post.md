@@ -68,10 +68,10 @@
 ### 发布链路
 `PublishDraft` 校验 uid==作者后，事务内 `SetPostStatus(DRAFT→AUDITING)` 并经 outbox 写 `AuditPost` 消息（见 [common.md](../common/common.md)），poller 投递 JetStream；consumer 审核通过后 `AUDITING→PUBLISHED` 并发发布消息（`internal/consumer/post_consumer.go`）。
 
-当前审核为**占位实现**：`PublishDraft` 不校验“图片审核通过”、consumer `handleAuditPost` 无实质审核逻辑（TODO 保留），审核完直接流转 `PUBLISHED`；待审核链路完善后补。
+当前审核为**占位实现**：`PublishDraft` 不校验“图片审核通过”、consumer `handleAuditPost` 无实质内容审核逻辑（TODO 保留）；但发布前已校验帖内媒体资产全部 `ACTIVE`（在途 `RETRY` 重投等就绪，终态/残缺 `ACK` 丢弃并把帖子回退 `DRAFT` 供作者修复后重新发布），校验通过即流转 `PUBLISHED`；待审核链路完善后补。
 
 ### 删帖/封禁消息链路（consumer）
-`DeletePost` 软删（事务内发 `DeletePost` 消息）→ consumer `handleDeletePost` 同事务**物理回收**软删（DELETED 状态）帖子行、其媒体关联与该帖**全部评论行**（任意状态一并清，`comment_count` 随帖子行消失无需回收），重复投递幂等；`repo.DeletePost` 带 `status=DELETED` 守卫，不会误删未删帖的裸行。**资产计数回收**在同链路闭环：`DeletePostMedias` 先查后删返回被删关联的资产 ID，按槽位同事务写 outbox `deref_media` 消息（media consumer 递减引用计数），删几槽减几槽，重复投递时 0 行命中即不重复减。`BanPost`（软封禁）与发布后的 `PublishPost` 消息目前由 consumer 占位消费（日志留痕 + ACK，对齐 media 侧 `HandlePublishMedia` 模式），下游逻辑（媒体资产处置/通知等）待需求明确后补。
+`DeletePost` 软删（事务内发 `DeletePost` 消息）→ consumer `handleDeletePost` 同事务**物理回收**软删（DELETED 状态）帖子行、其媒体关联与该帖**全部评论行**、**全部点赞/收藏明细**（任意状态一并清；`comment_count`/`like_count`/`favourite_count` 随帖子行消失无需回收，但明细行必须清理，否则孤儿行会被「我点赞/收藏的帖子」查询命中并指向不存在的帖子），重复投递幂等；`repo.DeletePost` 带 `status=DELETED` 守卫，不会误删未删帖的裸行。**资产计数回收**在同链路闭环：`DeletePostMedias` 先查后删返回被删关联的资产 ID，按槽位同事务写 outbox `deref_media` 消息（media consumer 递减引用计数），删几槽减几槽，重复投递时 0 行命中即不重复减。`BanPost`（软封禁）与发布后的 `PublishPost` 消息目前由 consumer 占位消费（日志留痕 + ACK，对齐 media 侧 `HandlePublishMedia` 模式），下游逻辑（媒体资产处置/通知等）待需求明确后补。
 
 ### 互动（点赞/收藏/浏览计数）
 - **强一致计数**：明细为准（`post_likes`/`post_favourites` 唯一约束 `(post_id, user_id)` + `OnConflict DoNothing` 幂等锚点），明细增删与 `posts.like_count`/`favourite_count` 条件更新同事务；减法为防负条件更新（仅计数 > 0 才减）。

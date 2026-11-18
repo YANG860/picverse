@@ -141,6 +141,11 @@ type PostRepository interface {
 	// DeletePostComments 物理删除帖子下全部评论行（删帖回收链路调用，任意状态一并清）；
 	// 重复投递时 0 行命中即幂等，帖子行已物理删除故无需回收计数
 	DeletePostComments(ctx context.Context, postID int64) (gen.ResultInfo, error)
+	// DeletePostLikes 物理删除帖子下全部点赞明细（删帖级联回收；帖子行没了 like_count 随之消失，
+	// 但明细必须清：否则残留行会被“我点赞的帖子”查询命中并指向不存在的帖子）；0 行命中即幂等
+	DeletePostLikes(ctx context.Context, postID int64) (gen.ResultInfo, error)
+	// DeletePostFavourites 物理删除帖子下全部收藏明细（同 DeletePostLikes）
+	DeletePostFavourites(ctx context.Context, postID int64) (gen.ResultInfo, error)
 }
 
 var _ PostRepository = (*PostRepoImpl)(nil)
@@ -305,7 +310,10 @@ func (r *PostRepoImpl) GetAuthorID(ctx context.Context, postID int64) (bool, int
 	return true, authorIDs[0], nil
 }
 
-// GetPosts 根据ID批量获取帖子（媒体关联按展示顺序 sort_order 加载）
+// GetPosts 根据ID批量获取帖子（媒体关联按展示顺序 sort_order 加载，顺序即图片顺序，
+// 调用方禁止重排序）
+// 契约：必须返回统计列（模板全列 Find）。缓存装饰器对回源行的计数直接采信
+// （回源即权威），改成列裁剪会使缓存路径的计数静默变零值。
 func (r *PostRepoImpl) GetPosts(ctx context.Context, postIDs []int64) ([]*models.PostDetail, error) {
 	posts, err := r.q.PostDetail.WithContext(ctx).
 		Where(r.q.PostDetail.ID.In(postIDs...)).
@@ -797,5 +805,20 @@ func (r *PostRepoImpl) ListReplies(ctx context.Context, rootID int64, before int
 func (r *PostRepoImpl) DeletePostComments(ctx context.Context, postID int64) (gen.ResultInfo, error) {
 	return r.q.PostComment.WithContext(ctx).
 		Where(r.q.PostComment.PostID.Eq(postID)).
+		Delete()
+}
+
+// DeletePostLikes 物理删除帖子下全部点赞明细（任意状态一并清，按帖隔离）；
+// 删帖链路级联回收：计数随帖子行消失无需回收，但明细留下会污染“我点赞的帖子”列表；0 行命中即幂等
+func (r *PostRepoImpl) DeletePostLikes(ctx context.Context, postID int64) (gen.ResultInfo, error) {
+	return r.q.PostLike.WithContext(ctx).
+		Where(r.q.PostLike.PostID.Eq(postID)).
+		Delete()
+}
+
+// DeletePostFavourites 物理删除帖子下全部收藏明细（同 DeletePostLikes 口径）
+func (r *PostRepoImpl) DeletePostFavourites(ctx context.Context, postID int64) (gen.ResultInfo, error) {
+	return r.q.PostFavourite.WithContext(ctx).
+		Where(r.q.PostFavourite.PostID.Eq(postID)).
 		Delete()
 }
