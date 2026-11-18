@@ -46,6 +46,9 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      # 浏览器预签名 PUT 直传需要 CORS：社区版 MinIO 不支持桶级 CORS（仅 AIStor），
+      # 走全局配置（等价 mc admin config set api cors_allow_origin）；生产可收紧为具体 origin 列表
+      MINIO_API_CORS_ALLOW_ORIGIN: "*"
     command: ["server", "/data", "--console-address", ":9001"]
     ports:
       - "9000:9000"

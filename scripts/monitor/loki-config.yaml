@@ -1,0 +1,47 @@
+# Loki 3.x 单体模式 + 本地文件系统存储（日志量小，无需对象存储）
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+
+common:
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+compactor:
+  working_directory: /loki/compactor
+  # Loki 3.x 启用 retention 必须显式指定删除请求存储
+  delete_request_store: filesystem
+  retention_enabled: true
+  retention_delete_delay: 2h
+  retention_delete_worker_count: 150
+
+limits_config:
+  # 允许 Prometheus 风格结构化元数据（promtail 3.x 默认携带）
+  allow_structured_metadata: true
+  # 单流日志速率限制：poller 高频 INFO 日志可突发
+  ingestion_rate_mb: 16
+  ingestion_burst_size_mb: 32
+  # 接受窗口与保留期对齐：容器历史日志（约 5 周）允许入库，不被 400 拒收
+  reject_old_samples_max_age: 90d
+  max_query_lookback: 90d
+  # 磁盘 47GB 充足，保留 90 天
+  retention_period: 90d

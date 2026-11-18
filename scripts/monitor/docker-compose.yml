@@ -1,0 +1,67 @@
+# 监控栈：Grafana + Loki + Promtail（仅日志）
+# 部署位置：tencent2:/opt/monitor/（独立项目，与 rednote-test 解耦）
+# 凭据从 .env 注入（参考 .env.example，真实 .env 不入库）
+name: monitor
+
+services:
+  loki:
+    image: grafana/loki:3.5.1
+    container_name: loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - lokidata:/loki
+    # 不映射宿主端口——仅供内部网络的 grafana/promtail 访问
+    networks:
+      - monitor
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3100/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  promtail:
+    image: grafana/promtail:3.5.1
+    container_name: promtail
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./promtail-config.yaml:/etc/promtail/config.yml:ro
+      # 业务进程日志（8 个裸跑进程写 ~/rednote/*.log）
+      - /home/ubuntu/rednote:/var/log/rednote:ro
+      # 容器日志（docker_sd 读 docker.sock 发现容器）
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      # 采集位点持久化，重启不重复推送
+      - promtaildata:/tmp
+    networks:
+      - monitor
+
+  grafana:
+    image: grafana/grafana:12.0.2
+    container_name: grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000" # Web UI（公网开放，凭据从 .env 注入）
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafanadata:/var/lib/grafana
+    networks:
+      - monitor
+    depends_on:
+      loki:
+        condition: service_healthy
+
+networks:
+  monitor:
+
+volumes:
+  lokidata:
+  promtaildata:
+  grafanadata:
