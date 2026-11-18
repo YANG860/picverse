@@ -1,0 +1,14 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.node.json" }
+  ],
+  "compilerOptions": {
+    /* 路径别名（shadcn CLI 只读根 tsconfig 解析别名；与 tsconfig.app.json / vite.config.ts 对齐） */
+    "paths": {
+      "@/*": ["./src/*"],
+      "@gen/*": ["./src/gen/*"]
+    }
+  }
+}
