@@ -42,10 +42,15 @@ type S3Repo interface {
 }
 
 // MinioClient S3/Minio 客户端封装
+//
+// 双 client：内嵌的 Client 走 Endpoint（服务端 Upload/Download/Delete 内网直连）；
+// presign 走 PublicEndpoint（对外 CDN/反代域名），仅用于生成预签名 URL。
+// 两者未配置差异时指向同一个 client。
 type MinioClient struct {
 	*minio.Client
-	bucket string
-	log    *slog.Logger
+	presign *minio.Client
+	bucket  string
+	log     *slog.Logger
 }
 
 // NewClient 创建新的 S3/Minio 客户端
@@ -65,10 +70,24 @@ func NewClient(cfg *config.Config, lf logger.LoggerFactory) *MinioClient {
 		panic(fmt.Errorf("failed to create minio client: %w", err))
 	}
 
+	// 预签名 client：host 参与 SigV4 计算，对外域名必须作为 endpoint 参与签名（不能事后替换 URI）
+	presignClient := minioClient
+	if pub := cfg.S3.PublicEndpoint; pub != "" && (pub != cfg.S3.Endpoint || cfg.S3.PublicUseSSL != cfg.S3.UseSSL) {
+		presignClient, err = minio.New(presignEndpoint(cfg.S3), &minio.Options{
+			Creds:  credentials.NewStaticV4(cfg.S3.AccessKey, cfg.S3.SecretKey, ""),
+			Secure: presignSecure(cfg.S3),
+			Region: cfg.S3.Region,
+		})
+		if err != nil {
+			panic(fmt.Errorf("failed to create minio presign client for %s: %w", pub, err))
+		}
+	}
+
 	client := &MinioClient{
-		Client: minioClient,
-		bucket: cfg.S3.Bucket,
-		log:    lf.GetLoggerOf("minio"),
+		Client:  minioClient,
+		presign: presignClient,
+		bucket:  cfg.S3.Bucket,
+		log:     lf.GetLoggerOf("minio"),
 	}
 
 	// 确保存储桶存在
@@ -88,6 +107,22 @@ func NewClient(cfg *config.Config, lf logger.LoggerFactory) *MinioClient {
 	}
 
 	return client
+}
+
+// presignEndpoint 预签名使用的 endpoint：配了 public_endpoint 用对外域名，否则回落 endpoint
+func presignEndpoint(cfg config.S3Config) string {
+	if cfg.PublicEndpoint != "" {
+		return cfg.PublicEndpoint
+	}
+	return cfg.Endpoint
+}
+
+// presignSecure 预签名使用的协议：跟随 public_endpoint 的独立开关，未配置对外域名时跟随 use_ssl
+func presignSecure(cfg config.S3Config) bool {
+	if cfg.PublicEndpoint != "" {
+		return cfg.PublicUseSSL
+	}
+	return cfg.UseSSL
 }
 
 // Bucket 获取存储桶名称
