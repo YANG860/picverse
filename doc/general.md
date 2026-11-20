@@ -129,3 +129,18 @@ rednote/
 - **DNS**：`picverse.site` / `media.picverse.site` 均为 CNAME → `<tunnel-id>.cfargotunnel.com`（橙云代理）
 - **cloudflared 已知限制**：ingress 不支持 `file://` 静态直出（上游 PR #1799 未合并），静态与 API 反代由 Caddy 承担；`file://` 写法会报 invalid address
 - **服务进程**（远程 `/home/ubuntu/rednote/`，nohup 裸进程 + `/tmp/bff.log` `/tmp/media.log`）：`bff`（:8084，BFF 聚合）、`media`（:8080，媒体 RPC + 签发）；config 统一 `config/config.yaml`
+
+## 生产部署（picverse.site × 双机）
+
+- **拓扑（按延迟敏感度拆，跨地区无内网）**：
+  - **tencent2**（106.53.172.186，主站+数据）：PG/NATS/Redis/Meili（`deploy/tencent2/docker-compose.yml`）+ 8 服务（bff/media/auth/user/post/discover/consumer/poller，nohup 裸进程）+ Caddy :8088 + cloudflared 入口
+  - **tencent1**（81.70.152.142，媒体+监控）：MinIO（`deploy/tencent1/docker-compose.yml`，含 minio-init 建桶）；跨机仅发布/图片读写（安全组放行 9000）
+- **凭据**：全部强随机（`/tmp/prod-secrets` 生成，compose .env + config/config.yaml 注入）；Redis 有 requirepass、NATS 有 --auth token（连接串 `nats://<token>@host`）
+- **media 域名**：`media.picverse.site`（CNAME → tunnel）→ cloudflared → **tencent1:9000**；`s3.public_endpoint=media.picverse.site` 签名 host 稳定（**改配置须重启 media 服务**，签发方是 media 服务不是 BFF）
+
+### 运维坑（踩过的）
+
+1. **compose `../../sql` 相对路径**：部署目录变化后 initdb 挂载断链 → 一张表都不建且无报错。已改 `./sql` 自包含（`deploy/tencent2/sql/`）
+2. **consumer 启动时序竞态**：NATS stream 未就绪时 consumer 创建 durable **失败静默**（日志只见 started，无消费）。症状=stream 积压 + `consumer ls` 为 No Consumers；修复=重启 consumer。**compose up 后必须确认消费正常**（发一条测试消息或查 `nats consumer ls media`）
+3. **默认头像资产需预置**（Register 硬依赖 `defaults.AvatarAssetID=2115637161121284096` 的 216 变体）：清库后需 ① MinIO 上传 `media/2115637161121284096/216.png` ② 插 `media_assets`（status=3 ACTIVE）+ `media_files`（type=2）行；缺失时注册报 1002 resource not found
+4. **8 服务清单**：bff/media/auth/user/post/discover/consumer/poller（漏启任一即半残；启动脚本按序 nohup）
