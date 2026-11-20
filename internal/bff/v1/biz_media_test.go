@@ -397,3 +397,80 @@ func TestBFFGetMediaAssetStatusMixedBatch(t *testing.T) {
 	assert.False(t, r.Statuses[4].GetFail())
 	assert.Equal(t, mediav1.MediaAssetStatus_MEDIA_ASSET_STATUS_FAILED, r.Statuses[4].GetStatus())
 }
+
+// TestBFFSignMediaViews_展示尺寸 展示尺寸策略：卡片 540 / 详情 1080；变体缺失回退原图
+func TestBFFSignMediaViews_展示尺寸(t *testing.T) {
+	meta := &mediav1.MediaMetaData{Width: 1920, Height: 1080}
+	file := &mediav1.MediaFile{AssetId: "a1", Type: mediav1.MediaFileType_MEDIA_FILE_TYPE_ORIGIN, Meta: meta}
+
+	t.Run("卡片：请求 540 且回填实际签发尺寸", func(t *testing.T) {
+		media := &fakeMediaClient{}
+		u := newBFFForTest(&fakeUserClient{}, media)
+
+		views, errCode := u.signMediaViewsAt(context.Background(), publicMediaTTL,
+			[]*mediav1.MediaFile{file}, true, cardDisplayType)
+		require.Nil(t, errCode)
+		require.Len(t, views, 1)
+		assert.Equal(t, mediav1.MediaFileType_MEDIA_FILE_TYPE_540, media.gotSignReqs[0].GetType(), "应请求 540 变体")
+		assert.Equal(t, mediav1.MediaFileType_MEDIA_FILE_TYPE_540, views[0].GetType())
+		assert.Equal(t, "https://signed/a1", views[0].GetUrl())
+		assert.Len(t, media.gotSignReqs, 1, "变体齐全时只签一轮")
+	})
+
+	t.Run("详情：请求 1080", func(t *testing.T) {
+		media := &fakeMediaClient{}
+		u := newBFFForTest(&fakeUserClient{}, media)
+
+		_, errCode := u.signMediaViewsAt(context.Background(), publicMediaTTL,
+			[]*mediav1.MediaFile{file}, false, detailDisplayType)
+		require.Nil(t, errCode)
+		assert.Equal(t, mediav1.MediaFileType_MEDIA_FILE_TYPE_1080, media.gotSignReqs[0].GetType())
+	})
+
+	t.Run("变体缺失：回退 ORIGIN 签发（failOpen 详情也不报错）", func(t *testing.T) {
+		media := &fakeMediaClient{signFailTypes: map[mediav1.MediaFileType]bool{
+			mediav1.MediaFileType_MEDIA_FILE_TYPE_540: true,
+		}}
+		u := newBFFForTest(&fakeUserClient{}, media)
+
+		views, errCode := u.signMediaViewsAt(context.Background(), publicMediaTTL,
+			[]*mediav1.MediaFile{file}, false, cardDisplayType)
+		require.Nil(t, errCode, "缺变体应回退原图而不是整页报错")
+		require.Len(t, views, 1)
+		assert.Equal(t, mediav1.MediaFileType_MEDIA_FILE_TYPE_ORIGIN, views[0].GetType(), "回退到原图")
+		require.Len(t, media.gotSignReqs, 2, "第一轮 540 失败 → 第二轮 ORIGIN")
+		assert.Equal(t, mediav1.MediaFileType_MEDIA_FILE_TYPE_540, media.gotSignReqs[0].GetType())
+		assert.Equal(t, mediav1.MediaFileType_MEDIA_FILE_TYPE_ORIGIN, media.gotSignReqs[1].GetType())
+	})
+
+	t.Run("两轮都失败：failOpen=false 报错，failOpen=true 占位图", func(t *testing.T) {
+		failAll := func() *fakeMediaClient {
+			return &fakeMediaClient{signFailTypes: map[mediav1.MediaFileType]bool{
+				mediav1.MediaFileType_MEDIA_FILE_TYPE_540:    true,
+				mediav1.MediaFileType_MEDIA_FILE_TYPE_ORIGIN: true,
+			}}
+		}
+		u := newBFFForTest(&fakeUserClient{}, failAll())
+		_, errCode := u.signMediaViewsAt(context.Background(), publicMediaTTL,
+			[]*mediav1.MediaFile{file}, false, cardDisplayType)
+		assert.NotNil(t, errCode, "强字段两轮都失败 → 整体报错")
+
+		u = newBFFForTest(&fakeUserClient{}, failAll())
+		views, errCode := u.signMediaViewsAt(context.Background(), publicMediaTTL,
+			[]*mediav1.MediaFile{file}, true, cardDisplayType)
+		require.Nil(t, errCode)
+		require.Len(t, views, 1)
+		assert.Equal(t, defaults.FallbackCoverURL, views[0].GetUrl(), "弱字段降级占位图")
+	})
+
+	t.Run("want=ORIGIN：保持原语义，只签一轮", func(t *testing.T) {
+		media := &fakeMediaClient{}
+		u := newBFFForTest(&fakeUserClient{}, media)
+
+		_, errCode := u.signMediaViewsAt(context.Background(), publicMediaTTL,
+			[]*mediav1.MediaFile{file}, false, mediav1.MediaFileType_MEDIA_FILE_TYPE_ORIGIN)
+		require.Nil(t, errCode)
+		assert.Equal(t, mediav1.MediaFileType_MEDIA_FILE_TYPE_ORIGIN, media.gotSignReqs[0].GetType())
+		assert.Len(t, media.gotSignReqs, 1)
+	})
+}

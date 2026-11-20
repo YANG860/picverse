@@ -82,6 +82,19 @@ BFF 由于面向前端，**不返回连接层 error**：下游连接层错误（
 - **请求侧**：客户端只传 `AssetRef{asset_id, type}`（`UpdateMyAvatar`/`CreateDraft`/`UpdateDraftMedias`），BFF 查完整文件后回填下游。
 - **失败语义**：签发任一项失败整体报 `InternalError`，不返回半残 URL。
 
+**展示尺寸策略（`signMediaViewsAt`）**：转换链路已产出 216/540/1080 三档变体，面客按用途签发而非一律发原图——
+
+| 场景 | 签发尺寸 | 平均体积 |
+| --- | --- | --- |
+| feed 卡片封面（`PostCard`） | `540` webp | ~30KB |
+| 详情 / 草稿编辑回显（`PostDetail` / `PostView`） | `1080` webp | ~90KB |
+| 作者头像（`UserBrief` / `UserProfile`） | 原语义（`ORIGIN`） | 头像原图本就很小 |
+| “看原图”类场景 | `ORIGIN` | ~317KB |
+
+> 历史数据里帖子挂载的都是 `ORIGIN`（503 条均值 **317KB**），一个 feed 页 10 张 = **3.2MB**，是图片加载慢的主因；按上表签发后同一页 ≈ 300KB。
+
+**缺变体回退**：请求 540/1080 而该资产无对应变体（历史数据、转换失败）时，对缺失项用 `ORIGIN` 补签一轮（`signMediaViewsPass` 二次调用，仅在缺失时发生）；两轮都失败才按 `failOpen` 走占位图/整体报错，避免详情页因个别缺变体整页失败。
+
 ### 资产引用计数
 
 下游服务只存媒体关联不校验归属与计数（`post.md` 定稿），计数由 BFF 在挂载/卸载点维护：

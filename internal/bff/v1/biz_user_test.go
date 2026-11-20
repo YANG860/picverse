@@ -177,7 +177,9 @@ type fakeMediaClient struct {
 	batchRPCErr error
 
 	signRPCErr  error
-	signFailIDs map[string]*commonv1.Error // 逐项签发失败注入
+	signFailIDs map[string]*commonv1.Error // 逐项签发失败注入（按 asset_id）
+	// signFailTypes 按变体类型注入失败（模拟该尺寸变体缺失）
+	signFailTypes map[mediav1.MediaFileType]bool
 
 	assetRPCErr  error
 	fileRPCErr   error
@@ -201,6 +203,12 @@ func (f *fakeMediaClient) SignMediaFileURLs(_ context.Context, req *connect.Requ
 	for _, ref := range req.Msg.GetRefs() {
 		if errCode := f.signFailIDs[ref.GetId()]; errCode != nil {
 			urls = append(urls, &mediav1.MediaFileURL{Fail: true, Err: errCode, AssetId: ref.GetId(), Type: ref.GetType()})
+			continue
+		}
+		if f.signFailTypes[ref.GetType()] {
+			urls = append(urls, &mediav1.MediaFileURL{
+				Fail: true, Err: errmsg.NotFound, AssetId: ref.GetId(), Type: ref.GetType(),
+			})
 			continue
 		}
 		urls = append(urls, &mediav1.MediaFileURL{

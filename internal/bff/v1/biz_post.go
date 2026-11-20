@@ -29,7 +29,7 @@ func mediaTTLFor(status postv1.PostStatus) time.Duration {
 // postView 把下游 Post 降维为面客 PostView（草稿写入回显；作者即会话用户，不聚合作者/关系），
 // medias 经 signMediaViews 按状态分级签发。
 func (u *BFFUsecaseImpl) postView(ctx context.Context, p *postv1.Post) (*bffv1.PostView, *commonv1.Error) {
-	views, errCode := u.signMediaViews(ctx, mediaTTLFor(p.GetStatus()), p.GetMedias(), false)
+	views, errCode := u.signMediaViewsAt(ctx, mediaTTLFor(p.GetStatus()), p.GetMedias(), false, detailDisplayType)
 	if errCode != nil {
 		return nil, errCode
 	}
@@ -177,7 +177,7 @@ func (u *BFFUsecaseImpl) PublishDraft(ctx context.Context, req *bffv1.PublishDra
 
 // postDetail 组装面客 PostDetail：medias 按状态分级签发，作者/关系由调用方聚合后传入。
 func (u *BFFUsecaseImpl) postDetail(ctx context.Context, p *postv1.Post, author *bffv1.UserBrief, relation *bffv1.Relation) (*bffv1.PostDetail, *commonv1.Error) {
-	views, errCode := u.signMediaViews(ctx, mediaTTLFor(p.GetStatus()), p.GetMedias(), false)
+	views, errCode := u.signMediaViewsAt(ctx, mediaTTLFor(p.GetStatus()), p.GetMedias(), false, detailDisplayType)
 	if errCode != nil {
 		return nil, errCode
 	}
@@ -274,7 +274,8 @@ func (u *BFFUsecaseImpl) postCards(ctx context.Context, briefs []*postv1.PostBri
 		for j, i := range idxs {
 			files[j] = briefs[i].GetCover()
 		}
-		groupViews, errCode := u.signMediaViews(ctx, ttl, files, true) // 卡片封面弱字段：脏资产降级不拖垮整页
+		// 卡片封面用 540（~30KB）：历史挂载的是 ORIGIN（~317KB），一页 10 张 3.2MB 是图片慢的主因
+		groupViews, errCode := u.signMediaViewsAt(ctx, ttl, files, true, cardDisplayType)
 		if errCode != nil {
 			return errCode
 		}
@@ -428,7 +429,6 @@ func (u *BFFUsecaseImpl) GetUserPosts(ctx context.Context, req *bffv1.GetUserPos
 		return &bffv1.GetUserPostsResponse{Fail: true, Err: errCode}, nil
 	}
 	target := req.GetUid()
-
 
 	resp, err := u.Repo.Post.ViewPostByAuthor(ctx, connect.NewRequest(&postv1.ViewPostByAuthorRequest{ViewerId: uid, AuthorId: target, Cursor: req.GetCursor()}))
 	if err != nil {

@@ -244,31 +244,104 @@ var (
 // URL 指向面客前端托管的静态占位图（零依赖，不走签名链路，避免占位再失败）
 func fallbackMediaView(f *mediav1.MediaFile) *bffv1.MediaView {
 	return &bffv1.MediaView{
-		AssetId:   f.GetAssetId(),
-		Type:      f.GetType(),
-		Url:       defaults.FallbackCoverURL,
-		Width:     f.GetMeta().GetWidth(),
-		Height:    f.GetMeta().GetHeight(),
+		AssetId: f.GetAssetId(),
+		Type:    f.GetType(),
+		Url:     defaults.FallbackCoverURL,
+		Width:   f.GetMeta().GetWidth(),
+		Height:  f.GetMeta().GetHeight(),
 	}
 }
 
+// 展示尺寸策略：转换链路已生成 216/540/1080 三档变体，面客按用途签发——
+// 卡片封面用 540（~30KB），详情/编辑回显用 1080（~90KB）。历史上帖子挂载的是 ORIGIN（~317KB），
+// 一页 10 张就是 3.2MB，是图片加载慢的主因；ORIGIN 只保留给"看原图"场景。
+const (
+	cardDisplayType   = mediav1.MediaFileType_MEDIA_FILE_TYPE_540
+	detailDisplayType = mediav1.MediaFileType_MEDIA_FILE_TYPE_1080
+)
+
 // signMediaViews 批量把下游 MediaFile 降维为面客 MediaView（批量签发 + 尺寸抄入）。
-// 返回与 files 对齐（nil 对 nil）；存储坐标不进面客响应。
-// 签发逐项非原子（部分失败正常语义，见 SignMediaFileURLsResponse 契约），按 failOpen 分消费口径：
-//   - failOpen=false（详情/列表媒体等强字段）：任一项失败整体报错，不返回半残 URL；
-//   - failOpen=true（feed 卡片封面等弱字段）：单项失败/缺失替换为默认失败占位图
-//     （FallbackCoverURL）——脏资产不拖垮整页也不缺格；RPC 级失败仍整体报错。
-func (u *BFFUsecaseImpl) signMediaViews(ctx context.Context, ttl time.Duration, files []*mediav1.MediaFile, failOpen bool) ([]*bffv1.MediaView, *commonv1.Error) {
+// 按文件自带 type 签发（原语义，页面需要原图时用）；展示场景见 signMediaViewsAt。
+func (u *BFFUsecaseImpl) signMediaViews(ctx context.Context, ttl time.Duration, files []*mediav1.MediaFile,
+	failOpen bool,
+) ([]*bffv1.MediaView, *commonv1.Error) {
+	return u.signMediaViewsAt(ctx, ttl, files, failOpen, mediav1.MediaFileType_MEDIA_FILE_TYPE_UNSPECIFIED)
+}
+
+// signMediaViewsAt 按指定展示尺寸签发（want 为空/ORIGIN 即原语义）。
+//
+// want 为 540/1080 时先按该尺寸批量签；**变体缺失**（历史数据、转换失败）的项再用 ORIGIN 补一轮：
+// 不让详情页因个别缺变体整页报错，也不静默丢图。变体齐全的常见路径只有 1 次 RPC。
+func (u *BFFUsecaseImpl) signMediaViewsAt(ctx context.Context, ttl time.Duration, files []*mediav1.MediaFile,
+	failOpen bool, want mediav1.MediaFileType,
+) ([]*bffv1.MediaView, *commonv1.Error) {
+	views, pending, errCode := u.signMediaViewsPass(ctx, ttl, files, want)
+	if errCode != nil {
+		return nil, errCode
+	}
+
+	// 目标尺寸缺失 → 回退原文件类型（通常 ORIGIN）
+	if len(pending) > 0 && want != mediav1.MediaFileType_MEDIA_FILE_TYPE_UNSPECIFIED &&
+		want != mediav1.MediaFileType_MEDIA_FILE_TYPE_ORIGIN {
+		u.log.Warn("media display variant missing，回退原图签发",
+			"display_type", want.String(), "count", len(pending))
+		retry := make([]*mediav1.MediaFile, 0, len(pending))
+		for _, i := range pending {
+			retry = append(retry, files[i])
+		}
+		fallback, stillPending, errCode := u.signMediaViewsPass(ctx, ttl, retry,
+			mediav1.MediaFileType_MEDIA_FILE_TYPE_UNSPECIFIED)
+		if errCode != nil {
+			return nil, errCode
+		}
+		for j, i := range pending {
+			views[i] = fallback[j]
+		}
+		// stillPending 是 retry 的下标，映射回原 files 下标
+		remap := make([]int, 0, len(stillPending))
+		for _, j := range stillPending {
+			remap = append(remap, pending[j])
+		}
+		pending = remap
+	}
+
+	if len(pending) == 0 {
+		return views, nil
+	}
+	if failOpen {
+		for _, i := range pending {
+			u.log.Warn("media sign missing item，替换失败占位图",
+				"asset_id", files[i].GetAssetId(), "display_type", want.String())
+			views[i] = fallbackMediaView(files[i])
+		}
+		return views, nil
+	}
+	u.log.Error("media sign failed for display type", "display_type", want.String(), "missing", len(pending))
+	return nil, errmsg.InternalError
+}
+
+// signMediaViewsPass 单轮签发：want 非空时把请求 type 改写成 want。
+// 返回与 files 对齐的 views（未签成功处为 nil）与失败的 files 下标（缺失或逐项失败）。
+func (u *BFFUsecaseImpl) signMediaViewsPass(ctx context.Context, ttl time.Duration, files []*mediav1.MediaFile,
+	want mediav1.MediaFileType,
+) ([]*bffv1.MediaView, []int, *commonv1.Error) {
 	views := make([]*bffv1.MediaView, len(files))
 
 	refs := make([]*mediav1.MediaAssetFileQuery, 0, len(files))
-	for _, f := range files {
-		if f != nil {
-			refs = append(refs, &mediav1.MediaAssetFileQuery{Id: f.GetAssetId(), Type: f.GetType()})
+	refIndex := make([]int, 0, len(files)) // refs 下标 → files 下标
+	for i, f := range files {
+		if f == nil {
+			continue
 		}
+		fileType := f.GetType()
+		if want != mediav1.MediaFileType_MEDIA_FILE_TYPE_UNSPECIFIED {
+			fileType = want
+		}
+		refs = append(refs, &mediav1.MediaAssetFileQuery{Id: f.GetAssetId(), Type: fileType})
+		refIndex = append(refIndex, i)
 	}
 	if len(refs) == 0 {
-		return views, nil
+		return views, nil, nil
 	}
 
 	resp, err := u.Repo.Media.SignMediaFileURLs(ctx, connect.NewRequest(&mediav1.SignMediaFileURLsRequest{
@@ -277,47 +350,38 @@ func (u *BFFUsecaseImpl) signMediaViews(ctx context.Context, ttl time.Duration, 
 	}))
 	if err != nil {
 		u.log.Error("media.SignMediaFileURLs failed", "count", len(refs), "error", err)
-		return nil, errmsg.InternalError
+		return nil, nil, errmsg.InternalError
 	}
 
 	// 契约：结果不保证顺序，按 asset_id + type 定位
 	signed := make(map[string]*mediav1.MediaFileURL, len(resp.Msg.GetUrls()))
 	for _, s := range resp.Msg.GetUrls() {
 		if s.GetFail() {
-			if failOpen {
-				u.log.Warn("media sign item failed，替换失败占位图", "asset_id", s.GetAssetId(), "err_code", s.GetErr().GetCode())
-				continue
-			}
-			u.log.Error("media.SignMediaFileURLs item failed", "asset_id", s.GetAssetId(), "err_code", s.GetErr().GetCode())
-			return nil, errmsg.InternalError
+			u.log.Warn("media sign item failed", "asset_id", s.GetAssetId(),
+				"type", s.GetType().String(), "err_code", s.GetErr().GetCode())
+			continue
 		}
 		signed[s.GetAssetId()+"/"+s.GetType().String()] = s
 	}
 
-	for i, f := range files {
-		if f == nil {
+	var pending []int
+	for j, ref := range refs {
+		i := refIndex[j]
+		s := signed[ref.GetId()+"/"+ref.GetType().String()]
+		if s == nil {
+			pending = append(pending, i)
 			continue
 		}
-		s := signed[f.GetAssetId()+"/"+f.GetType().String()]
-		if s == nil {
-			if failOpen {
-				u.log.Warn("media sign missing item，替换失败占位图", "asset_id", f.GetAssetId(), "type", f.GetType())
-				views[i] = fallbackMediaView(f)
-				continue
-			}
-			u.log.Error("media.SignMediaFileURLs missing item", "asset_id", f.GetAssetId(), "type", f.GetType())
-			return nil, errmsg.InternalError
-		}
 		views[i] = &bffv1.MediaView{
-			AssetId:   f.GetAssetId(),
-			Type:      f.GetType(),
+			AssetId:   s.GetAssetId(),
+			Type:      s.GetType(),
 			Url:       s.GetSignedUrl(),
 			ExpiresAt: s.GetExpireAt(),
-			Width:     f.GetMeta().GetWidth(),
-			Height:    f.GetMeta().GetHeight(),
+			Width:     files[i].GetMeta().GetWidth(),
+			Height:    files[i].GetMeta().GetHeight(),
 		}
 	}
-	return views, nil
+	return views, pending, nil
 }
 
 // UploadMedia 上传媒体：uploader 即会话用户，下游创建资产并返回预签名直传 URL（客户端直传对象存储）。
