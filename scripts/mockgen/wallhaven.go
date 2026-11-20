@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -111,6 +112,9 @@ type whClient struct {
 
 	mu   sync.Mutex
 	next time.Time // 下次允许 API 请求的时间（串行令牌桶）
+
+	dlMu   sync.Mutex
+	dlNext time.Time // 下次允许图片下载的时间（CDN 同样限流，429 会丢图）
 }
 
 func newWHClient(apiKey string) *whClient {
@@ -222,8 +226,56 @@ func (c *whClient) Detail(ctx context.Context, id string) (whWallpaper, error) {
 	return raw.Data, nil
 }
 
-// Download 下载图片到 dest（CDN 直链，不占 API 配额）
+// throttleDownload 图片下载限速（CDN 对突发并发同样回 429）：~2.5 req/s，带抖动
+func (c *whClient) throttleDownload() {
+	c.dlMu.Lock()
+	now := time.Now()
+	wait := c.dlNext.Sub(now)
+	interval := time.Duration(float64(400*time.Millisecond) * (0.8 + 0.4*rand.Float64()))
+	if wait < 0 {
+		wait = 0
+	}
+	c.dlNext = now.Add(wait + interval)
+	c.dlMu.Unlock()
+	if wait > 0 {
+		time.Sleep(wait)
+	}
+}
+
+// Download 下载图片到 dest（CDN 直链，不占 API 配额但受 CDN 限流，429/5xx 退避重试）
 func (c *whClient) Download(ctx context.Context, src, dest string) error {
+	var lastErr error
+	for attempt := 0; attempt < 4; attempt++ {
+		c.throttleDownload()
+		lastErr = c.downloadOnce(ctx, src, dest)
+		if lastErr == nil {
+			return nil
+		}
+		if !isRetryable(lastErr) {
+			return lastErr
+		}
+		backoff := time.Duration(attempt+1) * 10 * time.Second // 10s/20s/30s
+		fmt.Printf("  下载退避 %v 后重试（%s）: %v\n", backoff, filepath.Base(dest), lastErr)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("下载 %s 中断: %w", src, ctx.Err())
+		case <-time.After(backoff):
+		}
+	}
+	return fmt.Errorf("下载 %s 重试 4 次仍失败: %w", src, lastErr)
+}
+
+// isRetryable 可重试错误判定（429/5xx/网络波动）
+func isRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "429") || strings.Contains(s, "返回 5") ||
+		strings.Contains(s, "connection reset") || strings.Contains(s, "timeout")
+}
+
+func (c *whClient) downloadOnce(ctx context.Context, src, dest string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src, nil)
 	if err != nil {
 		return fmt.Errorf("构造下载请求 %s: %w", src, err)

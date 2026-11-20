@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -31,7 +32,8 @@ const (
 	uploadPollEvery   = time.Second
 	publishTimeout    = 60 * time.Second // 帖子 PUBLISHED 等待上限（post consumer 异步审核）
 	publishPollEvery  = 500 * time.Millisecond
-	signedPutTimeout  = 60 * time.Second // 预签名 URL 直传超时
+	signedPutTimeout  = 300 * time.Second // 预签名 URL 直传超时（大图 + 跨网链路留足余量）
+	signedPutAttempts = 2                 // 直传失败重试次数（预签名 URL 未过期前可安全重试，PUT 幂等）
 )
 
 type bffSession struct {
@@ -40,6 +42,7 @@ type bffSession struct {
 	email  string
 	name   string
 	uid    string
+	putVia string // 直传直连地址（host:port，绕过 CDN 慢链路；留空走预签名 URL 原链路）
 }
 
 // withBearer 为请求注入 Bearer 会话（与 test/e2e 同款）
@@ -155,7 +158,7 @@ func (s *bffSession) uploadImage(ctx context.Context, img *cachedImage) (string,
 	if up.Msg.GetSignedUrl() == "" {
 		return "", fmt.Errorf("UploadMedia(%s) 未返回预签名 URL", img.ID)
 	}
-	if err := putSignedURL(ctx, up.Msg.GetSignedUrl(), img); err != nil {
+	if err := putSignedURL(ctx, up.Msg.GetSignedUrl(), s.putVia, img); err != nil {
 		return "", err
 	}
 	if err := s.waitAssetActive(ctx, assetID, img.ID); err != nil {
@@ -164,8 +167,36 @@ func (s *bffSession) uploadImage(ctx context.Context, img *cachedImage) (string,
 	return assetID, nil
 }
 
-// putSignedURL 客户端直传 MinIO（预签名 URL，不经服务端）
-func putSignedURL(ctx context.Context, signed string, img *cachedImage) error {
+// putSignedURL 客户端直传 MinIO（预签名 URL，不经服务端）；失败在签名有效期内重试一次。
+// putVia 非空时绕过 CDN 直连源站 MinIO（SigV4 只对 Host 头签名，
+// dial 目标换源站而 Host 头保持签名域名，签名仍有效）。
+func putSignedURL(ctx context.Context, signed, putVia string, img *cachedImage) error {
+	var lastErr error
+	for attempt := 1; attempt <= signedPutAttempts; attempt++ {
+		start := time.Now()
+		lastErr = putSignedURLOnce(ctx, signed, putVia, img)
+		if lastErr == nil {
+			fmt.Printf("  直传 %s (%.1fMB) 耗时 %v\n", img.ID, float64(img.SizeBytes)/(1<<20), time.Since(start).Round(time.Millisecond))
+			return nil
+		}
+		fmt.Printf("警告: 直传 %s 第 %d 次失败: %v\n", img.ID, attempt, lastErr)
+	}
+	return fmt.Errorf("直传 MinIO %s 重试 %d 次仍失败: %w", img.ID, signedPutAttempts, lastErr)
+}
+
+// rewritePutURL 绕过 CDN 直连源站：返回改写后的请求 URL 与需保留的签名 Host 头
+func rewritePutURL(signed, putVia string) (string, string, error) {
+	u, err := url.Parse(signed)
+	if err != nil {
+		return "", "", fmt.Errorf("解析预签名 URL: %w", err)
+	}
+	signHost := u.Host // SigV4 签名的 host（保持原值，含端口则原样保留）
+	u.Scheme = "http"  // 源站 MinIO 明文端口；签名不覆盖 scheme
+	u.Host = putVia
+	return u.String(), signHost, nil
+}
+
+func putSignedURLOnce(ctx context.Context, signed, putVia string, img *cachedImage) error {
 	f, err := os.Open(img.Path)
 	if err != nil {
 		return fmt.Errorf("打开待上传图片 %s: %w", img.Path, err)
@@ -176,13 +207,24 @@ func putSignedURL(ctx context.Context, signed string, img *cachedImage) error {
 		}
 	}()
 
+	putURL, signHost := signed, ""
+	if putVia != "" {
+		var err error
+		putURL, signHost, err = rewritePutURL(signed, putVia)
+		if err != nil {
+			return err
+		}
+	}
 	putCtx, cancel := context.WithTimeout(ctx, signedPutTimeout)
 	defer cancel()
 	// 包一层匿名 Reader：http transport 会自动 Close *os.File 类型的 body，
 	// 包装后由本函数 defer 关闭，避免二次关闭告警
-	req, err := http.NewRequestWithContext(putCtx, http.MethodPut, signed, struct{ io.Reader }{f})
+	req, err := http.NewRequestWithContext(putCtx, http.MethodPut, putURL, struct{ io.Reader }{f})
 	if err != nil {
 		return fmt.Errorf("构造直传请求 %s: %w", img.ID, err)
+	}
+	if signHost != "" {
+		req.Host = signHost // Host 头保持签名域名，SigV4 校验才通过
 	}
 	req.ContentLength = img.SizeBytes
 	req.Header.Set("Content-Type", img.MIME)

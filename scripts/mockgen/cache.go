@@ -16,6 +16,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/disintegration/imaging"
+
 	mediav1 "rednote/gen/go/media/v1"
 )
 
@@ -120,6 +122,62 @@ func loadCachedDetail(ctx context.Context, wh *whClient, cacheDir, id string) (w
 		fmt.Printf("警告: 写入详情缓存 %s 失败（不影响本次）: %v\n", path, err)
 	}
 	return w, nil
+}
+
+// prepareUpload 上传前压图：长边 > maxDim 时 Lanczos 缩放，统一重编码 JPEG。
+// 目的：控制直传体积，适配慢链路下 consumer 的上传守卫窗口
+// （对象须在 ~21s 内落桶，否则资产判 FAILED，见 internal/consumer/media_consumer.go）。
+// 产物落 uploads/ 缓存（文件名含参数），断点续跑不重复编码。
+func prepareUpload(src *cachedImage, cacheDir string, maxDim, quality int) (*cachedImage, error) {
+	cachePath := filepath.Join(cacheDir, "uploads",
+		fmt.Sprintf("%s.m%dq%d.jpg", src.ID, maxDim, quality))
+	if img, err := inspectImage(src.ID, cachePath); err == nil {
+		return img, nil
+	}
+
+	f, err := os.Open(src.Path)
+	if err != nil {
+		return nil, fmt.Errorf("打开待压缩图片 %s: %w", src.Path, err)
+	}
+	decoded, _, err := image.Decode(f)
+	_ = f.Close()
+	if err != nil {
+		return nil, fmt.Errorf("解码待压缩图片 %s: %w", src.Path, err)
+	}
+
+	// 长边超限才缩放（等比，短边按比例），否则仅重编码瘦身
+	out := decoded
+	if b := decoded.Bounds(); b.Dx() > maxDim || b.Dy() > maxDim {
+		if b.Dx() >= b.Dy() {
+			out = imaging.Resize(decoded, maxDim, 0, imaging.Lanczos) // 横图：宽 = maxDim
+		} else {
+			out = imaging.Resize(decoded, 0, maxDim, imaging.Lanczos) // 竖图：高 = maxDim
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		return nil, fmt.Errorf("创建上传缓存目录 %s: %w", filepath.Dir(cachePath), err)
+	}
+	outf, err := os.Create(cachePath)
+	if err != nil {
+		return nil, fmt.Errorf("创建压缩产物文件 %s: %w", cachePath, err)
+	}
+	encErr := imaging.Encode(outf, out, imaging.JPEG, imaging.JPEGQuality(quality))
+	closeErr := outf.Close()
+	if encErr != nil {
+		_ = os.Remove(cachePath)
+		return nil, fmt.Errorf("编码压缩图片 %s: %w", cachePath, encErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(cachePath)
+		return nil, fmt.Errorf("关闭压缩产物文件 %s: %w", cachePath, closeErr)
+	}
+	img, err := inspectImage(src.ID, cachePath)
+	if err != nil {
+		_ = os.Remove(cachePath)
+		return nil, err
+	}
+	return img, nil
 }
 
 // ensureImage 下载并缓存 wallhaven 图片；已缓存则直接读取元信息（幂等）。

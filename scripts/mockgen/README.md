@@ -56,14 +56,15 @@ go run ./scripts/mockgen -q "landscape" -categories 100 -atleast 2560x1440 -post
 
 ## 生成的文本信息
 
-- **用户**：中文昵称（形容词+名词池 30×30）、简介（确定性按邮箱哈希选池，重跑不抖动）。
-- **帖子**：标题 16 模板、正文 10 模板（多段落：参数 + 尾句 + 话题标签）、
-  话题 `#hashtag`（标签+分类+氛围/主题，≤6 个）。
+- **用户**：中文昵称（形容词+名词池 60×60）、简介池 30 条（确定性按邮箱哈希选池，重跑不抖动）。
+- **帖子**：标题 28 套模板、正文 18 套多段落模板、尾句 30 变体、话题 `#hashtag`（标签+
+  分类+氛围/主题，≤6 个）。
 - **metadata（posts.meta_data JSONB）**：wallhaven 原始字段（tags/colors/resolution/
-  ratio/category）+ 可选生成文本 `topic`（主题）与 `mood`（氛围）。
-- **评论**：一级评论 30 条 + 楼中楼回复 12 条池，均含 emoji 风格变体。
+  ratio/category）+ 可选生成文本 `topic`（主题 32）/ `mood`（氛围 32）/ `scene`（场景 12）。
+- **评论**：一级评论 60 条 + 楼中楼回复 28 条池，含 emoji/提问/催更风格变体。
+- **新词库**：`scenePool`（适用场景）、`seriesPool`（合集名），模板占位符 `{scene}` `{series}`。
 - 模板用命名占位符（`{tag}`/`{cat}`/`{res}`/`{mood}`/`{topic}`/`{hashtags}`...）渲染，
-  增删模板不受参数个数约束，见 `fixture.go`。
+  增删模板不受参数个数约束；词库集中在 `pools.go`，渲染逻辑在 `fixture.go`。
 
 ## 断点续跑与幂等
 

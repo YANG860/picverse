@@ -57,9 +57,12 @@ type options struct {
 	source      string // 图片来源：full/large/small
 	apiKey      string
 	apiKeyFile  string // API key 文件（gitignored；flag > 环境变量 > 文件）
+	minioDirect string // 直传直连源站 MinIO（host:port，绕过 CDN 慢链路）
 	cacheDir    string
 	statePath   string
 	concurrency int
+	maxDim      int  // 上传前压图的长边上限（适配慢链路下的 consumer 上传守卫窗口）
+	quality     int  // 压图 JPEG 质量
 	tags        bool // 抓取详情接口补 tags（每帖 1 次 API 调用）
 	dryRun      bool
 	interact    bool
@@ -81,9 +84,12 @@ func parseOptions() options {
 	flag.StringVar(&o.source, "source", "large", "图片来源：full=原图 / large=大缩略图 / small=小缩略图")
 	flag.StringVar(&o.apiKey, "apikey", "", "wallhaven API key（默认读环境变量 WALLHAVEN_API_KEY，再读 -apikey-file）")
 	flag.StringVar(&o.apiKeyFile, "apikey-file", "./tmp/mockgen/wallhaven.key", "wallhaven API key 文件（gitignored，避免凭据入库）")
+	flag.StringVar(&o.minioDirect, "minio-direct", "", "直传直连源站 MinIO 地址 host:port（如 81.70.152.142:9000；绕过 CDN 慢链路，Host 头保持签名域名）")
 	flag.StringVar(&o.cacheDir, "cache", "./tmp/mockgen/cache", "抓取缓存目录（图片 + 详情 JSON）")
 	flag.StringVar(&o.statePath, "state", "./tmp/mockgen/state.json", "注入进度状态文件（断点续跑）")
 	flag.IntVar(&o.concurrency, "concurrency", 6, "并发 worker 数（上传+发布流水线）")
+	flag.IntVar(&o.maxDim, "max-dim", 1920, "上传前压图长边上限（源图超限则等比缩放；直传体积 ∝ 守卫窗口内能否落桶）")
+	flag.IntVar(&o.quality, "quality", 85, "压图 JPEG 质量（1-100）")
 	flag.BoolVar(&o.tags, "tags", true, "抓详情接口补 tags（关掉提速约 12 分钟，metadata 无 tags）")
 	flag.BoolVar(&o.dryRun, "dry-run", false, "只抓取 wallhaven 素材，不注入 BFF")
 	flag.BoolVar(&o.interact, "interactions", true, "注入互动数据（关注/点赞/收藏/评论）")
@@ -116,6 +122,12 @@ func (o options) validate() error {
 	}
 	if o.concurrency < 1 || o.concurrency > 32 {
 		return fmt.Errorf("-concurrency 取值 1~32，当前 %d", o.concurrency)
+	}
+	if o.maxDim < 216 || o.maxDim > 8192 {
+		return fmt.Errorf("-max-dim 取值 216~8192（低于是变体不够用），当前 %d", o.maxDim)
+	}
+	if o.quality < 1 || o.quality > 100 {
+		return fmt.Errorf("-quality 取值 1~100，当前 %d", o.quality)
 	}
 	if o.seed != "" {
 		if len(o.seed) != 6 {
@@ -235,9 +247,10 @@ func buildPlans(rng *mrand.Rand, wallpapers []whWallpaper, users int) ([]*postPl
 			"ratio":         wp.Ratio,
 			"colors":        wp.Colors,
 			"tags":          tags,
-			// 可选生成文本：主题/氛围，丰富 metadata 检索与展示维度
+			// 可选生成文本：主题/氛围/场景，丰富 metadata 检索与展示维度
 			"topic": randTopic(rng),
 			"mood":  randMood(rng),
+			"scene": randScene(rng),
 		}
 		metaJSON, err := json.Marshal(meta)
 		if err != nil {
@@ -269,6 +282,7 @@ func ensureUsers(ctx context.Context, client bffv1connect.BFFServiceClient, st *
 		if err != nil {
 			return nil, err
 		}
+		s.putVia = o.minioDirect
 		// 写入确定性简介（丰富 profile 文案；失败不阻断，下轮重跑补齐）
 		if err := s.updateBio(ctx, bioFor(us.Email)); err != nil {
 			fmt.Printf("警告: 用户 %s 简介写入失败: %v\n", us.Email, err)
@@ -466,6 +480,10 @@ func downloadAll(ctx context.Context, wh *whClient, o options, wallpapers []whWa
 			defer wg.Done()
 			defer func() { <-sem }()
 			img, err := ensureImage(ctx, wh, o.cacheDir, wp, o.source)
+			if err == nil {
+				// 上传前压图：慢链路下大图直传会超出 consumer 上传守卫窗口（~21s）导致资产 FAILED
+				img, err = prepareUpload(img, o.cacheDir, o.maxDim, o.quality)
+			}
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
