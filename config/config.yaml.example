@@ -1,5 +1,7 @@
+# config.yaml 配置样例（凭据/地址均为占位符）
+# 复制为 config/config.yaml 后填入真实值；config.yaml 含凭据，请勿提交到版本库
 # 配置说明见 doc/config/config.md
-# 测试服务器：106.53.172.186
+# 部署主机：<YOUR_SERVER_HOST>
 # 认证信息已按测试环境填写（docker 容器：rednote-pg / rednote-nats / rednote-minio）
 # 注意：真实凭据勿提交到公开仓库；生产环境改用环境变量/密钥管理注入
 
@@ -10,7 +12,7 @@ snowflake:
 database:
   pg:
     # PostgreSQL 连接串（容器 rednote-pg，库 prod）
-    url: "postgres://postgres:wV5r46Z3yyumNjIRjzeaXqLGSMVYEjkd@106.53.172.186:5432/prod?sslmode=disable"
+    url: "postgres://<PG_USER>:<PG_PASSWORD>@<PG_HOST>:5432/<PG_DB>?sslmode=disable"
 
 server:
   # 各服务监听地址（多进程共用同一配置文件，各服务取自己的条目）
@@ -43,30 +45,30 @@ rpc:
   max_inflight: 256 # 每下游服务在途请求并发上限（舱壁限流，满舱快速失败；堆积上界 = max_inflight × timeout）
 
 s3:
-  endpoint: "106.53.172.186:9000"   # 服务端内部读写（Upload/Download/Delete）直连，不经公网
-  access_key: "rednote-3e2533eb"   # 容器 rednote-minio（MINIO_ROOT_USER）
+  endpoint: "<S3_ENDPOINT_HOST:9000>"  # 服务端内部读写（Upload/Download/Delete）直连，不经公网
+  access_key: "<REPLACE_ME>"   # MinIO MINIO_ROOT_USER
   secret_key: "LwFebgYHVFg2JRaO18iprgHPe5BQgpXv8okatw9"
   region: "us-east-1"
   use_ssl: false
   bucket: "rednote"
   # 预签名 URL 的对外域名。SigV4 的 canonical host 参与签名，签名 URL 的 host 不能事后替换，
   # 因此签名以该域名为 endpoint 重新签发（服务端读写仍走上面的 endpoint）。留空=回落 endpoint。
-  public_endpoint: "media.picverse.site"
+  public_endpoint: "media.<YOUR_DOMAIN>"
   public_use_ssl: true
 
 jetstream:
-  url: "nats://106.53.172.186:4222"
+  url: "postgres://<PG_USER>:<PG_PASSWORD>@<PG_HOST>:5432/<PG_DB>?sslmode=disable"
 
 redis:
-  addr: "106.53.172.186:6379"
-  password: ""     # 留空；redis 容器见 scripts/compose/docker-compose.yml
+  addr: "<REDIS_HOST>:6379"
+  password: "<REPLACE_ME>"  # 留空；redis 容器见 scripts/compose/docker-compose.yml
   db: 0
   pool_size: 10    # 0 表示使用默认值（10）
 
 meili:
   # Meilisearch 搜索引擎（搜推服务的索引同步与查询）
-  url: "http://106.53.172.186:7700"
-  api_key: "rednote-meili-8f2c1d4a"   # 容器 rednote-meili（MEILI_MASTER_KEY）
+  url: "postgres://<PG_USER>:<PG_PASSWORD>@<PG_HOST>:5432/<PG_DB>?sslmode=disable"
+  api_key: "<REPLACE_ME>"  # 容器 rednote-meili（MEILI_MASTER_KEY）
 
 cache:
   enabled: false   # 缓存总开关：部署 redis 容器后置 true；false 时不连接 redis，行为与无缓存一致
@@ -114,7 +116,7 @@ recommend:
   explore_ratio: 0.1          # 探索位比例（每页随机采样条数占比，至少 1 条）
 
 jwt:
-  secret: "a8de244a1570e97d9e07f9144c78ca7bfe2ed303c7846c32f1201a2d22e2184e"  # HMAC-SHA256 密钥，必填
+  secret: "<REPLACE_ME>"  # HMAC-SHA256 密钥，必填
   issuer: "rednote"
   access_expire: 24h
   refresh_expire: 168h

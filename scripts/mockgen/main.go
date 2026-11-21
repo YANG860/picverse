@@ -8,7 +8,7 @@
 //
 //	go run ./scripts/mockgen -users 50 -posts 500
 //	go run ./scripts/mockgen -q "landscape" -posts 100 -dry-run
-//	go run ./scripts/mockgen -bff http://106.53.172.186:8084 -users 50 -posts 500
+//	go run ./scripts/mockgen -bff http://192.0.2.10:8084 -users 50 -posts 500
 //
 // wallhaven API 限速 45 req/min，500 帖全量（含 tags 详情）约需 12 分钟抓取；
 // 图片与详情均有本地缓存，重跑跳过。详见 README.md。
@@ -84,7 +84,7 @@ func parseOptions() options {
 	flag.StringVar(&o.source, "source", "large", "图片来源：full=原图 / large=大缩略图 / small=小缩略图")
 	flag.StringVar(&o.apiKey, "apikey", "", "wallhaven API key（默认读环境变量 WALLHAVEN_API_KEY，再读 -apikey-file）")
 	flag.StringVar(&o.apiKeyFile, "apikey-file", "./tmp/mockgen/wallhaven.key", "wallhaven API key 文件（gitignored，避免凭据入库）")
-	flag.StringVar(&o.minioDirect, "minio-direct", "", "直传直连源站 MinIO 地址 host:port（如 81.70.152.142:9000；绕过 CDN 慢链路，Host 头保持签名域名）")
+	flag.StringVar(&o.minioDirect, "minio-direct", "", "直传直连源站 MinIO 地址 host:port（如 192.0.2.20:9000；绕过 CDN 慢链路，Host 头保持签名域名）")
 	flag.StringVar(&o.cacheDir, "cache", "./tmp/mockgen/cache", "抓取缓存目录（图片 + 详情 JSON）")
 	flag.StringVar(&o.statePath, "state", "./tmp/mockgen/state.json", "注入进度状态文件（断点续跑）")
 	flag.IntVar(&o.concurrency, "concurrency", 6, "并发 worker 数（上传+发布流水线）")

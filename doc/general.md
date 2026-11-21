@@ -105,7 +105,7 @@ rednote/
 
 - **技术栈**：React 18 + Vite + TypeScript + Tailwind（shadcn/ui base-nova + tweakcn 主题）+ TanStack Query + zustand；包管理 pnpm 10
 - **契约与鉴权**：TS 生成代码在 `web/src/gen`（`buf generate` 产出，与 `gen/go` 同源）；`src/api/transport.ts` 为 ConnectRPC transport（鉴权拦截器按方法注入 Bearer token，1003 时单飞刷新并重放一次）；错误码镜像 `packages/errmsg`（`src/api/errors.ts`）
-- **跨域方案**：BFF 未开 CORS，开发期 Vite 代理同源转发 `/bff.v1.BFFService` → BFF（默认 `106.53.172.186:8084`，`VITE_BFF_PROXY_TARGET` 可覆盖）
+- **跨域方案**：BFF 未开 CORS，开发期 Vite 代理同源转发 `/bff.v1.BFFService` → BFF（默认 `192.0.2.10:8084`，`VITE_BFF_PROXY_TARGET` 可覆盖）
 - **路由**：`/login` `/register`（真实 API）；`/`（账号首页：GetMyProfile + 退出登录）；`/mock/*`（纯合成数据的视觉验证页：信息流 / 详情 / 发布 / 主页，未接入真实 API 的页面统一导流至此）
 - **命令**（`web/` 下）：`pnpm dev` 开发、`pnpm build` 构建、`pnpm lint` 检查
 
@@ -133,8 +133,8 @@ rednote/
 ## 生产部署（picverse.site × 双机）
 
 - **拓扑（按延迟敏感度拆，跨地区无内网）**：
-  - **tencent2**（106.53.172.186，主站+数据）：PG/NATS/Redis/Meili（`deploy/tencent2/docker-compose.yml`）+ 8 服务（bff/media/auth/user/post/discover/consumer/poller，nohup 裸进程）+ Caddy :8088 + cloudflared 入口
-  - **tencent1**（81.70.152.142，媒体+监控）：MinIO（`deploy/tencent1/docker-compose.yml`，含 minio-init 建桶）；跨机仅发布/图片读写（安全组放行 9000）
+  - **tencent2**（tencent2，主站+数据，IP 略）：PG/NATS/Redis/Meili（`deploy/tencent2/docker-compose.yml`）+ 8 服务（bff/media/auth/user/post/discover/consumer/poller，nohup 裸进程）+ Caddy :8088 + cloudflared 入口
+  - **tencent1**（tencent1，媒体+监控，IP 略）：MinIO（`deploy/tencent1/docker-compose.yml`，含 minio-init 建桶）；跨机仅发布/图片读写（安全组仅放行对端主机 9000）
 - **凭据**：全部强随机（`/tmp/prod-secrets` 生成，compose .env + config/config.yaml 注入）；Redis 有 requirepass、NATS 有 --auth token（连接串 `nats://<token>@host`）
 - **media 域名**：`media.picverse.site`（CNAME → tunnel）→ cloudflared → **tencent1:9000**；`s3.public_endpoint=media.picverse.site` 签名 host 稳定（**改配置须重启 media 服务**，签发方是 media 服务不是 BFF）
 

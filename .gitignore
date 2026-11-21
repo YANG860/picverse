@@ -93,3 +93,5 @@ dist/
 build/
 out/
 deploy/**/.env
+config/config.yaml
+deploy/**/*.pem

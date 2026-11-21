@@ -41,10 +41,12 @@ import (
 const (
 	defaultMediaAddr = "http://localhost:8080"
 
-	defaultS3Endpoint = "106.53.172.186:9000"
-	defaultS3Key      = "rednote-3e2533eb" // 须与测试服务器容器 rednote-minio 的 MINIO_ROOT_USER 一致
-	defaultS3Secret   = "LwFebgYHVFg2JRaO18iprgHPe5BQgpXv8okatw9"
-	defaultS3Bucket   = "rednote"
+	defaultS3Endpoint = "192.0.2.10:9000"
+	// 须与部署环境 MINIO_ROOT_USER / MINIO_ROOT_PASSWORD（config.yaml s3.access_key/secret_key）一致；
+	// MinIO 从 tencent1 搬回 tencent2 时轮换了凭据，可用 MEDIA_E2E_S3_* 环境变量覆盖
+	defaultS3Key    = "picverse-aXAZfbEdXbII"
+	defaultS3Secret = "9dA8X0Uyh1lxP7gzJn2yF9H8rSOrJ1mw"
+	defaultS3Bucket = "rednote"
 
 	pollInterval      = 5 * time.Second
 	processTimeout    = 2 * time.Minute // 上传确认（退避重投）+ 变体处理余量

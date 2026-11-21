@@ -6,7 +6,7 @@
 `testdb.Setup(t)` 通过 `CREATE DATABASE … TEMPLATE` 克隆独立库，用例结束自动 `DROP`。
 用例间零共享、互不污染，天然支持 `t.Parallel()`；`go test -short` 下自动跳过。
 
-连接串默认 `postgres://…@106.53.172.186:5432/test?sslmode=disable`（tencent2），
+连接串默认 `postgres://…@192.0.2.10:5432/test?sslmode=disable`（tencent2），
 用环境变量 **`TEST_PG_URL`** 覆盖（串中库名仅定位服务器，实际测试库按用例克隆）。
 
 ## 在测试中使用

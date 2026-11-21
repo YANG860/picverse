@@ -43,8 +43,8 @@ import (
 
 // DefaultDSN 测试服务器默认连接串（指向远程 PostgreSQL，不走生产库）。
 // 串中的库名不参与测试，仅作为服务器/凭据的默认来源。
-// 密码须与测试服务器容器 rednote-pg 的 POSTGRES_PASSWORD 保持一致。
-const DefaultDSN = "postgres://postgres:wV5r46Z3yyumNjIRjzeaXqLGSMVYEjkd@106.53.172.186:5432/test?sslmode=disable"
+// 串内凭据为占位符；实际连接请设置 TEST_PG_URL 环境变量（下方 DSN() 优先读取）。
+const DefaultDSN = "postgres://postgres:<PG_PASSWORD>@192.0.2.10:5432/test?sslmode=disable"
 
 // TemplateDBName 已执行过全量迁移的模板库名，由 scripts/dbinit 重建维护。
 const TemplateDBName = "test_template"

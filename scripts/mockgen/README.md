@@ -20,7 +20,7 @@ BFF 全链路（模拟真实客户端）：
 
 ```bash
 # 全量：50 用户 × 500 帖 + 互动（测试服务器）
-go run ./scripts/mockgen -bff http://106.53.172.186:8084 -users 50 -posts 500
+go run ./scripts/mockgen -bff http://192.0.2.10:8084 -users 50 -posts 500
 
 # 只抓素材看看（不写任何状态、不注入）
 go run ./scripts/mockgen -posts 20 -dry-run

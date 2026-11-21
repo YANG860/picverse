@@ -36,7 +36,7 @@ SigV4 的 canonical request 含 `Host`，**签名与域名强绑定**——把�
 
 | 配置 | 作用 |
 | --- | --- |
-| `s3.endpoint` / `s3.use_ssl` | 服务端自身 Upload/Download/Delete 走的地址（内网直连，如 `106.53.172.186:9000`） |
+| `s3.endpoint` / `s3.use_ssl` | 服务端自身 Upload/Download/Delete 走的地址（内网直连，如 `192.0.2.10:9000`） |
 | `s3.public_endpoint` / `s3.public_use_ssl` | **仅预签名** 使用的对外域名（如 `media.picverse.site` + https）。留空则回落 `endpoint` |
 
 实现上 `MinioClient` 持有两个 client：内嵌 `Client`（内网）与 `presign`（对外域名），四个 `Presigned*` 方法用后者。对外域名前置的反代/CDN/隧道必须**保留原始 `Host` 头**转发到 MinIO（Caddy/Nginx/Cloudflare Tunnel 默认行为），否则 MinIO 侧按 `Host` 重算签名会不匹配。

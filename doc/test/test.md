@@ -51,7 +51,7 @@
 
 ### post 服务远程部署（测试环境）
 
-post e2e 的测试环境部署在测试服务器 `tencent2`（106.53.172.186，ssh 别名见 `~/.ssh/config`）：
+post e2e 的测试环境部署在测试服务器 `tencent2`（192.0.2.10，ssh 别名见 `~/.ssh/config`）：
 
 ```bash
 # 1. 本地构建 linux 二进制并上传（依赖容器 rednote-pg/nats/minio 已在服务器上运行）
