@@ -36,23 +36,23 @@ picverse 是一个图片社交平台：用户发布图文笔记、在推荐/热�
 
 ```
                          ┌──────────────────────────────────────────────┐
-  Browser (HTTPS)        │                  应用层（tencent2）           │
-  picverse.site ────────▶│  cloudflared ─▶ Caddy :8088                  │
-                         │     ├─ /bff.v1.BFFService* ─▶ BFF :8084      │
+  Browser (HTTPS)        │                  应用层（主站机）             │
+  picverse.site ────────▶│  cloudflared ─▶ Caddy（合流层）               │
+                         │     ├─ /bff.v1.BFFService* ─▶ BFF            │
                          │     └─ 其余 ─▶ 静态 SPA (dist)                │
   media.picverse.site ──▶│  cloudflared ──────────────┐                 │
                          └─────────────────────────── │ ────────────────┘
                                                       ▼ (Host 保留，过 SigV4)
                          ┌──────────────────────────────────────────────┐
-                         │              媒体层（tencent1）               │
-                         │              MinIO :9000（预签名直出）         │
+                         │              媒体层（媒体机）                 │
+                         │              MinIO（预签名直出）              │
                          └──────────────────────────────────────────────┘
 
-  BFF :8084 ──┬── auth     :8081  账户 / JWT 签发
-              ├── user     :8083  用户资料 / 关系
-              ├── post     :8082  笔记 / 评论 / 互动
-              ├── media    :8080  媒体资产 / 预签名
-              └── discover :—     搜索索引查询
+  BFF ──┬── auth     账户 / JWT 签发
+        ├── user     用户资料 / 关系
+        ├── post     笔记 / 评论 / 互动
+        ├── media    媒体资产 / 预签名
+        └── discover 搜索索引查询
                      │
   NATS JetStream ◀───┴──▶ consumer（media 转码 / post 流转 / discover 索引 / fanout）
                      │
@@ -88,7 +88,7 @@ picverse 是一个图片社交平台：用户发布图文笔记、在推荐/热�
 ├── sql/                  # 数据库初始化脚本（compose initdb 自动挂载）
 ├── config/               # 服务配置样例（config.yaml，凭据请自行替换）
 ├── scripts/compose/      # 本地数据层一键起（pg/nats/minio/redis/meilisearch）
-├── deploy/               # 生产部署编排（tencent1 媒体层 / tencent2 主站）
+├── deploy/               # 生产部署编排（媒体层 / 主站层）
 ├── test/                 # Go 测试
 └── doc/                  # 项目文档（general.md 为总览）
 ```
@@ -127,7 +127,7 @@ tmp/media/media     -config ./config/
 tmp/discover/discover -config ./config/
 tmp/consumer/consumer -config ./config/   # NATS 消费者（转码/索引/fanout）
 tmp/poller/poller   -config ./config/     # outbox 兑现器
-tmp/bff/bff         -config ./config/     # 前端唯一入口 :8084
+tmp/bff/bff         -config ./config/     # 前端唯一入口（BFF）
 ```
 
 > ⚠️ consumer 需在 NATS stream 就绪后启动，否则 durable 订阅会静默创建失败（详见 `doc/general.md` 运维坑）。
@@ -137,7 +137,7 @@ tmp/bff/bff         -config ./config/     # 前端唯一入口 :8084
 ```bash
 cd web
 pnpm install
-pnpm dev        # http://localhost:5173，/bff.v1.BFFService 反代到 :8084
+pnpm dev        # 本地开发默认地址（Vite 会打印），/bff.v1.BFFService 反代到本机 BFF
 ```
 
 开发期另有 `/mock/*` 路由展示纯 UI（不调 API），用于视觉验证。
